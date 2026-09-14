@@ -389,4 +389,9 @@ public static class AccountCollection {
         });
     }
 
+    public static bool UpdateCrowns(ulong accountId, int crownsAmount) {
+        return UpdateAccount(accountId, acc => {
+            acc.Crowns = crownsAmount;
+        });
+    }
 }
