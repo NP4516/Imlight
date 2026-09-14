@@ -18,6 +18,7 @@
 
 using System;
 using System.Linq;
+using Akka.Actor;
 using Imcodec.CoreObject;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
@@ -734,6 +735,30 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(msg, null);
 
         InformSenderClient($"Added {xpInt} XP.");
+    }
+
+    [Command("setcrowns")]
+    [Alias("crowns")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void SetCrownsCommand(string crowns) {
+        if (!int.TryParse(crowns, out var crownsAmount)) {
+            InformSenderClient("Invalid Crowns amount.");
+            return;
+        }
+
+        Context.Account.SetCrowns(crownsAmount);
+
+        // CacheBalanceForCSSegmentation Updates the internal Crown Shop cache so the client uses this balance
+        // for Crown Shop segment checks and affordability calculation
+        var msg = new WIZARD_12_PROTOCOL.MSG_CROWNBALANCE {
+            Failure = 0,
+            TotalCrowns = crownsAmount,
+            CharacterID = Context.CharacterObject.m_globalID,
+            CacheBalanceForCSSegmentation = 1
+        };
+
+        Context.SessionActor.Tell(msg);
+        InformSenderClient($"Set Crowns to {crownsAmount}.");
     }
 
 }
