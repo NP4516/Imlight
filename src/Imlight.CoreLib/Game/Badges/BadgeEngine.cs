@@ -99,7 +99,7 @@ internal sealed class BadgeEngine(Wizard wizard, BadgeCatalog catalog) {
 
         var top = (ulong) family[^1].Max;
         var current = _state.Counters.GetValueOrDefault(counterKey);
-        var updated = Math.Min(current + amount, top);
+        var updated = amount >= top - Math.Min(current, top) ? top : current + amount;
         if (updated != current) {
             _state.Counters[counterKey] = updated;
             _stateChanged = true;
