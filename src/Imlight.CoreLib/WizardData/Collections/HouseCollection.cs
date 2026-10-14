@@ -28,7 +28,9 @@
  * if (house is null) { HouseCollection.TryCreate(newHouse, out house); }
  * 
  * NOTE:
- * Reads are direct loads by document id, never queries, because a query can be stale.
+ * - Reads are direct loads by document id, never queries, because a query can be stale.
+ * - An item that moves between a house and a backpack is written with SaveWithBackpack: one
+ *   transaction, so a crash between the two cannot lose or duplicate it.
  * 
  * TODO:
  * 
@@ -38,6 +40,7 @@
  */
 
 using System;
+using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.WizardData.Databases;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -112,9 +115,7 @@ public static class HouseCollection {
                 return false;
             }
 
-            stored.BlobVersion = house.BlobVersion;
-            stored.BonusSlots = house.BonusSlots;
-            stored.Objects = [.. house.Objects];
+            CopyChanging(house, stored);
             session.SaveChanges();
 
             return true;
@@ -123,6 +124,46 @@ public static class HouseCollection {
 
             return false;
         }
+    }
+
+    /// <summary>
+    /// Writes a house together with its owner's backpack in one transaction, so an item that moves between
+    /// them is either in the house or in the backpack, never lost and never in both.
+    /// </summary>
+    /// <param name="house">The house to save.</param>
+    /// <param name="owner">The owner, whose backpack is written as it is in memory.</param>
+    /// <param name="addedItem">An item that entered the backpack and is not stored yet, or <c>null</c>.</param>
+    /// <returns><c>true</c> when both are stored; <c>false</c> when neither changed.</returns>
+    public static bool SaveWithBackpack(House house, Wizard owner, WizClientObjectItem addedItem = null) {
+        try {
+            return WizardCollection.UpdateCharacterWithSession(owner.CharId, (session, storedOwner) => {
+                var stored = session.Load<House>(house.Id);
+                if (stored is null) {
+                    return false;
+                }
+
+                CopyChanging(house, stored);
+                storedOwner.InventoryBehavior = owner.InventoryBehavior;
+                if (addedItem is not null) {
+                    session.Store(addedItem);
+                    var metadata = session.Advanced.GetMetadataFor(addedItem);
+                    metadata[Raven.Client.Constants.Documents.Metadata.Collection] = WizardItemCollection.CollectionName;
+                }
+
+                return true;
+            });
+        } catch (Exception ex) {
+            Logger.Error("Failed to save house {HouseId} with the backpack of character {CharId}: {Reason}",
+                Logger.Args(house.Id, owner.CharId, ex.Message));
+
+            return false;
+        }
+    }
+
+    private static void CopyChanging(House from, House to) {
+        to.BlobVersion = from.BlobVersion;
+        to.BonusSlots = from.BonusSlots;
+        to.Objects = [.. from.Objects];
     }
 
 }

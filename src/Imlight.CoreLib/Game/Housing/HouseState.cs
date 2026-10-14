@@ -31,6 +31,7 @@
  * NOTE:
  * - Every change is written to the database before it returns. A failed write undoes the change
  *   in memory, so the stored house and the live house never differ.
+ * - A change that also moves an item to or from a backpack passes its own save, which writes both in one transaction.
  * - Stored objects are never changed in place; an update replaces the object.
  * - A removed object leaves a slot behind (template id 0), so slot indexes never shift. The slots
  *   are dropped when the first player enters a house nobody else is in.
@@ -48,6 +49,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
@@ -137,8 +139,9 @@ internal sealed class HouseState {
     /// <param name="obj">The object to place; it must be a placed object, not a removed slot.</param>
     /// <param name="slot">The new slot when this returns <c>true</c>.</param>
     /// <param name="version">The new blob version when this returns <c>true</c>.</param>
+    /// <param name="save">Writes the house; <c>null</c> writes the house alone.</param>
     /// <returns><c>false</c> at the item limit, when the blob is full, or when the write failed.</returns>
-    internal bool TryAdd(HousingBlobObject obj, out int slot, out uint version) {
+    internal bool TryAdd(HousingBlobObject obj, out int slot, out uint version, Func<House, bool> save = null) {
         slot = -1;
         lock (_lock) {
             version = _house.BlobVersion;
@@ -149,7 +152,7 @@ internal sealed class HouseState {
 
             _house.Objects.Add(Copy(obj));
             _house.BlobVersion = version + 1;
-            if (!HouseCollection.Save(_house)) {
+            if (!Persist(save)) {
                 _house.Objects.RemoveAt(_house.Objects.Count - 1);
                 _house.BlobVersion = version;
 
@@ -169,8 +172,9 @@ internal sealed class HouseState {
     /// <param name="slot">The slot to remove.</param>
     /// <param name="removed">The object that was removed when this returns <c>true</c>.</param>
     /// <param name="version">The new blob version when this returns <c>true</c>.</param>
+    /// <param name="save">Writes the house; <c>null</c> writes the house alone.</param>
     /// <returns><c>false</c> when the slot is not a placed object or the write failed.</returns>
-    internal bool TryRemove(int slot, out HousingBlobObject removed, out uint version) {
+    internal bool TryRemove(int slot, out HousingBlobObject removed, out uint version, Func<House, bool> save = null) {
         removed = null;
         lock (_lock) {
             version = _house.BlobVersion;
@@ -181,7 +185,7 @@ internal sealed class HouseState {
             var previous = _house.Objects[slot];
             _house.Objects[slot] = Tombstone();
             _house.BlobVersion = version + 1;
-            if (!HouseCollection.Save(_house)) {
+            if (!Persist(save)) {
                 _house.Objects[slot] = previous;
                 _house.BlobVersion = version;
 
@@ -338,6 +342,16 @@ internal sealed class HouseState {
             _retired = true;
 
             return true;
+        }
+    }
+
+    private bool Persist(Func<House, bool> save) {
+        try {
+            return (save ?? HouseCollection.Save)(_house);
+        } catch (Exception ex) {
+            Logger.Error("Failed to write house {LotGid}: {Reason}", Logger.Args(_house.LotGid, ex.Message));
+
+            return false;
         }
     }
 

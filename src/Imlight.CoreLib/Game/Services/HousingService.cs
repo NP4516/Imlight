@@ -155,24 +155,25 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        // A crash between the two writes loses the item instead of duplicating it.
+        // The backpack changes in memory only and is written together with the house, so a crash between
+        // the two cannot lose the item or leave it in both places.
         var itemId = item.m_globalID;
-        if (!wizard.RemoveItemFromInventory(itemId)) {
+        if (!wizard.InventoryBehavior.RemoveItem(item)) {
             return;
         }
 
-        ItemSync.SendRemoved(SessionActor.ActorRef, wizard, itemId);
-        if (!house.TryAdd(placed, out var slot, out var version)) {
-            GiveBack(wizard, item);
+        if (!house.TryAdd(placed, out var slot, out var version, stored => HouseCollection.SaveWithBackpack(stored, wizard))) {
+            if (!wizard.InventoryBehavior.AddItem(item)) {
+                Logger.Error("Could not return item {ItemId} to the backpack of character {CharId} after it failed to be placed.",
+                    Logger.Args(itemId, wizard.CharId));
+            }
+
             InformGameClient("The object could not be placed.");
 
             return;
         }
 
-        if (!WizardItemCollection.RemoveItem(wizard.CharId, itemId)) {
-            Logger.Warning("Placed item {ItemId} of character {CharId} has no stored item to delete.", Logger.Args(itemId, wizard.CharId));
-        }
-
+        ItemSync.SendRemoved(SessionActor.ActorRef, wizard, itemId);
         var (x, y) = HouseBlobCodec.UnpackLocation(placed.m_positionXY);
         ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHADDHOUSINGOBJECT {
             ObjectID = templateId,
@@ -186,6 +187,8 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             GIDID = HouseBlobCodec.GidIndex(house.GidBase, slot),
             ColorBits = 0,
         }, isSelfless: false, ZoneBroadcastTarget.Players);
+
+        DeleteStoredItem(wizard.CharId, itemId);
     }
 
     [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_UPDATEHOUSINGOBJECT))]
@@ -315,10 +318,15 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         InformGameClient("That request was refused.");
     }
 
-    private void GiveBack(Wizard wizard, WizClientObjectItem item) {
-        if (!wizard.AddInitializedItemToInventory(item) || !ItemSync.SendAdded(SessionActor.ActorRef, wizard, item)) {
-            Logger.Error("Could not give item {ItemId} back to character {CharId} after it failed to be placed.",
-                Logger.Args(item.m_globalID, wizard.CharId));
+    private static void DeleteStoredItem(ulong charId, ulong itemId) {
+        // The item already left the backpack, so only an unused document is left to delete.
+        try {
+            if (!WizardItemCollection.RemoveItem(charId, itemId)) {
+                Logger.Warning("Placed item {ItemId} of character {CharId} has no stored item to delete.", Logger.Args(itemId, charId));
+            }
+        } catch (Exception exception) {
+            Logger.Warning("Could not delete the stored item {ItemId} of character {CharId}: {Reason}",
+                Logger.Args(itemId, charId, exception.Message));
         }
     }
 
