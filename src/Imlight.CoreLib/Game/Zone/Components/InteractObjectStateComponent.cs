@@ -35,11 +35,12 @@
  * hold and the object is in the option's visible state. The client gets one press-X entry per object; each
  * use applies the option that fits the current state (see ChooseOption), so two- and four-state objects step
  * through their states. Options whose results show dialog make a readable object (a book) attach too.
+ * A silver chest offers nothing here: its own component starts the chest game instead of opening it.
  *
  * TODO:
  *
  * Version: KALI 1.0
- * Last Updated: 09/30/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -76,7 +77,7 @@ internal sealed class InteractObjectStateComponent(ZoneEntity entity)
         => template is GameObjectTemplate go && GetStateOptions(go).Any(ChangesWorld);
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard playerCharacter)
-        => GetOfferedOptions(playerCharacter).Any()
+        => Entity.GetComponentOfType<SilverChestComponent>() is null && GetOfferedOptions(playerCharacter).Any()
             ? [new InteractableOption { m_serviceName = ServiceName }]
             : [];
 
