@@ -223,6 +223,10 @@ internal sealed class MinigameProcess : Process {
             .Take(ScoreTrackingCollection.LeaderboardSize);
         leaderboard.m_scores = [.. shown];
 
+        SendRewardsReply(score, leaderboard, reward);
+    }
+
+    private void SendRewardsReply(int score, ScoreTrackingList leaderboard, MinigameRewardResult reward) {
         // Serialize the leaderboard data.
         if (!_serializer.Serialize(leaderboard, 5, out var leaderboardData)) {
             Logger.Error("{0} {1} failed to serialize leaderboard data.",
