@@ -135,7 +135,7 @@ internal class SeamstressService(SessionActor sessionActor) : MessageService(ses
             return transaction.TryApply(inputs, results, crownsCost, out failure);
         }
         catch (Exception ex) {
-            Logger.Error("[Seamstress] Error in a request of {0}: {1} {2}", Logger.Args(wizard.CharId, ex.Message, ex.StackTrace));
+            Logger.Error("[Seamstress] Error in a request of {CharId}: {Reason} {StackTrace}", Logger.Args(wizard.CharId, ex.Message, ex.StackTrace));
             failure = "an error occurred";
 
             return false;
@@ -143,7 +143,7 @@ internal class SeamstressService(SessionActor sessionActor) : MessageService(ses
     }
 
     private static bool Deny(Wizard wizard, string request, string reason) {
-        Logger.Warning("[Seamstress] Refused the {0} for {1}: {2}", Logger.Args(request, wizard.CharId, reason));
+        Logger.Warning("[Seamstress] Refused the {Request} for {CharId}: {Reason}", Logger.Args(request, wizard.CharId, reason));
 
         return false;
     }
@@ -151,7 +151,7 @@ internal class SeamstressService(SessionActor sessionActor) : MessageService(ses
     private bool IsAtSeamstress(Wizard wizard, ulong npcGlobalId) {
         var npc = GetZoneObject(npcGlobalId);
         if (npc is null) {
-            Logger.Warning("[Seamstress] Failed to find NPC {0} in the zone of {1}", Logger.Args(npcGlobalId, wizard.CharId));
+            Logger.Warning("[Seamstress] Failed to find NPC {NpcId} in the zone of {CharId}", Logger.Args(npcGlobalId, wizard.CharId));
 
             return false;
         }
@@ -179,13 +179,13 @@ internal class SeamstressService(SessionActor sessionActor) : MessageService(ses
     private static void ReportTampering(Wizard wizard, string infractionText) {
         wizard.Account.AddInfraction(InfractionType.SuspiciousBehavior, infractionText);
 
-        Logger.Warning("[Seamstress] {0} This has been logged as a suspicious behavior infraction.", Logger.Args(infractionText));
+        Logger.Warning("[Seamstress] {Infraction} This has been logged as a suspicious behavior infraction.", Logger.Args(infractionText));
     }
 
     private static void ReportJewelSockets(Wizard wizard, params WizClientObjectItem[] items) {
         foreach (var item in items) {
             if (StitchedItemFactory.HasJewelSockets(item)) {
-                Logger.Warning("[Seamstress] Item {0} of {1} has jewel sockets, which the seamstress does not handle.",
+                Logger.Warning("[Seamstress] Item {ItemId} of {CharId} has jewel sockets, which the seamstress does not handle.",
                     Logger.Args(item.m_globalID.Full, wizard.CharId));
             }
         }

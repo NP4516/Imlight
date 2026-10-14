@@ -85,7 +85,7 @@ internal static class StitchedItemFactory {
                                   out WizClientObjectItem item) {
         item = CoreObjectFactory.FinalizeCoreObject(templateId) as WizClientObjectItem;
         if (item is null) {
-            Logger.Warning("Cannot create a seamstress item from template {0} because it is not an item.",
+            Logger.Warning("Cannot create a seamstress item from template {TemplateId} because it is not an item.",
                 Logger.Args(templateId));
 
             return false;
