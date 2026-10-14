@@ -27,7 +27,7 @@
  * 
  * NOTE:
  * The two constants are client rules, not game data. The invite timeout is a server policy value
- * read from the Game Server section of Imlight.ini.
+ * read from the Game Server section of Imlight.ini; the escrow step timeout is a fixed server value.
  * 
  * TODO:
  * 
@@ -44,12 +44,16 @@ namespace Imlight.CoreLib.Game.Trading;
 internal static class TradeLimits {
 
     private const ushort DefaultInviteTimeoutSeconds = 60;
+    private const ushort ApplyStepTimeoutSeconds = 15;
 
     // Client rule: TradeWindow::Handle_LocalPlayerSpellVaultList refuses a fifth distinct card.
     internal const int MaxDistinctCardsPerSide = 4;
 
     // Client rule: has_room_for_items allows this many non-CastleMagic cards in the treasure book.
     internal const int TreasureBookCapacity = 999;
+
+    // Server policy: how long the directory waits for a session to finish one escrow step.
+    internal static TimeSpan ApplyStepTimeout { get; } = TimeSpan.FromSeconds(ApplyStepTimeoutSeconds);
 
     internal static TimeSpan InviteTimeout { get; } = TimeSpan.FromSeconds(ReadInviteTimeoutSeconds());
 

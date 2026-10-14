@@ -100,6 +100,7 @@ public sealed class TRADE_110_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 110;
 
         public Guid TradeId;
+        public ulong RequesterCharId;
         public IActorRef Session;
         public IActorRef Zone;
         public bool Delivered;

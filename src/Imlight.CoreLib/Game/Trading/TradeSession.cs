@@ -90,7 +90,9 @@ internal sealed class TradeSession {
     internal TradeParticipant B { get; }
     internal TradePhase Phase { get; private set; } = TradePhase.Inviting;
     internal TradeApplyStep ApplyStep { get; private set; } = TradeApplyStep.None;
+    internal TradeError AbortError { get; private set; }
 
+    internal bool IsAborting => AbortError != TradeError.None;
     internal bool IsCommitted => ApplyStep >= TradeApplyStep.ClaimA;
     internal bool BothConfirmed => Phase == TradePhase.Open && A.Ready == ReadyConfirmed && B.Ready == ReadyConfirmed;
 
@@ -230,6 +232,9 @@ internal sealed class TradeSession {
 
         return ApplyStep;
     }
+
+    internal void BeginAbort(TradeError error)
+        => AbortError = error;
 
     internal void End()
         => Phase = TradePhase.Ended;
