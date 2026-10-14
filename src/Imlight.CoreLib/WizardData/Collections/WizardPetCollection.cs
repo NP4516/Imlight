@@ -114,6 +114,31 @@ public static class WizardPetCollection {
         return true;
     }
 
+    /// <summary>
+    /// Deletes the records of every pet of a character, for when the character is deleted.
+    /// </summary>
+    /// <param name="charId">The owner's character id.</param>
+    /// <returns>True if the character had any records to delete.</returns>
+    public static bool DeleteAll(ulong charId) {
+        using var session = s_store.OpenSession();
+
+        var records = session.Query<WizardPetRecord>(collectionName: CollectionName)
+            .Customize(query => query.WaitForNonStaleResults())
+            .Where(x => x.CharId == charId)
+            .ToList();
+        if (records.Count == 0) {
+            return false;
+        }
+
+        foreach (var record in records) {
+            session.Delete(record);
+        }
+
+        session.SaveChanges();
+
+        return true;
+    }
+
     private static WizardPetRecord Find(IDocumentSession session, ulong charId, ulong petGlobalId)
         => session.Query<WizardPetRecord>(collectionName: CollectionName)
             .Customize(query => query.WaitForNonStaleResults())
