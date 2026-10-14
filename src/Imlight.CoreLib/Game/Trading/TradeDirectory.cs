@@ -498,7 +498,18 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
         participant.PendingStep = null;
 
         if (trade.IsAborting) {
-            if (message.Step == TradeStep.Refund && !HasPendingStep(trade)) {
+            if (message.Step != TradeStep.Refund) {
+                return;
+            }
+
+            // A refund that failed may have landed anyway; asked again, the session finds out and fixes its memory copy.
+            if (!message.Success && participant.StepAttempts < MaxStepAttempts && CanReach(participant)) {
+                SendRefund(trade, participant);
+
+                return;
+            }
+
+            if (!HasPendingStep(trade)) {
                 FinishAbort(trade);
             }
 
@@ -583,8 +594,11 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
                     trade.AdvanceApply();
                 }
 
-                trade.A.PendingStep = null;
-                trade.B.PendingStep = null;
+                foreach (var participant in new[] { trade.A, trade.B }) {
+                    participant.PendingStep = null;
+                    participant.StepAttempts = 0;
+                }
+
                 SendStep(trade);
 
                 return;
@@ -602,21 +616,25 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
         // Whether a hold landed is only known to the session, so both are asked; a side that never held has nothing to get back.
         foreach (var participant in new[] { trade.A, trade.B }) {
+            participant.StepAttempts = 0;
             if (!CanReach(participant)) {
                 participant.PendingStep = null;
 
                 continue;
             }
 
-            participant.PendingStep = TradeStep.Refund;
-            participant.Session.Tell(new TRADE_110_PROTOCOL.MSG_TRADESTEP { TradeId = trade.TradeId, Step = TradeStep.Refund });
+            SendRefund(trade, participant);
         }
 
         if (!HasPendingStep(trade)) {
             FinishAbort(trade);
-
-            return;
         }
+    }
+
+    private void SendRefund(TradeSession trade, TradeParticipant participant) {
+        participant.PendingStep = TradeStep.Refund;
+        participant.StepAttempts++;
+        participant.Session.Tell(new TRADE_110_PROTOCOL.MSG_TRADESTEP { TradeId = trade.TradeId, Step = TradeStep.Refund });
 
         Timers.StartSingleTimer(
             ApplyTimerKey(trade.TradeId),
