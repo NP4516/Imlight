@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 06/14/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -55,8 +55,7 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class PetService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private static readonly int s_petEnergyTickIntervalInSeconds
-        = ConfigurationManager.Settings["Character.PetEnergyTickInSeconds"].AsInt();
+    private static int EnergyTickIntervalInSeconds => Imlight.CoreLib.Game.Pet.AdvancedPetsConfig.EnergyTickInSeconds;
     private const int PET_ENERGY_TICK_DELAY = 2;
     private const int DEFAULT_PET_OVERALL_RATING = 30;
 
@@ -75,7 +74,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
 
         var tickTime = petOwnerBehavior.LastEnergyTickEpoch;
         if (tickTime <= DateTimeOffset.UtcNow.ToUnixTimeSeconds()) {
-            tickTime = (uint) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + s_petEnergyTickIntervalInSeconds);
+            tickTime = (uint) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + EnergyTickIntervalInSeconds);
         }
 
         var tickMsg = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
@@ -104,7 +103,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
         var normMaxEnergy = baseStats.m_petEnergy;
 
-        var tickTime = (int) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + s_petEnergyTickIntervalInSeconds);
+        var tickTime = (int) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + EnergyTickIntervalInSeconds);
 
         if (petOwnerBehavior.Energy < normMaxEnergy) {
             wizard.UpdateEnergy(petOwnerBehavior.Energy + 1);
