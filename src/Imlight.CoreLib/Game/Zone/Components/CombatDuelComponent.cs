@@ -38,7 +38,6 @@
  * TODO:
  * - Implementation of creature stunning functionality
  * - Calculate the correct damage percent max as a limit function
- * - `IsNewbieZone` and `IsDangerousZone` should be elements of the zone itself
  * 
  * Created by: Jooty
  * Version: KALI 1.0
@@ -1497,10 +1496,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     });
 
     private bool IsSlotAvailable(CombatTeam team) {
-        var IsNewbieZone = false;
+        var IsNewbieZone = _combatSigilObjectInfo is { m_unknown_uint_4: not 0 };
         var IsDangerousZone = false;
 
-        // Newbie zones (like Unicorn Way) can only have 1 creature as a base.
+        // Newbie sigils (marked in the sigil info) can only have 1 creature as a base.
         // Dangerous zones (like Sunken City) can have 3 creatures as a base.
         // Every player in the duel also allocates 1 more creature slot.
         var baseCreatureCount = IsNewbieZone ? 1 : IsDangerousZone ? 3 : 2;
