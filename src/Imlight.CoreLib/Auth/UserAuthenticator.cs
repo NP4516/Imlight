@@ -114,6 +114,8 @@ internal static class UserAuthenticator {
 
         // Check if the session id matches.
         if (returnedSessionid != sessionId) {
+            Logger.Warning("SessionActor {0} was rejected: session id mismatch. (Given: {1})",
+                Logger.Args(sessionId, returnedSessionid));
             details._result = UserAuthenResult.AuthenFailed;
 
             return details;
@@ -135,6 +137,7 @@ internal static class UserAuthenticator {
         // Check if we can find the account.
         var matchedAccount = AccountCollection.GetAccountForCharacterList(username);
         if (matchedAccount is null) {
+            Logger.Warning("SessionActor {0} was rejected: account not found.", Logger.Args(sessionId));
             details._result = UserAuthenResult.AuthenFailed;
 
             return details;
@@ -195,6 +198,7 @@ internal static class UserAuthenticator {
             return details;
         }
         else {
+            Logger.Warning("SessionActor {0} was rejected: bad password.", Logger.Args(sessionId));
             details._result = UserAuthenResult.AuthenFailed;
 
             return details;
