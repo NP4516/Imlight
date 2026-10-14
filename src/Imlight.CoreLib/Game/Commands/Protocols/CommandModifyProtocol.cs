@@ -17,6 +17,7 @@
  */
 
 using System;
+using System.Globalization;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.CoreObject;
@@ -741,12 +742,15 @@ internal class CommandModifyProtocol : CommandProtocol {
     [Alias("crowns")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetCrownsCommand(string crowns) {
-        if (!int.TryParse(crowns, out var crownsAmount)) {
+        if (!int.TryParse(crowns, NumberStyles.Integer, CultureInfo.InvariantCulture, out var crownsAmount) || crownsAmount < 0) {
             InformSenderClient("Invalid Crowns amount.");
             return;
         }
 
-        Context.Account.SetCrowns(crownsAmount);
+        if (!Context.Account.SetCrowns(crownsAmount)) {
+            InformSenderClient("The Crowns could not be saved.");
+            return;
+        }
 
         // CacheBalanceForCSSegmentation Updates the internal Crown Shop cache so the client uses this balance
         // for Crown Shop segment checks and affordability calculation
