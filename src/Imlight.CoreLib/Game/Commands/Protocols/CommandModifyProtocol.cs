@@ -141,6 +141,19 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
+        if (!isPetTemplate) {
+            var probe = CoreObjectFactory.FinalizeCoreObject(templateIdLong) as WizClientObjectItem;
+            if (probe is not null) {
+                CoreObjectFactory.InitializeCoreObjectBehaviors(probe, probe.m_templateID);
+            }
+
+            if (probe?.m_inactiveBehaviors?.Contains(null) == true) {
+                InformSenderClient("Cannot add this item because one of its behaviors cannot be created.");
+
+                return;
+            }
+        }
+
         WizClientObjectItem coreObject;
         var addedItemSuccess = isPetTemplate
             ? Context.Character.AddHatchedPetToInventory((uint) templateIdLong, out coreObject)

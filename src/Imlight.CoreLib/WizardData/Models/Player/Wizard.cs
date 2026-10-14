@@ -399,13 +399,6 @@ public class Wizard {
 
         CoreObjectFactory.InitializeCoreObjectBehaviors(item, item.m_templateID);
 
-        if (item.m_inactiveBehaviors?.Contains(null) == true) {
-            Logger.Warning("Refusing to add item {0} because one of its behaviors could not be created.",
-                Logger.Args(item.m_templateID));
-
-            return false;
-        }
-
         // Ensure that the item is associated with this Wizard.
         item.m_characterId = (GID) CharId;
 
