@@ -39,12 +39,19 @@
  */
 
 using System;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.WizardData.Models.Misc;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -109,6 +116,215 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
+        SendBlob(house);
+    }
+
+    [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_PLACEHOUSINGOBJECT))]
+    private void ReceivePlaceHousingObject(WIZARDHOUSING_50_PROTOCOL.MSG_PLACEHOUSINGOBJECT message) {
+        if (!TryGetHouse("place an object", out var house)) {
+            return;
+        }
+
+        // The item and its template come from the server's own inventory, never from the client.
+        var wizard = GetActiveWizard();
+        var item = wizard.InventoryBehavior.GetItem(message.ObjectID);
+        if (item is null || message.SwitchCastleBlock != 0) {
+            HandleForgedRequest($"place item {message.ObjectID} that is not in the backpack or is a castle block");
+
+            return;
+        }
+
+        var templateId = (uint) Math.Min((ulong) item.m_templateID, uint.MaxValue);
+        if (!HousingRules.TryGetPlaceable(templateId, out var template)) {
+            HandleForgedRequest($"place item {message.ObjectID}, template {templateId}, which is not placeable furniture");
+
+            return;
+        }
+
+        var placed = HouseBlobCodec.FromPlacement(templateId, message.LocX, message.LocY, message.LocZ, message.Yaw);
+        if (placed is null) {
+            HandleForgedRequest($"place item {message.ObjectID} at a position that is not valid");
+
+            return;
+        }
+
+        if (house.LiveCount >= house.ItemLimit
+            || HousingRules.TemplateCopyLimitReached(template, HousingRules.CountPlaced(house.Snapshot().Objects, templateId))) {
+            InformGameClient("This house cannot hold any more of that.");
+
+            return;
+        }
+
+        // A crash between the two writes loses the item instead of duplicating it.
+        var itemId = item.m_globalID;
+        if (!wizard.RemoveItemFromInventory(itemId)) {
+            return;
+        }
+
+        ItemSync.SendRemoved(SessionActor.ActorRef, wizard, itemId);
+        if (!house.TryAdd(placed, out var slot, out var version)) {
+            GiveBack(wizard, item);
+            InformGameClient("The object could not be placed.");
+
+            return;
+        }
+
+        if (!WizardItemCollection.RemoveItem(wizard.CharId, itemId)) {
+            Logger.Warning("Placed item {ItemId} of character {CharId} has no stored item to delete.", Logger.Args(itemId, wizard.CharId));
+        }
+
+        var (x, y) = HouseBlobCodec.UnpackLocation(placed.m_positionXY);
+        ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHADDHOUSINGOBJECT {
+            ObjectID = templateId,
+            LocX = x,
+            LocY = y,
+            LocZ = placed.m_positionZ,
+            Yaw = HouseBlobCodec.UnpackYaw(placed),
+            SubType = HouseBlobCodec.ItemSubType,
+            PackageNumber = 0,
+            VersionNumber = version,
+            GIDID = HouseBlobCodec.GidIndex(house.GidBase, slot),
+            ColorBits = 0,
+        }, isSelfless: false, ZoneBroadcastTarget.Players);
+    }
+
+    [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_UPDATEHOUSINGOBJECT))]
+    private void ReceiveUpdateHousingObject(WIZARDHOUSING_50_PROTOCOL.MSG_UPDATEHOUSINGOBJECT message) {
+        if (!TryGetHouse("move an object", out var house)) {
+            return;
+        }
+
+        if (message.SwitchCastleBlock != 0 || message.UseExtendedYaw is not (0 or 1)
+            || !HouseBlobCodec.TrySlotFromGid(house.GidBase, message.ObjectGID, house.SlotCount, out var slot)) {
+            HandleForgedRequest($"move object {message.ObjectGID}, which is not an object of this house");
+
+            return;
+        }
+
+        HousingBlobObject updated = null;
+        var invalid = false;
+        var done = house.TryUpdate(slot, current => {
+            updated = HouseBlobCodec.ApplyUpdate(current, message.LocX, message.LocY, message.LocZ, message.Yaw,
+                                                 message.UseExtendedYaw == 1, message.Scale, message.Brightness);
+            invalid = updated is null;
+
+            return updated;
+        }, out var version);
+        if (invalid) {
+            HandleForgedRequest($"move object {message.ObjectGID} to a position, scale or brightness that is not valid");
+
+            return;
+        }
+
+        if (!done) {
+            // The object is gone or the write failed. The client moved it already, so give it the real state.
+            SendBlob(house);
+
+            return;
+        }
+
+        var (x, y) = HouseBlobCodec.UnpackLocation(updated.m_positionXY);
+        ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHUPDATEHOUSINGOBJECT {
+            LocX = x,
+            LocY = y,
+            LocZ = updated.m_positionZ,
+            Yaw = HouseBlobCodec.UnpackYaw(updated),
+            SubType = HouseBlobCodec.ItemSubType,
+            PackageNumber = 0,
+            VersionNumber = version,
+            GIDID = HouseBlobCodec.GidIndex(house.GidBase, slot),
+            ObjectID = HouseBlobCodec.TemplateId(updated),
+            SwitchTemplateID = 0,
+            UseExtendedYaw = (sbyte) (HouseBlobCodec.UsesExtendedYaw(updated) ? 1 : 0),
+            Scale = HouseBlobCodec.GetScale(updated),
+            Brightness = (sbyte) HouseBlobCodec.GetBrightness(updated),
+        }, isSelfless: false, ZoneBroadcastTarget.Players);
+    }
+
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_PICKUPOBJECT))]
+    private void ReceivePickUpObject(GAME_5_PROTOCOL.MSG_PICKUPOBJECT message) {
+        // Other features use this message too, so a GID that is not one of this house's objects is not ours.
+        var house = _house;
+        if (house is null || !HouseBlobCodec.TrySlotFromGid(house.GidBase, message.GameObjectID, house.SlotCount, out var slot)) {
+            return;
+        }
+
+        var wizard = GetActiveWizard();
+        var snapshot = house.Snapshot();
+        if (slot >= snapshot.Objects.Count) {
+            return;
+        }
+
+        var templateId = HouseBlobCodec.TemplateId(snapshot.Objects[slot]);
+        if (templateId == 0
+            || CoreObjectFactory.GetCoreTemplate(templateId) is not WizItemTemplate template
+            || wizard.InventoryBehavior.FreeSlots <= 0
+            || HousingRules.TemplateCopyLimitReached(template, wizard.InventoryBehavior.Items.Count(i => i.m_templateID == templateId))) {
+            RefusePickUp(house);
+
+            return;
+        }
+
+        // A crash between the two writes loses the item instead of duplicating it.
+        if (!house.TryRemove(slot, out var removed, out var version)) {
+            RefusePickUp(house);
+
+            return;
+        }
+
+        if (!wizard.AddItemToInventory(templateId, out var item)) {
+            house.TryRestore(slot, removed, out _);
+            RefusePickUp(house);
+
+            return;
+        }
+
+        if (!ItemSync.SendAdded(SessionActor.ActorRef, wizard, item)) {
+            wizard.RemoveItemFromInventory(item.m_globalID);
+            WizardItemCollection.RemoveItem(wizard.CharId, item.m_globalID);
+            house.TryRestore(slot, removed, out _);
+            RefusePickUp(house);
+
+            return;
+        }
+
+        ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEHOUSINGOBJECT {
+            SubType = HouseBlobCodec.ItemSubType,
+            PackageNumber = 0,
+            VersionNumber = version,
+            GIDID = HouseBlobCodec.GidIndex(house.GidBase, slot),
+        }, isSelfless: false, ZoneBroadcastTarget.Players);
+    }
+
+    private bool TryGetHouse(string request, out HouseState house) {
+        house = _house;
+        if (house is not null) {
+            return true;
+        }
+
+        HandleForgedRequest($"{request} outside a house");
+
+        return false;
+    }
+
+    private void HandleForgedRequest(string request) {
+        var wizard = GetActiveWizard();
+        wizard.Account?.AddInfraction(InfractionType.SuspiciousBehavior, $"Tried to {request}.");
+        Logger.Warning("Character {CharId} tried to {Request}. This has been logged as suspicious behavior.",
+            Logger.Args(wizard.CharId, request));
+        InformGameClient("That request was refused.");
+    }
+
+    private void GiveBack(Wizard wizard, WizClientObjectItem item) {
+        if (!wizard.AddInitializedItemToInventory(item) || !ItemSync.SendAdded(SessionActor.ActorRef, wizard, item)) {
+            Logger.Error("Could not give item {ItemId} back to character {CharId} after it failed to be placed.",
+                Logger.Args(item.m_globalID, wizard.CharId));
+        }
+    }
+
+    private void RefusePickUp(HouseState house) {
+        // The client has faded the object already and the refusal does not bring it back, so the blob rebuilds it.
+        SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_HOUSINGOBJECTNOPICKUP());
         SendBlob(house);
     }
 

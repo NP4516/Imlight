@@ -203,6 +203,14 @@ internal static class HouseBlobCodec {
     }
 
     /// <summary>
+    /// Checks whether a blob object stores its yaw in whole degrees instead of eight directions.
+    /// </summary>
+    /// <param name="obj">The blob object.</param>
+    /// <returns><c>true</c> for the extended form.</returns>
+    internal static bool UsesExtendedYaw(HousingBlobObject obj)
+        => (obj.m_gameObjectTemplateID & ExtendedYawFlag) != 0;
+
+    /// <summary>
     /// Reads the yaw of a blob object.
     /// </summary>
     /// <param name="obj">The blob object.</param>
