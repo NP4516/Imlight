@@ -254,4 +254,18 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Sent to each participant session when a PvP duel is over. Unlike a PvE win it grants no experience or loot.
+    /// </summary>
+    public sealed class MSG_PVPDUELENDED : IServerMessage {
+
+        public byte MessageOrder => 26;
+        public byte ServiceID => 106;
+
+        public ulong MatchId;
+        public int WinningTeam;
+        public bool Forfeited;
+
+    }
+
 }

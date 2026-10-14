@@ -23,6 +23,7 @@ using Imcodec.Math;
 using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Game.PvP;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -515,6 +516,20 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public Dictionary<IActorRef, CoreObject> StartingParticipants;
+
+    }
+
+    /// <summary>
+    /// Sent by the <see cref="PvPDirector"/> to an arena zone once every player of a PvP match arrived: the
+    /// zone's PvP sigil seats the roster on its circles.
+    /// </summary>
+    public sealed class MSG_STARTPVPMATCH : IServerMessage {
+
+        public byte MessageOrder { get; } = 83;
+        public byte ServiceID { get; } = 102;
+
+        public ulong MatchId;
+        internal IReadOnlyList<PvPRosterEntry> Roster;
 
     }
 
