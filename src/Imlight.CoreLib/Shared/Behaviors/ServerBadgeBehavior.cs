@@ -26,7 +26,7 @@
  * wizard.BadgeBehavior.Counters[counterKey] = 3;
  *
  * NOTE:
- * Earned is concurrent because purchase gates and requirement handlers on other actors read it while BadgeService writes it.
+ * Earned is concurrent because purchase gates and requirement handlers on other actors read it while BadgeService writes it. The three reward and new-badge lists make up the m_badgeData string of the client's BadgeBehavior in the player object.
  *
  * TODO:
  *
@@ -35,12 +35,23 @@
  * Last Updated: 10/14/2026
  */
 
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json.Serialization;
+using Imcodec.ObjectProperty.TypeCache;
 
 namespace Imlight.CoreLib.Shared.Behaviors;
 
-public class ServerBadgeBehavior {
+public class ServerBadgeBehavior : IClientBehaviorProvider<BadgeBehavior> {
+
+    public static readonly TimeSpan NewBadgeLifetime = TimeSpan.FromHours(48);
+
+    // The blob string holds at most 65535 bytes.
+    public const int MaxNewBadges = 200;
+
+    [JsonIgnore] public bool NoTransfer { get; set; } = false;
 
     public Dictionary<string, ulong> Counters { get; set; } = [];
     public ConcurrentDictionary<uint, EarnedBadge> Earned { get; set; } = [];
@@ -49,6 +60,24 @@ public class ServerBadgeBehavior {
     public List<NewBadgeEntry> NewBadges { get; set; } = [];
     public List<uint> ClaimedRewards { get; set; } = [];
     public List<uint> PendingOvercount { get; set; } = [];
+
+    /// <summary>
+    /// The new badges the client still lists: not older than <see cref="NewBadgeLifetime"/>, at most <see cref="MaxNewBadges"/> of the newest.
+    /// </summary>
+    public List<NewBadgeEntry> GetRecentNewBadges(DateTimeOffset now) {
+        var oldest = now.Subtract(NewBadgeLifetime).ToUnixTimeSeconds();
+
+        return [.. NewBadges.ToArray().Where(entry => entry.Time >= oldest).TakeLast(MaxNewBadges)];
+    }
+
+    public void PruneNewBadges(DateTimeOffset now) {
+        var recent = GetRecentNewBadges(now);
+        NewBadges.Clear();
+        NewBadges.AddRange(recent);
+    }
+
+    public BadgeBehavior GetClientBehaviorInstance()
+        => new() { m_badgeData = BadgeDataBlob.Encode(ClaimedRewards.ToArray(), GetRecentNewBadges(DateTimeOffset.UtcNow), PendingOvercount.ToArray()) };
 
     public void Reset() {
         Counters.Clear();
