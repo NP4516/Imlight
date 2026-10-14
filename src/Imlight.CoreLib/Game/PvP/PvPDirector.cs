@@ -399,12 +399,18 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             return false;
         }
 
-        // A zone a player already stands in would only teleport them within it, never into the private arena.
+        // A zone a player already stands in would only teleport them within it, never into the private arena. They
+        // may have left the zone they queued in.
+        var occupiedZones = match.Entries
+            .SelectMany(entry => _profiles.TryGetValue(entry.CharId, out var profile)
+                ? new[] { entry.OriginZone, profile.ZonePath }
+                : new[] { entry.OriginZone })
+            .ToList();
         var arenas = template.m_zones
             .Select(zone => (string) zone)
             .Where(zone => AccessPassManager.DoesZoneExist(zone)
                            && !_failedArenas.Contains(zone)
-                           && match.Entries.All(entry => !string.Equals(entry.OriginZone, zone, StringComparison.OrdinalIgnoreCase)))
+                           && !occupiedZones.Contains(zone, StringComparer.OrdinalIgnoreCase))
             .ToList();
         if (arenas.Count == 0) {
             return false;
