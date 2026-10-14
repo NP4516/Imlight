@@ -95,6 +95,12 @@ public enum EscrowOutcome {
 /// </summary>
 public readonly record struct EscrowResult(EscrowOutcome Outcome, IReadOnlyList<uint> Cards) {
 
+    /// <summary>
+    /// The cards the calling side handed over, set by a claim or a refund. A session that never learned of
+    /// its hold uses them to take the held cards out of its memory copy before it adds the new ones.
+    /// </summary>
+    public IReadOnlyList<uint> Given { get; init; }
+
     public static EscrowResult Of(EscrowOutcome outcome) => new(outcome, []);
 
 }

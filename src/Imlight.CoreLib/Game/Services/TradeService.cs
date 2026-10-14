@@ -69,7 +69,6 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
     private Guid _escrowTradeId;
     private Wizard _escrowWizard;
     private readonly HashSet<(Guid TradeId, TradeStep Step)> _mirroredSteps = [];
-    private readonly HashSet<Guid> _mirroredSettles = [];
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new TradeService(parentActor));
@@ -309,8 +308,10 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
         // claimed when both sides held, refunded otherwise. The memory copy is brought in line before any
         // other save of the spellbook can run.
         var result = TradeEscrowCollection.Settle(_escrowTradeId, _charId);
-        if (result.Outcome == EscrowOutcome.Done && _mirroredSettles.Add(_escrowTradeId)) {
-            _escrowWizard.SpellbookBehavior.AddTreasureCards(result.Cards);
+        if (result.Outcome == EscrowOutcome.Done
+            && !_mirroredSteps.Contains((_escrowTradeId, TradeStep.Claim)) && !_mirroredSteps.Contains((_escrowTradeId, TradeStep.Refund))) {
+            // A side ends in a claim or a refund, never both, so a step that already mirrored its end is not added again.
+            Mirror(_escrowWizard, _escrowTradeId, TradeStep.Claim, result.Cards, result.Given);
         }
 
         // Whoever finishes last removes the document.
@@ -340,14 +341,14 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
 
         switch (result.Outcome) {
             case EscrowOutcome.Done:
-                Mirror(wizard, tradeId, step, result.Cards);
-
-                return TradeError.None;
             case EscrowOutcome.AlreadyDone:
+                // A repeated step mirrors too: the call that did the work may have landed without its reply.
+                Mirror(wizard, tradeId, step, result.Cards, result.Given);
+
                 return TradeError.None;
             case EscrowOutcome.Failed:
                 // The save may have landed even though the call gave up, and then the memory copy has to follow.
-                return LandedAnyway(tradeId, wizard.CharId, step, out var landed) && Mirror(wizard, tradeId, step, landed)
+                return LandedAnyway(tradeId, wizard.CharId, step, out var landed, out var given) && Mirror(wizard, tradeId, step, landed, given)
                     ? TradeError.None
                     : TradeError.Failed;
             default:
@@ -387,7 +388,12 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
         return projected > TradeLimits.TreasureBookCapacity ? TradeError.CannotHold : TradeError.None;
     }
 
-    private bool Mirror(Wizard wizard, Guid tradeId, TradeStep step, IReadOnlyList<uint> cards) {
+    private bool Mirror(Wizard wizard, Guid tradeId, TradeStep step, IReadOnlyList<uint> cards, IReadOnlyList<uint> given = null) {
+        // A claim or refund can only follow a hold that landed, so a hold this session never heard about is taken out first.
+        if (step != TradeStep.Hold && given is { Count: > 0 }) {
+            Mirror(wizard, tradeId, TradeStep.Hold, given);
+        }
+
         if (!_mirroredSteps.Add((tradeId, step))) {
             return true;
         }
@@ -408,8 +414,9 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
         return true;
     }
 
-    private static bool LandedAnyway(Guid tradeId, ulong charId, TradeStep step, out List<uint> cards) {
+    private static bool LandedAnyway(Guid tradeId, ulong charId, TradeStep step, out List<uint> cards, out List<uint> given) {
         cards = [];
+        given = [];
         var escrow = TradeEscrowCollection.Peek(tradeId);
         if (escrow is null) {
             return false;
@@ -425,9 +432,10 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             return false;
         }
 
-        cards = step == TradeStep.Claim
-            ? [.. isA ? escrow.CardsFromB : escrow.CardsFromA]
-            : [.. isA ? escrow.CardsFromA : escrow.CardsFromB];
+        var own = isA ? escrow.CardsFromA : escrow.CardsFromB;
+        var other = isA ? escrow.CardsFromB : escrow.CardsFromA;
+        cards = [.. step == TradeStep.Claim ? other : own];
+        given = step == TradeStep.Hold ? [] : [.. own];
 
         return true;
     }

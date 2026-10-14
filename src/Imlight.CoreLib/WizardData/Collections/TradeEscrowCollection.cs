@@ -143,8 +143,9 @@ public static class TradeEscrowCollection {
             }
 
             var cards = isA ? escrow.CardsFromB : escrow.CardsFromA;
+            var given = isA ? escrow.CardsFromA : escrow.CardsFromB;
             if (isA ? escrow.ClaimedA : escrow.ClaimedB) {
-                return new EscrowResult(EscrowOutcome.AlreadyDone, [.. cards]);
+                return new EscrowResult(EscrowOutcome.AlreadyDone, [.. cards]) { Given = [.. given] };
             }
 
             wizard.SpellbookBehavior.AddTreasureCards(cards);
@@ -155,7 +156,7 @@ public static class TradeEscrowCollection {
                 escrow.ClaimedB = true;
             }
 
-            return new EscrowResult(EscrowOutcome.Done, [.. cards]);
+            return new EscrowResult(EscrowOutcome.Done, [.. cards]) { Given = [.. given] };
         });
 
     /// <summary>
@@ -173,7 +174,7 @@ public static class TradeEscrowCollection {
 
             var cards = isA ? escrow.CardsFromA : escrow.CardsFromB;
             if (isA ? escrow.RefundedA : escrow.RefundedB) {
-                return new EscrowResult(EscrowOutcome.AlreadyDone, [.. cards]);
+                return new EscrowResult(EscrowOutcome.AlreadyDone, [.. cards]) { Given = [.. cards] };
             }
 
             wizard.SpellbookBehavior.AddTreasureCards(cards);
@@ -184,7 +185,7 @@ public static class TradeEscrowCollection {
                 escrow.RefundedB = true;
             }
 
-            return new EscrowResult(EscrowOutcome.Done, [.. cards]);
+            return new EscrowResult(EscrowOutcome.Done, [.. cards]) { Given = [.. cards] };
         });
 
     /// <summary>
