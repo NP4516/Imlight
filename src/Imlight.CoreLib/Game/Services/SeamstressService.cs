@@ -133,8 +133,7 @@ internal class SeamstressService(SessionActor sessionActor) : MessageService(ses
             var transaction = new SeamstressTransaction(wizard, SessionActor.ActorRef, UnequipItem);
 
             return transaction.TryApply(inputs, results, crownsCost, out failure);
-        }
-        catch (Exception ex) {
+        } catch (Exception ex) {
             Logger.Error("[Seamstress] Error in a request of {CharId}: {Reason} {StackTrace}", Logger.Args(wizard.CharId, ex.Message, ex.StackTrace));
             failure = "an error occurred";
 
