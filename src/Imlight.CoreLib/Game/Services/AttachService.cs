@@ -51,6 +51,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing;
 using Imlight.CoreLib.Game.World;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
@@ -102,6 +103,18 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             CloseStaleSession();
         }
 
+        // The client chooses the zone and the lot, so a house zone has to be the character's own before it is loaded.
+        if (!HouseAttach.TryAuthorize(_wizard, zoneName, message.ZoneID, out var house)) {
+            Logger.Information("Session {SessionId} MSG_ATTACH refused: house zone {Zone} is not available to character {CharId}",
+                Logger.Args(SessionActor.SessionID, zoneName, _wizard.CharId));
+
+            SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED {
+                Error = 1
+            });
+
+            return;
+        }
+
         // Tell the game server that the user has attached, and now we need to find a zone process for their
         // zone, or create a new one. This is an internal zone transfer that does not involve the client.
         var zoneDetails = InternalZoneTransfer(zoneName, location);
@@ -120,6 +133,10 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         _wizard.SetZone(zoneName, zoneDetails.ZoneDisplayName);
         _wizard.SetPersistentLocation(zoneDetails.Location);
         _wizard.SetPersistentOrientation(zoneDetails.Orientation);
+
+        // The services that answer MSG_PRELOGIN read the lot, and the client's owner check reads it from the deed.
+        _wizard.AttachedLotGid = house?.LotGid ?? 0;
+        HouseAttach.ApplyDeedLot(_wizard);
 
         // Tiny anti-cheat measure. When the character object is created, we recalculate the game stats.
         CharacterHelper.RecalculateGameStats(_wizard);
@@ -176,7 +193,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
             // Set zone data.
             ZoneName = zoneName,
-            ZoneID = message.ZoneID,
+            ZoneID = house is null ? message.ZoneID : house.LotGid,
             DynamicZoneID = zoneDetails.DynamicZoneId,
             DynamicServerProcID = zoneDetails.DynamicZoneId,
             CriticalObjects = criticalObjectData,
