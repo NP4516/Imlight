@@ -205,6 +205,29 @@ public sealed class PVP_111_PROTOCOL : IServerProtocol {
     }
 
     /// <summary>
+    /// A queued player choosing whether matchmaking may search outside their skill range.
+    /// </summary>
+    public sealed class MSG_SETEXPANDSEARCH : IServerMessage {
+
+        public byte MessageOrder { get; } = 13;
+        public byte ServiceID { get; } = 111;
+
+        public ulong CharId;
+        public bool Expand;
+
+    }
+
+    /// <summary>
+    /// A timer message of the director: look for pairs in the queue.
+    /// </summary>
+    public sealed class MSG_MATCHMAKINGTICK : IServerMessage {
+
+        public byte MessageOrder { get; } = 14;
+        public byte ServiceID { get; } = 111;
+
+    }
+
+    /// <summary>
     /// A timer message of the director: a player departed without logging out and did not return in time.
     /// </summary>
     public sealed class MSG_DEPARTUREGRACEEXPIRED : IServerMessage {

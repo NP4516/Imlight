@@ -42,8 +42,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer;
+using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Networking;
@@ -57,7 +59,9 @@ namespace Imlight.CoreLib.Game.PvP;
 internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
     private const int MaxQueuedMessagesPerPlayer = 64;
+    private const string MatchmakingTimerKey = "matchmaking";
 
+    private static readonly TimeSpan s_matchmakingInterval = TimeSpan.FromSeconds(1);
     private static TimeSpan s_departureGrace = TimeSpan.FromSeconds(60);
     private static string DepartureTimerKey(ulong charId) => $"departure-{charId}";
 
@@ -70,6 +74,9 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     private readonly Dictionary<ulong, CoreObject> _playerObjects = [];
     private readonly Dictionary<ulong, List<IMessage>> _queuedMessages = [];
     private readonly PvPQueue _queue = new();
+    private readonly Dictionary<ulong, PvPMatch> _matches = [];
+    private readonly Dictionary<ulong, ulong> _matchIdByPlayer = [];
+    private ulong _matchSequence;
 
     // ctor
     public PvPDirector()
@@ -77,6 +84,12 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
     public static Props Props()
         => Akka.Actor.Props.Create(() => new PvPDirector());
+
+    protected override void PreStart() {
+        Timers.StartPeriodicTimer(MatchmakingTimerKey, new PVP_111_PROTOCOL.MSG_MATCHMAKINGTICK(), s_matchmakingInterval);
+
+        base.PreStart();
+    }
 
     protected override bool AroundReceive(Receive receive, object message) {
         // A restart would rebuild the director empty and silently drop every queued player.
@@ -152,6 +165,26 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
+        if (_queue.Contains(charId)) {
+            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.AlreadyQueued));
+
+            return;
+        }
+
+        if (PvPRegistry.IsInMatch(charId)) {
+            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.AlreadyInMatch));
+
+            return;
+        }
+
+        if (!PvPMatchFactory.TryGetMatch(message.MatchNameId, out var match)
+            || !PvPMatchFactory.TryGetLevelModifiers(match.m_levelModifiersListID.Full, out var levelModifiers)) {
+            Logger.Error("Match {MatchId} has no template or level table; {CharId} cannot queue.", Logger.Args(message.MatchNameId, charId));
+            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.InvalidMatchNameId));
+
+            return;
+        }
+
         var entry = new PvPQueueEntry(
             CharId: charId,
             RealmName: profile.RealmName,
@@ -160,13 +193,36 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             LeagueId: message.LeagueId,
             SeasonId: message.SeasonId,
             ExpandSearch: message.ExpandSearch,
-            EnteredAtUtc: DateTime.UtcNow
+            EnteredAtUtc: DateTime.UtcNow,
+            Rating: (int) Math.Round(PvPMatchmaker.GetRating(levelModifiers, (int) profile.Level))
         );
-        if (!_queue.Add(entry)) {
+        _queue.Add(entry);
+        PvPRegistry.SetQueued(charId, true);
+
+        SendQueueStatus(entry);
+    }
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_SETEXPANDSEARCH))]
+    private void ReceiveSetExpandSearch(PVP_111_PROTOCOL.MSG_SETEXPANDSEARCH message) {
+        if (!_queue.TryGet(message.CharId, out var entry) || entry.ExpandSearch == message.Expand) {
             return;
         }
 
-        PvPRegistry.SetQueued(charId, true);
+        entry = entry with { ExpandSearch = message.Expand };
+        _queue.Update(entry);
+
+        SendQueueStatus(entry);
+    }
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_MATCHMAKINGTICK))]
+    private void ReceiveMatchmakingTick(PVP_111_PROTOCOL.MSG_MATCHMAKINGTICK message) {
+        if (_queue.Count < 2) {
+            return;
+        }
+
+        foreach (var (first, second) in PvPMatchmaker.FindPairs(_queue.Entries, DateTime.UtcNow, _sessions.ContainsKey)) {
+            CreateMatch(first, second);
+        }
     }
 
     [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_LEAVEQUEUE))]
@@ -185,6 +241,26 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             PvPRegistry.SetQueued(charId, false);
         }
     }
+
+    private void CreateMatch(PvPQueueEntry first, PvPQueueEntry second) {
+        var match = new PvPMatch(++_matchSequence, [first, second]);
+        _matches[match.Id] = match;
+
+        foreach (var charId in match.CharIds) {
+            _queue.Remove(charId);
+            PvPRegistry.SetQueued(charId, false);
+            PvPRegistry.SetInMatch(charId, true);
+            _matchIdByPlayer[charId] = match.Id;
+        }
+
+        Logger.Debug("PvP match {MatchId} pairs {First} and {Second}.", Logger.Args(match.Id, first.CharId, second.CharId));
+    }
+
+    private void SendQueueStatus(PvPQueueEntry entry)
+        => SendToPlayer(entry.CharId, new GAME_5_PROTOCOL.MSG_MATCHMAKERUPDATE {
+            CharacterID = entry.CharId,
+            MatchActor = PvPMatchActorBuilder.BuildQueued(entry, PvPMatchActorBuilder.StatusFindingMatch)
+        });
 
     private void Leave(ulong charId) {
         RemoveFromQueue(charId);

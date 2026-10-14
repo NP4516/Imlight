@@ -105,6 +105,24 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
     private void ReceivePvPUpdateRequest(WIZARD_12_PROTOCOL.MSG_PVPUPDATEREQUEST message)
         => SendAll(_window.UpdateRequest(message, GetActiveWizard()));
 
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PVPINTENT))]
+    private void ReceivePvPIntent(WIZARD_12_PROTOCOL.MSG_PVPINTENT message) {
+        var (replies, toDirector) = _window.Intent(message, SessionActor.ActorRef, GetActiveGameObject(), GetActiveWizard(), DateTime.UtcNow);
+
+        SendAll(replies);
+        if (toDirector is not null) {
+            TellDirector(toDirector);
+        }
+    }
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_EXPANDPVPSEARCH))]
+    private void ReceiveExpandPvPSearch(WIZARD_12_PROTOCOL.MSG_EXPANDPVPSEARCH message) {
+        var expand = _window.ExpandSearch(message, GetActiveWizard());
+        if (expand is not null) {
+            TellDirector(expand);
+        }
+    }
+
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData))]
     private void ReceiveAdvPvPEloData(WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData message)
         => SendToSocket(new WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData {

@@ -60,4 +60,7 @@ internal sealed class PvPQueue {
     public bool Remove(ulong charId)
         => _entries.Remove(charId);
 
+    public void Update(PvPQueueEntry entry)
+        => _entries[entry.CharId] = entry;
+
 }
