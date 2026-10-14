@@ -616,7 +616,7 @@ public class CombatDuelSubCircle {
             m_minionSubCircle = asMinion ? minionOwnerSubCircle : 0,
 
             m_subcircle = SlotIndex,
-            m_dynamicSymbol = DynamicSymbol,
+            m_dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 1),
             m_pvp = _duelActor.Duel.m_bPVP,
 
             m_color = _color,
