@@ -30,7 +30,8 @@
  *
  * NOTE:
  * One player at a time holds the chest: Idle, Pending (sent to the game, lease running), InGame, Consumed.
- * The state is world state and is not persisted. The minigame process reports STARTED, RESULT and ABORTED.
+ * The state is world state and is not persisted. The minigame process reports STARTED, RESULT and ABORTED;
+ * a STARTED for a chest that another player holds is answered with a refusal and that process pays nothing.
  *
  * TODO:
  * - How long does a chest transfer take on the live server? ReservationLease is a guess.
@@ -156,6 +157,7 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
         if (!heldByPlayer && _state != ChestState.Idle) {
             Logger.Warning("A silver chest game of {CharId} started on a chest that is {State}",
                 Logger.Args(message.CharId, _state));
+            Sender.Tell(new PROCESS_107_PROTOCOL.MSG_CHEST_GAME_REFUSED(), Self);
 
             return;
         }
