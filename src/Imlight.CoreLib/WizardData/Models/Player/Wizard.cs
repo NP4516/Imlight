@@ -456,6 +456,48 @@ public class Wizard {
         return true;
     }
 
+    /// <summary>
+    /// Finds a pet item among the inventory items and the equipped items.
+    /// </summary>
+    /// <param name="petItemId">The global id of the pet item.</param>
+    /// <returns>The item, or null if the wizard does not have it.</returns>
+    public WizClientObjectItem FindPetItem(ulong petItemId)
+        => InventoryBehavior?.GetItem(petItemId) ?? EquipmentBehavior?.GetItem(petItemId);
+
+    /// <summary>
+    /// Gets the pet item in the pet equipment slot.
+    /// </summary>
+    /// <returns>The item, or null if no pet is equipped.</returns>
+    public WizClientObjectItem GetEquippedPetItem() {
+        var petItemId = EquipmentBehavior?.GetEquippedPetId() ?? 0;
+
+        return petItemId == 0 ? null : EquipmentBehavior.GetItem(petItemId);
+    }
+
+    /// <summary>
+    /// Completes a hatched pet's state (genes, stats, happiness, talents, ratings) and saves the pet if that changed it.
+    /// </summary>
+    /// <param name="pet">The pet item.</param>
+    /// <returns>True if the pet changed and was saved.</returns>
+    public bool InitializePet(WizClientObjectItem pet) {
+        if (!PetProgression.EnsureInitialized(pet)) {
+            return false;
+        }
+
+        // Persistent save.
+        SavePet(pet);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Saves a pet's item behavior to the database.
+    /// </summary>
+    /// <param name="pet">The pet item.</param>
+    /// <returns>True if the stored pet was found and saved.</returns>
+    public bool SavePet(WizClientObjectItem pet)
+        => WizardItemCollection.SavePetBehavior(pet);
+
     public bool RemoveItemFromInventory(ulong itemId) {
         var success = InventoryBehavior.RemoveItem(itemId, out var item);
         if (!success) {
@@ -1288,6 +1330,7 @@ public class Wizard {
         AfterDatabaseLoadSpellbookBehavior();
         AfterDatabaseloadMountOwnerBehavior();
         AfterDatabaseLoadPetOwnerBehavior();
+        AfterDatabaseLoadPets();
         AfterDatabaseLoadAlchemyBehavior();
         AfterDatabaseLoadQuestBehavior();
 
@@ -1548,6 +1591,17 @@ public class Wizard {
             CraftingSlots = [],
             ReagentItemIds = []
         };
+    }
+
+    private void AfterDatabaseLoadPets() {
+        // Pets hatched before genes existed get theirs on this first load.
+        foreach (var pet in (InventoryBehavior?.Items ?? []).Concat(EquipmentBehavior?.EquippedItems ?? [])) {
+            try {
+                InitializePet(pet);
+            } catch (Exception ex) {
+                Logger.Error("Could not complete pet {PetId} of {CharId}: {Message}", Logger.Args(pet.m_globalID.Full, CharId, ex.Message));
+            }
+        }
     }
 
     private void AfterDatabaseLoadPetOwnerBehavior() {

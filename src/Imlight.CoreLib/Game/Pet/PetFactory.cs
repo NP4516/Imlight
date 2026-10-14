@@ -249,7 +249,7 @@ public class PetFactory : RootDirectoryResourceSingleton<PetFactory>, IMemoryStr
         };
     }
 
-    private static PetItemBehaviorTemplate GetPetItemBehaviorTemplate(uint templateId) {
+    internal static PetItemBehaviorTemplate GetPetItemBehaviorTemplate(uint templateId) {
         var template = s_petTemplates.GetValueOrDefault(templateId)
             ?? CoreObjectFactory.GetCoreTemplate(templateId) as GameObjectTemplate;
 

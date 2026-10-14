@@ -272,6 +272,34 @@ public static class WizardItemCollection {
     }
 
     /// <summary>
+    /// Saves the pet item behavior of a pet onto its stored item: level, XP, happiness, stats, genes,
+    /// expressed talents and ratings.
+    /// </summary>
+    /// <param name="pet">The pet item, carrying the behavior to store.</param>
+    /// <returns>True if the pet was found and saved, false otherwise.</returns>
+    public static bool SavePetBehavior(WizClientObjectItem pet) {
+        if (!CoreObjectFactory.FindBehaviorInstance<ClientPetItemBehavior>(pet, out var behavior)) {
+            return false;
+        }
+
+        using var session = s_store.OpenSession();
+
+        // Waits for the index so a pet stored a moment ago is found too.
+        var associatedItem = session.Query<WizClientObjectItem>(collectionName: CollectionName)
+            .Customize(query => query.WaitForNonStaleResults())
+            .FirstOrDefault(x => x.m_globalID == pet.m_globalID && x.m_characterId == pet.m_characterId);
+        var index = associatedItem?.m_inactiveBehaviors?.FindIndex(stored => stored is ClientPetItemBehavior) ?? -1;
+        if (index < 0) {
+            return false;
+        }
+
+        associatedItem.m_inactiveBehaviors[index] = behavior;
+        session.SaveChanges();
+
+        return true;
+    }
+
+    /// <summary>
     /// Adds an item to the deck with the specified deck ID and spell template ID.
     /// </summary>
     /// <param name="deckId">The ID of the deck.</param>

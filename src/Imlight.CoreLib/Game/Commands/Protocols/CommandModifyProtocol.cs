@@ -246,6 +246,122 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Added snack {snackObj.m_debugName} to snack bag.");
     }
 
+    [Command("petlevel")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void SetPetLevelCommand(string level) {
+        if (!int.TryParse(level, out var petLevel)) {
+            InformSenderClient("Invalid pet level.");
+
+            return;
+        }
+
+        if (!TryGetEquippedPet(out var pet)) {
+            return;
+        }
+
+        if (!PetProgression.SetLevel(pet, petLevel)) {
+            InformSenderClient($"Cannot set the pet to level {petLevel}.");
+
+            return;
+        }
+
+        SendPetBehavior(pet);
+        InformSenderClient($"Set the pet to level {petLevel}.");
+    }
+
+    [Command("petxp")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void AddPetXpCommand(string xp) {
+        if (!uint.TryParse(xp, out var amount)) {
+            InformSenderClient("Invalid XP amount.");
+
+            return;
+        }
+
+        if (!TryGetEquippedPet(out var pet)) {
+            return;
+        }
+
+        var levelsGained = PetProgression.AddXp(pet, amount);
+        if (levelsGained < 0) {
+            InformSenderClient("This pet cannot gain XP.");
+
+            return;
+        }
+
+        SendPetBehavior(pet);
+        Context.SessionActor.Tell(new WIZARD2_53_PROTOCOL.MSG_GAINPETXP { PetGID = pet.m_globalID, XP = amount }, null);
+        InformSenderClient($"Gave the pet {amount} XP and {levelsGained} levels.");
+    }
+
+    [Command("pethappiness")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void SetPetHappinessCommand(string happiness) {
+        if (!uint.TryParse(happiness, out var value)) {
+            InformSenderClient("Invalid happiness.");
+
+            return;
+        }
+
+        if (!TryGetEquippedPet(out var pet)) {
+            return;
+        }
+
+        if (!PetProgression.SetHappiness(pet, value)) {
+            InformSenderClient("This pet cannot have its happiness set.");
+
+            return;
+        }
+
+        SendPetBehavior(pet);
+        InformSenderClient($"Set the pet's happiness to {value}, up to its maximum.");
+    }
+
+    [Command("petenergy")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void SetPetEnergyCommand(string energy) {
+        if (!int.TryParse(energy, out var value) || value < 0) {
+            InformSenderClient("Invalid energy.");
+
+            return;
+        }
+
+        var wizard = Context.Character;
+        var maxEnergy = MagicLevelsConfig.GetPlayerLevelInfo(wizard.MagicSchoolBehavior.MagicSchool, wizard.MagicSchoolBehavior.Level).m_petEnergy;
+        wizard.UpdateEnergy(Math.Min(value, maxEnergy));
+
+        Context.SessionActor.Tell(new PET_9_PROTOCOL.MSG_PETENERGYTICK {
+            GlobalID = wizard.GameObjectID,
+            Energy = wizard.PetOwnerBehavior.Energy,
+            MaxEnergy = maxEnergy,
+            TickTime = (int) wizard.PetOwnerBehavior.LastEnergyTickEpoch
+        }, null);
+        InformSenderClient($"Set pet energy to {wizard.PetOwnerBehavior.Energy} of {maxEnergy}.");
+    }
+
+    [Command("pettalent")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void GivePetTalentCommand(string talentName) {
+        if (!PetTalentRegistry.TryGetByName(talentName, out var talent)) {
+            InformSenderClient($"No pet talent is named {talentName}.");
+
+            return;
+        }
+
+        if (!TryGetEquippedPet(out var pet)) {
+            return;
+        }
+
+        if (!PetProgression.GiveTalent(pet, talent)) {
+            InformSenderClient("This pet cannot be given a talent.");
+
+            return;
+        }
+
+        SendPetBehavior(pet);
+        InformSenderClient($"Gave the pet the talent {talent.Name}.");
+    }
+
     [Command("addreagent")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddReagentCommand(string templateId) {
@@ -734,6 +850,29 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(msg, null);
 
         InformSenderClient($"Added {xpInt} XP.");
+    }
+
+    private bool TryGetEquippedPet(out WizClientObjectItem pet) {
+        pet = Context.Character.GetEquippedPetItem();
+        if (pet is null) {
+            InformSenderClient("Equip a pet first.");
+
+            return false;
+        }
+
+        // Pets that were hatched before genes existed get theirs here.
+        Context.Character.InitializePet(pet);
+
+        return true;
+    }
+
+    private void SendPetBehavior(WizClientObjectItem pet) {
+        // Persistent save.
+        Context.Character.SavePet(pet);
+
+        if (PetBehaviorUpdate.TryCreate(pet, out var update)) {
+            Context.SessionActor.Tell(update, null);
+        }
     }
 
 }
