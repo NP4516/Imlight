@@ -124,7 +124,34 @@ public static class AccountCollection {
 
         account.InfractionHistory = new InfractionHistory(account.AccountId, infractions);
 
+        if (!characterListOnly) {
+            LoadSharedBank(session, account);
+        }
+
         return account;
+    }
+
+    private static void LoadSharedBank(IDocumentSession session, Account account) {
+        // The shared bank items are stored like character items, owned by the account id.
+        account.SharedBank ??= new AccountSharedBank();
+        var sharedBank = account.SharedBank;
+        sharedBank.Items = LoadSharedDocuments<WizClientObjectItem>(session, WizardItemCollection.CollectionName, account.AccountId, sharedBank.ItemIds);
+        sharedBank.Reagents = LoadSharedDocuments<ClientReagentItem>(session, WizardReagentCollection.CollectionName, account.AccountId, sharedBank.ReagentIds);
+        sharedBank.Snacks = LoadSharedDocuments<ClientPetSnackItem>(session, WizardPetSnackCollection.CollectionName, account.AccountId, sharedBank.SnackIds);
+    }
+
+    private static List<T> LoadSharedDocuments<T>(IDocumentSession session, string collectionName, ulong accountId, List<ulong> ids)
+        where T : WizClientObjectItem {
+        if (ids.Count == 0) {
+            return [];
+        }
+
+        // Waits for the index, because a document that just changed owner has to be found too.
+        return [.. session.Query<T>(collectionName: collectionName)
+            .Customize(query => query.WaitForNonStaleResults())
+            .Where(x => x.m_characterId == accountId)
+            .ToList()
+            .Where(item => ids.Contains(item.m_globalID))];
     }
 
     /// <summary>
@@ -183,6 +210,11 @@ public static class AccountCollection {
             foreach (var characterId in account.CharacterIds) {
                 WizardCollection.DeleteCharacter(characterId);
             }
+
+            // Delete the items of the shared bank.
+            WizardItemCollection.DeleteInventory(accountId);
+            WizardReagentCollection.DeleteReagentBag(accountId);
+            WizardPetSnackCollection.DeleteSnackBag(accountId);
 
             // Delete the account.
             session.Delete(account);
