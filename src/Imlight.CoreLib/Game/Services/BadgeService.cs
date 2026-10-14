@@ -282,8 +282,8 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
-        state.NewBadges.Add(new NewBadgeEntry { BadgeId = message.BadgeID, Time = (uint) DateTimeOffset.UtcNow.ToUnixTimeSeconds() });
-        state.PruneNewBadges(DateTimeOffset.UtcNow);
+        var now = DateTimeOffset.UtcNow;
+        state.AddNewBadge(new NewBadgeEntry { BadgeId = message.BadgeID, Time = (uint) now.ToUnixTimeSeconds() }, now);
         Persist(wizard);
     }
 

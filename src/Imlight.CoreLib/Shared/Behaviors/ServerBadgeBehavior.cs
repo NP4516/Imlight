@@ -67,26 +67,28 @@ public class ServerBadgeBehavior : IClientBehaviorProvider<BadgeBehavior> {
     public List<NewBadgeEntry> GetRecentNewBadges(DateTimeOffset now) {
         var oldest = now.Subtract(NewBadgeLifetime).ToUnixTimeSeconds();
 
-        return [.. NewBadges.ToArray().Where(entry => entry.Time >= oldest).TakeLast(MaxNewBadges)];
+        return [.. NewBadges.Where(entry => entry.Time >= oldest).TakeLast(MaxNewBadges)];
     }
 
-    public void PruneNewBadges(DateTimeOffset now) {
-        var recent = GetRecentNewBadges(now);
-        NewBadges.Clear();
-        NewBadges.AddRange(recent);
+    public void AddNewBadge(NewBadgeEntry entry, DateTimeOffset now) {
+        // The zone service reads these lists while the badge service writes, so they are replaced, never changed in place.
+        NewBadges = [.. NewBadges, entry];
+        PruneNewBadges(now);
     }
+
+    public void PruneNewBadges(DateTimeOffset now) => NewBadges = GetRecentNewBadges(now);
 
     public BadgeBehavior GetClientBehaviorInstance()
-        => new() { m_badgeData = BadgeDataBlob.Encode(ClaimedRewards.ToArray(), GetRecentNewBadges(DateTimeOffset.UtcNow), PendingOvercount.ToArray()) };
+        => new() { m_badgeData = BadgeDataBlob.Encode(ClaimedRewards, GetRecentNewBadges(DateTimeOffset.UtcNow), PendingOvercount) };
 
     public void Reset() {
         Counters.Clear();
         Earned.Clear();
         SelectedBadgeId = 0;
         NextAwardSequence = 0;
-        NewBadges.Clear();
-        ClaimedRewards.Clear();
-        PendingOvercount.Clear();
+        NewBadges = [];
+        ClaimedRewards = [];
+        PendingOvercount = [];
     }
 
 }
