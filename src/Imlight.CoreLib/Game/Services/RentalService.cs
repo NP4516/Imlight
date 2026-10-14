@@ -20,14 +20,14 @@
  * ========================================================================
  *
  * PURPOSE:
- * Starts the timer of a rental item when it is first equipped and tells the client the absolute time it runs out.
+ * Starts the timer of a rental item when it is first equipped, tells the client the absolute time it runs out, and has every rental that ran out removed.
  *
  * USAGE EXAMPLE:
- * EquipmentService tells MSG_STARTRENTAL after it equipped an item that carries a rental behavior.
+ * EquipmentService tells MSG_STARTRENTAL after it equipped an item that carries a rental behavior; MSG_ATTACHCOMPLETE and the expiry timer make this service tell MSG_EXPIRERENTAL back for each rental that is due.
  *
  * NOTE:
  * The expiry is written to the item document before memory and before the client, so a failed write leaves the timer not started and the next equip retries it.
- * The duration comes from the template only (RentalBehaviorTemplate.m_expireTime).
+ * The duration comes from the template only (RentalBehaviorTemplate.m_expireTime). Timers die with the session, so the next attach sweeps what ran out and arms the timer again.
  *
  * TODO:
  *
@@ -38,6 +38,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
@@ -50,6 +51,8 @@ using Imlight.CoreLib.WizardData.Collections;
 namespace Imlight.CoreLib.Game.Services;
 
 internal class RentalService(SessionActor sessionActor) : MessageService(sessionActor) {
+
+    private const string ExpiryTimerKey = "rental-expiry";
 
     private readonly HashSet<uint> _warnedTemplates = [];
 
@@ -86,6 +89,42 @@ internal class RentalService(SessionActor sessionActor) : MessageService(session
             GlobalID = item.m_globalID,
             TimerTime = expireTime
         });
+
+        ScheduleNextExpiry();
+    }
+
+    [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
+    private void ReceiveAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message)
+        => ExpireDueRentals();
+
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_CHECKRENTALS))]
+    private void ReceiveCheckRentals(CHARACTER_103_PROTOCOL.MSG_CHECKRENTALS message)
+        => ExpireDueRentals();
+
+    private void ExpireDueRentals() {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        foreach (var (item, behavior) in RentalItems.Enumerate(GetActiveWizard())) {
+            if (RentalItems.IsDue(behavior, now)) {
+                TellOtherServices(new CHARACTER_103_PROTOCOL.MSG_EXPIRERENTAL { ItemId = item.m_globalID });
+            }
+        }
+
+        ScheduleNextExpiry();
+    }
+
+    private void ScheduleNextExpiry() {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var upcoming = RentalItems.Enumerate(GetActiveWizard())
+            .Where(rental => RentalItems.IsStarted(rental.Behavior) && !RentalItems.IsDue(rental.Behavior, now))
+            .Select(rental => (long) rental.Behavior.m_expireTime)
+            .ToList();
+        if (upcoming.Count == 0) {
+            Timers.Cancel(ExpiryTimerKey);
+
+            return;
+        }
+
+        Timers.StartSingleTimer(ExpiryTimerKey, new CHARACTER_103_PROTOCOL.MSG_CHECKRENTALS(), RentalItems.CheckDelay(upcoming.Min(), now));
     }
 
 }

@@ -49,6 +49,9 @@ internal static class RentalItems {
 
     internal const uint Unset = uint.MaxValue;
 
+    private const long MinimumCheckSeconds = 5;
+    private const long MaximumCheckSeconds = 3600;
+
     internal static bool TryGetBehavior(WizClientObjectItem item, out ClientRentalBehavior behavior) {
         if (item?.m_inactiveBehaviors is null) {
             behavior = null;
@@ -89,6 +92,15 @@ internal static class RentalItems {
 
         return true;
     }
+
+    /// <summary>
+    /// Computes how long to wait before looking at the rentals again.
+    /// </summary>
+    /// <param name="nextExpireTime">The earliest expiry of the rentals that are still running, in Unix seconds.</param>
+    /// <param name="now">The current time in Unix seconds.</param>
+    /// <returns>The time to the expiry plus one second, held between five seconds and one hour.</returns>
+    internal static TimeSpan CheckDelay(long nextExpireTime, long now)
+        => TimeSpan.FromSeconds(Math.Clamp(nextExpireTime - now + 1, MinimumCheckSeconds, MaximumCheckSeconds));
 
     internal static bool IsStarted(ClientRentalBehavior behavior)
         => behavior.m_expireTime != Unset && behavior.m_expireTime != 0;
