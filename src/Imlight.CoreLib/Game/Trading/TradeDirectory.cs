@@ -75,7 +75,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
     private readonly Dictionary<ulong, TradeSession> _tradesByChar = [];
     private readonly Dictionary<Guid, TradeSession> _tradesById = [];
 
-    // ctor
     public TradeDirectory(TimeSpan inviteTimeout, TimeSpan stepTimeout) {
         Instance = Self;
         _inviteTimeout = inviteTimeout;
@@ -92,8 +91,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
         // A restart would rebuild the directory empty and strand every open trade.
         try {
             return base.AroundReceive(receive, message);
-        }
-        catch (Exception ex) {
+        } catch (Exception ex) {
             Logger.Error("TradeDirectory failed to handle {MessageType}: {Exception}",
                 Logger.Args(message.GetType().Name, ex));
 
