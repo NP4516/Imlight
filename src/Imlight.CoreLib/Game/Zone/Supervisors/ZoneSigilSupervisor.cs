@@ -124,6 +124,7 @@ internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor
         // Find the sigil that is closest to the first participant. Forward
         // the request to that sigil.
         var closestSigil = _sigils
+            .Where(x => !_pvpSigilObjectIds.ContainsKey(x.Value))
             .OrderBy(x => Vector3.Distance(x.Key.m_location, firstParticipantObj.m_location))
             .FirstOrDefault();
         
