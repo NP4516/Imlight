@@ -150,7 +150,6 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         return;
     }
 
-    // is this even needed?
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_CROWNBALANCE))]
     private void ReceiveCrownBalanceTimer(WIZARD_12_PROTOCOL.MSG_CROWNBALANCE message) {
         var wizard = GetActiveWizard();
