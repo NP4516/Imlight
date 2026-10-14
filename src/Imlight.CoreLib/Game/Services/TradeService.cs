@@ -380,11 +380,12 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             owned[card] = copies - 1;
         }
 
-        var projected = TreasureCardTradePolicy.CountCapacityUsed(book)
-            - TreasureCardTradePolicy.CountCapacityUsed(give)
-            + TreasureCardTradePolicy.CountCapacityUsed(receive);
+        var given = TreasureCardTradePolicy.CountCapacityUsed(give);
+        var received = TreasureCardTradePolicy.CountCapacityUsed(receive);
+        var projected = TreasureCardTradePolicy.CountCapacityUsed(book) - given + received;
 
-        return projected > TradeLimits.TreasureBookCapacity ? TradeError.CannotHold : TradeError.None;
+        // A book above the limit (loot and shops do not enforce it) can still trade as long as it does not grow.
+        return projected > TradeLimits.TreasureBookCapacity && received > given ? TradeError.CannotHold : TradeError.None;
     }
 
     private bool Mirror(Wizard wizard, Guid tradeId, TradeStep step, IReadOnlyList<uint> cards, IReadOnlyList<uint> given = null) {
