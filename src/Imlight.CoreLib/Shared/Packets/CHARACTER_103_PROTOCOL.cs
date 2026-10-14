@@ -388,4 +388,32 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Sent by a service to the EquipmentService: takes the equipped item off the player the way an unequip
+    /// request from the client does. The EquipmentService answers with <see cref="MSG_UNEQUIPITEMRSP"/>.
+    /// </summary>
+    public sealed class MSG_UNEQUIPITEM : IServerMessage {
+
+        public byte MessageOrder { get; } = 31;
+        public byte ServiceID { get; } = 103;
+
+        public ulong ItemId;
+
+    }
+
+    /// <summary>
+    /// The EquipmentService's answer to <see cref="MSG_UNEQUIPITEM"/>.
+    /// </summary>
+    public sealed class MSG_UNEQUIPITEMRSP : IServerMessage {
+
+        public byte MessageOrder { get; } = 32;
+        public byte ServiceID { get; } = 103;
+
+        /// <summary>
+        /// True when the item is no longer equipped.
+        /// </summary>
+        public bool Success;
+
+    }
+
 }
