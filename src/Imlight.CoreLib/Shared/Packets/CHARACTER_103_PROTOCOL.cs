@@ -26,6 +26,14 @@ using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Shared.Packets;
 
+/// <summary>
+/// What a <see cref="CHARACTER_103_PROTOCOL.MSG_BADGEEVENT"/> asks the badge service to do.
+/// </summary>
+public enum BadgeEventKind : byte {
+    Award,
+    Recheck,
+}
+
 public class CHARACTER_103_PROTOCOL : IServerProtocol {
 
     public byte ServiceID { get; } = 103;
@@ -413,6 +421,23 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
         /// True when the item is no longer equipped.
         /// </summary>
         public bool Success;
+
+    }
+
+    /// <summary>
+    /// Sent to the BadgeService: award one badge, or recheck the auto-add badges against the character's state.
+    /// </summary>
+    public sealed class MSG_BADGEEVENT : IServerMessage {
+
+        public byte MessageOrder { get; } = 40;
+        public byte ServiceID { get; } = 103;
+
+        public BadgeEventKind Kind;
+
+        /// <summary>
+        /// The badge to award; only used by <see cref="BadgeEventKind.Award"/>.
+        /// </summary>
+        public uint BadgeId;
 
     }
 

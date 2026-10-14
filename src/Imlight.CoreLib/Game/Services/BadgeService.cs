@@ -27,6 +27,7 @@
  *
  * NOTE:
  * The list is sent before AttachService answers its own MSG_PRELOGIN with MSG_LOGINCOMPLETE, as the live server does.
+ * Every state change goes through BadgeEngine; this service persists it once, tells the client and runs the completion results.
  *
  * TODO:
  *
@@ -35,14 +36,28 @@
  * Last Updated: 10/14/2026
  */
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
+using Imcodec.MessageLayer.Generated;
+using Imlight.Common;
 using Imlight.CoreLib.Game.Badges;
+using Imlight.CoreLib.Game.Requirements;
+using Imlight.CoreLib.Game.Requirements.Contexts;
+using Imlight.CoreLib.Game.Results;
+using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Models.World;
 
 namespace Imlight.CoreLib.Game.Services;
 
 internal class BadgeService(SessionActor sessionActor) : MessageService(sessionActor) {
+
+    private readonly HashSet<uint> _warnedUnknownBadges = [];
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new BadgeService(parentActor));
@@ -54,10 +69,101 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
+        // An award that is due at login is already in the full list, so the changes are not sent on their own.
         var wizard = GetActiveWizard();
+        var changes = new BadgeEngine(wizard, catalog).Execute(engine => engine.Recheck(definition => MeetsRequirements(wizard, definition)));
+        FinishChanges(wizard, changes, sendBatches: false);
+
         foreach (var badgeMessage in BadgeWire.Build(wizard, catalog, BadgeView.GetHeld(wizard.BadgeBehavior, catalog), full: true)) {
             SendToSocket(badgeMessage);
         }
     }
+
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_BADGEEVENT))]
+    private void ReceiveBadgeEvent(CHARACTER_103_PROTOCOL.MSG_BADGEEVENT message) {
+        var catalog = BadgeCatalog.Current;
+        if (!catalog.IsReady) {
+            return;
+        }
+
+        var wizard = GetActiveWizard();
+        var engine = new BadgeEngine(wizard, catalog);
+        var changes = message.Kind switch {
+            BadgeEventKind.Award => engine.Execute(e => e.Award(message.BadgeId)),
+            BadgeEventKind.Recheck => engine.Execute(e => e.Recheck(definition => MeetsRequirements(wizard, definition))),
+            _ => BadgeEngine.Changes.None
+        };
+
+        if (message.Kind == BadgeEventKind.Award && !catalog.TryGet(message.BadgeId, out _) && _warnedUnknownBadges.Add(message.BadgeId)) {
+            Logger.Warning("Badge {0} is not in the badge catalog and was not awarded to {1}.",
+                Logger.Args(message.BadgeId, wizard.CharId));
+        }
+
+        FinishChanges(wizard, changes, sendBatches: true);
+    }
+
+    [MessageHandler(typeof(GROUP_109_PROTOCOL.MSG_LEVELCHANGED))]
+    private void ReceiveLevelChanged(GROUP_109_PROTOCOL.MSG_LEVELCHANGED message) {
+        ReceiveBadgeEvent(new CHARACTER_103_PROTOCOL.MSG_BADGEEVENT { Kind = BadgeEventKind.Recheck });
+    }
+
+    [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_REQUESTNEWBADGE))]
+    private void ReceiveRequestNewBadge(WIZARD3_56_PROTOCOL.MSG_REQUESTNEWBADGE message) {
+        var catalog = BadgeCatalog.Current;
+        if (!catalog.IsReady) {
+            return;
+        }
+
+        // The client sends this for each complete badge it has just been told about; no reply is expected.
+        var wizard = GetActiveWizard();
+        var state = wizard.BadgeBehavior;
+        if (!catalog.TryGet(message.BadgeID, out var definition) || !BadgeView.IsComplete(state, definition)) {
+            Logger.Warning("{0} acknowledged badge {1}, which they do not hold complete.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), message.BadgeID));
+
+            return;
+        }
+
+        if (state.NewBadges.Any(entry => entry.BadgeId == message.BadgeID)) {
+            return;
+        }
+
+        state.NewBadges.Add(new NewBadgeEntry { BadgeId = message.BadgeID, Time = (uint) DateTimeOffset.UtcNow.ToUnixTimeSeconds() });
+        Persist(wizard);
+    }
+
+    private void FinishChanges(Wizard wizard, BadgeEngine.Changes changes, bool sendBatches) {
+        if (changes.StateChanged) {
+            Persist(wizard);
+        }
+
+        if (sendBatches) {
+            foreach (var batch in changes.Batches) {
+                foreach (var badgeMessage in BadgeWire.Build(wizard, BadgeCatalog.Current, batch, full: false)) {
+                    SendToSocket(badgeMessage);
+                }
+            }
+        }
+
+        foreach (var completed in changes.Completed.Where(definition => definition.CompleteResults is not null)) {
+            ResultDispatcher.ExecuteResults(
+                actorContext: Context,
+                results: completed.CompleteResults,
+                playerRef: SessionActor.ActorRef,
+                playerObj: GetActiveGameObject(),
+                zoneActor: SessionActor.GetZoneActor());
+        }
+    }
+
+    private static void Persist(Wizard wizard) {
+        if (!WizardCollection.UpdateCharacterBadgeBehavior(wizard)) {
+            Logger.Error("Failed to save the badge state of {0}.", Logger.Args(wizard.CharId));
+        }
+    }
+
+    private bool MeetsRequirements(Wizard wizard, BadgeDefinition definition)
+        => RequirementDispatcher.EvaluateRequirements(
+            definition.Requirements,
+            new GenericRequirementContext(definition.Requirements, SessionActor.ActorRef, GetActiveGameObject(), wizard, SessionActor.GetZoneActor()));
 
 }
