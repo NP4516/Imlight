@@ -16,7 +16,10 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System.Collections.Generic;
 using System.Linq;
+using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
 using Raven.Client.Documents;
 using Imlight.CoreLib.WizardData.Databases;
 using Imlight.CoreLib.WizardData.Models.Misc;
@@ -393,5 +396,51 @@ public static class AccountCollection {
         return UpdateAccount(accountId, acc => {
             acc.Crowns = crownsAmount;
         });
+    }
+
+    /// <summary>
+    /// Writes an account's Crowns together with a character's backpack in one transaction: the Crowns, the ids of the
+    /// backpack, the documents of the items that entered it and the documents of the items that left it. Either all
+    /// of it is stored or none of it, so a crash cannot leave the player with both the paid-for item and its inputs.
+    /// </summary>
+    /// <param name="account">The account, whose Crowns are written as they are in memory.</param>
+    /// <param name="owner">The character, whose backpack is written as it is in memory.</param>
+    /// <param name="addedItems">Items that entered the backpack and are not stored yet.</param>
+    /// <param name="removedItemIds">Items that left the backpack, whose stored documents are deleted.</param>
+    /// <returns><c>true</c> when everything is stored; <c>false</c> when nothing changed.</returns>
+    internal static bool SaveCrownsWithBackpack(Account account, Wizard owner,
+                                                IReadOnlyCollection<WizClientObjectItem> addedItems,
+                                                IReadOnlyCollection<ulong> removedItemIds) {
+        try {
+            // The account lane comes first, then the character lane that UpdateCharacterWithSession takes.
+            return WithWriteLane(account.AccountId, () => WizardCollection.UpdateCharacterWithSession(owner.CharId, (session, storedOwner) => {
+                var storedAccount = session.Query<Account>(collectionName: CollectionName)
+                    .FirstOrDefault(a => a.AccountId == account.AccountId);
+                if (storedAccount is null) {
+                    return false;
+                }
+
+                storedAccount.Crowns = account.Crowns;
+                storedOwner.InventoryBehavior = owner.InventoryBehavior;
+                foreach (var item in addedItems) {
+                    WizardItemCollection.StoreInSession(session, item);
+                }
+
+                foreach (var itemId in removedItemIds) {
+                    // The backpack no longer lists the item, so a missing document is only an unused leftover.
+                    if (!WizardItemCollection.DeleteInSession(session, owner.CharId, itemId)) {
+                        Logger.Warning("Removed item {ItemId} of character {CharId} has no stored item to delete.",
+                            Logger.Args(itemId, owner.CharId));
+                    }
+                }
+
+                return true;
+            }));
+        } catch (Exception ex) {
+            Logger.Error("Failed to save the Crowns of account {AccountId} with the backpack of character {CharId}: {Reason}",
+                Logger.Args(account.AccountId, owner.CharId, ex.Message));
+
+            return false;
+        }
     }
 }

@@ -20,19 +20,19 @@
  * ========================================================================
  *
  * PURPOSE:
- * Swaps the inputs of a stitch or an unstitch for their results and charges the Crowns, in an order
- * that a crash or a failure can never turn into a loss for the player.
+ * Swaps the inputs of a stitch or an unstitch for their results and charges the Crowns as one unit: the
+ * player ends up with either everything that was agreed or nothing of it.
  *
  * USAGE EXAMPLE:
  * var transaction = new SeamstressTransaction(wizard, session, unequip);
  * if (!transaction.TryApply([displayItem, statsItem], [stitchedItem], stitchCrowns, out var failure)) { deny(failure); }
  *
  * NOTE:
- * Order: unequip the equipped inputs, add the results, spend the Crowns, remove the inputs. Every step
- * is its own commit, so a crash leaves the player with extra items at worst. A failure before the Crowns
- * are spent takes the results back. Once the Crowns are spent the transaction succeeds even if an input
- * cannot be removed, and that is logged as an error. The client must see every item message before the
- * stitch confirm, so the caller sends the confirm after this returns.
+ * Equipped inputs are taken off first, each as its own commit, which loses nothing. After that the backpack
+ * and the Crowns change in memory and AccountCollection.SaveCrownsWithBackpack stores the character, the
+ * account and the item documents in one Raven transaction. A failed or crashed write stores none of it and
+ * the memory is put back. The client hears about the new and removed items only after the commit, and the
+ * caller sends the stitch confirm after this returns, because the client needs the item messages first.
  *
  * TODO:
  *
@@ -49,6 +49,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Items;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
@@ -68,7 +69,7 @@ internal sealed class SeamstressTransaction(Wizard wizard, IActorRef session, Fu
     /// Replaces the inputs with the results and charges the Crowns.
     /// </summary>
     /// <param name="inputs">The items the player gives up. They may be in the backpack or equipped.</param>
-    /// <param name="results">The new items. They are added before anything is charged or removed.</param>
+    /// <param name="results">The new items. They are not stored yet.</param>
     /// <param name="crownsCost">The Crowns to charge. Zero charges nothing.</param>
     /// <param name="failure">Why nothing happened. Empty on success.</param>
     /// <returns>True when the player paid for the results and holds them. False when nothing changed for good.</returns>
@@ -91,56 +92,77 @@ internal sealed class SeamstressTransaction(Wizard wizard, IActorRef session, Fu
             return false;
         }
 
+        // The client is told about the results only after the commit, so a result it could not be told about stops here.
+        foreach (var result in results) {
+            CoreObjectFactory.InitializeCoreObjectBehaviors(result, result.m_templateID);
+            result.m_characterId = wizard.CharId;
+            if (!ItemSync.TrySerialize(result, out _)) {
+                failure = $"item {result.m_globalID.Full} could not be serialized for the client";
+
+                return false;
+            }
+        }
+
+        foreach (var input in equippedInputs) {
+            if (!unequip(input.m_globalID)) {
+                failure = $"item {input.m_globalID.Full} could not be unequipped";
+
+                return false;
+            }
+        }
+
+        var crownsBefore = account.Crowns;
         var added = new List<WizClientObjectItem>();
-        var announced = new HashSet<ulong>();
+        var removed = new List<WizClientObjectItem>();
         try {
-            foreach (var input in equippedInputs) {
-                if (!unequip(input.m_globalID)) {
-                    failure = $"item {input.m_globalID.Full} could not be unequipped";
+            if (!TryChangeBackpack(inputs, results, added, removed, out failure)) {
+                PutBack(crownsBefore, added, removed);
 
-                    return false;
-                }
+                return false;
             }
 
-            foreach (var result in results) {
-                // Listed first so that an exception half way through the add is taken back too.
-                added.Add(result);
-                if (!wizard.AddItemToInventory(result)) {
-                    failure = $"item {result.m_globalID.Full} could not be added to the inventory";
-                    TakeBack(added, announced);
+            account.Crowns = crownsBefore - crownsCost;
+            if (!AccountCollection.SaveCrownsWithBackpack(account, wizard, results, [.. inputs.Select(input => (ulong) input.m_globalID)])) {
+                failure = "the new items and the Crowns could not be stored";
+                PutBack(crownsBefore, added, removed);
 
-                    return false;
-                }
-
-                if (!ItemSync.SendAdded(session, wizard, result)) {
-                    failure = $"item {result.m_globalID.Full} could not be sent to the client";
-                    TakeBack(added, announced);
-
-                    return false;
-                }
-
-                announced.Add(result.m_globalID);
+                return false;
             }
-        }
-        catch (Exception ex) {
-            Logger.Error("[Seamstress] Error while giving {0} the results of a seamstress request: {1} {2}",
+        } catch (Exception ex) {
+            Logger.Error("[Seamstress] Error while storing a seamstress request of {CharId}: {Reason} {StackTrace}",
                 Logger.Args(wizard.CharId, ex.Message, ex.StackTrace));
-            failure = "an error occurred while adding the results";
-            TakeBack(added, announced);
+            failure = "an error occurred while storing the new items and the Crowns";
+            PutBack(crownsBefore, added, removed);
 
             return false;
         }
 
-        if (crownsCost > 0 && !TrySpendCrowns(account, crownsCost)) {
-            failure = "the Crowns could not be taken";
-            TakeBack(added, announced);
+        TellClient(inputs, results, crownsCost);
+        failure = string.Empty;
 
-            return false;
+        return true;
+    }
+
+    private bool TryChangeBackpack(IReadOnlyList<WizClientObjectItem> inputs, IReadOnlyList<WizClientObjectItem> results,
+                                   List<WizClientObjectItem> added, List<WizClientObjectItem> removed, out string failure) {
+        foreach (var result in results) {
+            if (!wizard.InventoryBehavior.AddItem(result)) {
+                failure = $"item {result.m_globalID.Full} could not be added to the inventory";
+
+                return false;
+            }
+
+            added.Add(result);
         }
 
-        var inputIds = string.Join(", ", inputs.Select(input => input.m_globalID.Full));
         foreach (var input in inputs) {
-            RemoveInput(input.m_globalID, inputIds);
+            if (!wizard.InventoryBehavior.RemoveItem(input)) {
+                failure = $"item {input.m_globalID.Full} is not in the inventory";
+
+                return false;
+            }
+
+            removed.Add(input);
         }
 
         failure = string.Empty;
@@ -148,68 +170,39 @@ internal sealed class SeamstressTransaction(Wizard wizard, IActorRef session, Fu
         return true;
     }
 
-    private bool TrySpendCrowns(Account account, int cost) {
-        var before = account.Crowns;
-        if (before < cost) {
-            return false;
-        }
-
-        var saved = false;
-        try {
-            saved = account.SetCrowns(before - cost);
-        }
-        catch (Exception ex) {
-            Logger.Error("[Seamstress] Error while saving the Crowns of account {0}: {1} {2}",
-                Logger.Args(account.AccountId, ex.Message, ex.StackTrace));
-        }
-
-        if (!saved) {
-            account.Crowns = before;
-
-            return false;
-        }
-
-        session.Tell(new WIZARD_12_PROTOCOL.MSG_CROWNBALANCE {
-            Failure = 0,
-            TotalCrowns = account.Crowns,
-            CharacterID = wizard.CharId,
-            CacheBalanceForCSSegmentation = 1
-        });
-
-        return true;
-    }
-
-    private void RemoveInput(ulong itemId, string inputIds) {
-        try {
-            if (!wizard.RemoveItemFromInventory(itemId)) {
-                Logger.Error("[Seamstress] Character {0} paid for a seamstress request but input item {1} is not in the backpack (inputs: {2}).",
-                    Logger.Args(wizard.CharId, itemId, inputIds));
-
-                return;
-            }
-
-            ItemSync.SendRemoved(session, wizard, itemId);
-            WizardItemCollection.RemoveItem(wizard.CharId, itemId);
-        }
-        catch (Exception ex) {
-            Logger.Error("[Seamstress] Character {0} paid for a seamstress request but input item {1} was not removed cleanly (inputs: {2}): {3} {4}",
-                Logger.Args(wizard.CharId, itemId, inputIds, ex.Message, ex.StackTrace));
-        }
-    }
-
-    private void TakeBack(IReadOnlyList<WizClientObjectItem> added, IReadOnlySet<ulong> announced) {
+    private void PutBack(int crownsBefore, IReadOnlyList<WizClientObjectItem> added, IReadOnlyList<WizClientObjectItem> removed) {
+        wizard.Account.Crowns = crownsBefore;
         foreach (var item in added) {
-            try {
-                wizard.RemoveItemFromInventory(item.m_globalID);
-                WizardItemCollection.RemoveItem(wizard.CharId, item.m_globalID);
-                if (announced.Contains(item.m_globalID)) {
-                    ItemSync.SendRemoved(session, wizard, item.m_globalID);
-                }
+            wizard.InventoryBehavior.RemoveItem(item);
+        }
+
+        foreach (var item in removed) {
+            if (!wizard.InventoryBehavior.AddItem(item)) {
+                Logger.Error("[Seamstress] Could not return item {ItemId} to the backpack of character {CharId} after a failed request.",
+                    Logger.Args(item.m_globalID.Full, wizard.CharId));
             }
-            catch (Exception ex) {
-                Logger.Error("[Seamstress] Could not take back result item {0} of character {1}: {2} {3}",
-                    Logger.Args(item.m_globalID.Full, wizard.CharId, ex.Message, ex.StackTrace));
+        }
+    }
+
+    private void TellClient(IReadOnlyList<WizClientObjectItem> inputs, IReadOnlyList<WizClientObjectItem> results, int crownsCost) {
+        foreach (var result in results) {
+            if (!ItemSync.SendAdded(session, wizard, result)) {
+                Logger.Error("[Seamstress] Could not tell the client about item {ItemId} of character {CharId}, who relogs to see it.",
+                    Logger.Args(result.m_globalID.Full, wizard.CharId));
             }
+        }
+
+        foreach (var input in inputs) {
+            ItemSync.SendRemoved(session, wizard, input.m_globalID);
+        }
+
+        if (crownsCost > 0) {
+            session.Tell(new WIZARD_12_PROTOCOL.MSG_CROWNBALANCE {
+                Failure = 0,
+                TotalCrowns = wizard.Account.Crowns,
+                CharacterID = wizard.CharId,
+                CacheBalanceForCSSegmentation = 1
+            });
         }
     }
 
