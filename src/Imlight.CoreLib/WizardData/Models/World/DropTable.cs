@@ -71,7 +71,13 @@ public class DropTableResult {
     /// Spell template IDs taught to the player by the loot granter (not rolled; filled when granting).
     /// </summary>
     public List<uint> SpellIds { get; set; } = [];
-    public bool HasRewards => GoldAmount > 0 || ExperienceAmount > 0 || TrainingPoints > 0 || Items.Count > 0 || SpellIds.Count > 0;
+
+    /// <summary>
+    /// Treasure cards added to the player's treasure book by the loot granter (not rolled; filled when granting).
+    /// </summary>
+    public List<DropTreasureCardResult> TreasureCards { get; set; } = [];
+    public bool HasRewards => GoldAmount > 0 || ExperienceAmount > 0 || TrainingPoints > 0 || Items.Count > 0
+        || SpellIds.Count > 0 || TreasureCards.Count > 0;
 
 }
 
@@ -79,6 +85,13 @@ public class DropItemResult {
 
     public string ItemId { get; set; } = string.Empty;
     public string ItemName { get; set; } = string.Empty;
+    public int Quantity { get; set; } = 1;
+
+}
+
+public class DropTreasureCardResult {
+
+    public uint SpellId { get; set; }
     public int Quantity { get; set; } = 1;
 
 }
