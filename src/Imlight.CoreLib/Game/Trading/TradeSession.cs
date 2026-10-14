@@ -175,15 +175,17 @@ internal sealed class TradeSession {
             return TradeOfferResult.NotJoined;
         }
 
-        if (!TreasureCardTradePolicy.IsTradable(templateId, enchant)) {
+        if (enchant != 0) {
             return TradeOfferResult.Rejected;
         }
 
         var offer = participant.Offer;
         offer.TryGetValue(templateId, out var copies);
 
+        // The owned and offered counts are checked first, so an id the player does not hold never reaches the template lookup.
         if (add) {
-            if (copies + 1 > ownedCount || (copies == 0 && offer.Count >= TradeLimits.MaxDistinctCardsPerSide)) {
+            if (copies + 1 > ownedCount || (copies == 0 && offer.Count >= TradeLimits.MaxDistinctCardsPerSide)
+                || !TreasureCardTradePolicy.IsTradable(templateId, enchant)) {
                 return TradeOfferResult.Rejected;
             }
 
