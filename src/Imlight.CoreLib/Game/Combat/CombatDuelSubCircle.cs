@@ -392,8 +392,7 @@ public class CombatDuelSubCircle {
         // Creature's don't have mana.
         if (_wizard is not null && IsSandboxed) {
             ParticipantGameStats.m_currentMana = Math.Max(0, ParticipantGameStats.m_currentMana - mana);
-        }
-        else if (_wizard is not null) {
+        } else if (_wizard is not null) {
             var currentMana = ParticipantGameStats.m_currentMana;
             var newMana = currentMana - mana;
 
