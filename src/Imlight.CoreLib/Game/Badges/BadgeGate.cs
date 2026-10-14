@@ -20,13 +20,13 @@
  * ========================================================================
  *
  * PURPOSE:
- * Tells shops and trainers whether a purchase requirement list denies the sale because of a badge.
+ * Tells shops and trainers whether a purchase requirement list denies the sale because of a badge Imlight can award.
  *
  * USAGE EXAMPLE:
- * if (BadgeGate.Blocks(template.m_purchaseRequirements, SessionActor.ActorRef, GetActiveGameObject(), wizard, SessionActor.GetZoneActor())) { ... }
+ * if (BadgeGate.Blocks(template.m_purchaseRequirements, templateId, SessionActor.ActorRef, GetActiveGameObject(), wizard, SessionActor.GetZoneActor())) { ... }
  *
  * NOTE:
- * Only lists that name a badge are enforced. The other requirement kinds in purchase lists are not all answered by the server yet, and an unanswered kind evaluates to false, which would deny items that sell today.
+ * Only lists that name a badge are enforced, and only for badges the catalog calls earnable: a requirement on a badge no rule or quest awards counts as met, so such an item is not locked forever. The other requirement kinds in purchase lists are not all answered by the server yet, and an unanswered kind evaluates to false, which would deny items that sell today.
  *
  * TODO:
  * Enforce the other purchase requirement kinds once their handlers exist?
@@ -36,9 +36,14 @@
  * Last Updated: 10/14/2026
  */
 
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.Cryptography;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -47,15 +52,44 @@ namespace Imlight.CoreLib.Game.Badges;
 
 internal static class BadgeGate {
 
-    internal static bool Blocks(RequirementList requirements, IActorRef playerRef, CoreObject playerObj, Wizard wizard, IActorRef zoneRef)
-        => NamesBadge(requirements)
-            && !RequirementDispatcher.EvaluateRequirements(requirements, new GenericRequirementContext(requirements, playerRef, playerObj, wizard, zoneRef));
+    private static readonly ConcurrentDictionary<ulong, byte> s_reportedTemplates = new();
 
-    private static bool NamesBadge(RequirementList requirements)
-        => requirements?.m_requirements?.Any(requirement => requirement switch {
-            ReqHasBadge or ReqBaseHasBadge => true,
-            RequirementList nested => NamesBadge(nested),
-            _ => false
-        }) ?? false;
+    internal sealed class GateContext(RequirementList requirements, IActorRef playerRef, CoreObject playerObj, Wizard wizard, IActorRef zoneRef)
+        : GenericRequirementContext(requirements, playerRef, playerObj, wizard, zoneRef) { }
+
+    internal static bool Blocks(RequirementList requirements, ulong templateId, IActorRef playerRef, CoreObject playerObj, Wizard wizard, IActorRef zoneRef) {
+        var names = new List<string>();
+        CollectBadgeNames(requirements, names);
+        names = [.. names.Distinct(StringComparer.Ordinal)];
+        if (names.Count == 0) {
+            return false;
+        }
+
+        var catalog = BadgeCatalog.Current;
+        var unearnable = names.Where(name => !catalog.IsEarnable(StringHash.Compute(name))).ToList();
+        if (unearnable.Count > 0 && s_reportedTemplates.TryAdd(templateId, 0)) {
+            Logger.Debug("Template {0} requires {1}, which Imlight cannot award, so that part of its purchase requirement is not enforced.",
+                Logger.Args(templateId, string.Join(", ", unearnable)));
+        }
+
+        return unearnable.Count < names.Count
+            && !RequirementDispatcher.EvaluateRequirements(requirements, new GateContext(requirements, playerRef, playerObj, wizard, zoneRef));
+    }
+
+    private static void CollectBadgeNames(RequirementList requirements, List<string> names) {
+        foreach (var requirement in requirements?.m_requirements ?? []) {
+            switch (requirement) {
+                case ReqHasBadge has:
+                    names.Add(has.m_badgeName);
+                    break;
+                case ReqBaseHasBadge baseHas:
+                    names.Add(baseHas.m_badgeName);
+                    break;
+                case RequirementList nested:
+                    CollectBadgeNames(nested, names);
+                    break;
+            }
+        }
+    }
 
 }

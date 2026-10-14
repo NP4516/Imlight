@@ -92,7 +92,7 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
         var spellEntry = trainerComponent.SpellInventory[message.TrainingIndex];
         var spellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(spellEntry.TemplateID);
 
-        if (BadgeGate.Blocks(spellTemplate?.m_purchaseRequirements, SessionActor.ActorRef, GetActiveGameObject(), wizard, SessionActor.GetZoneActor())) {
+        if (BadgeGate.Blocks(spellTemplate?.m_purchaseRequirements, spellEntry.TemplateID, SessionActor.ActorRef, GetActiveGameObject(), wizard, SessionActor.GetZoneActor())) {
             Logger.Warning("Wizard {0} attempted to train spell {1} without the badge it requires.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID));
 

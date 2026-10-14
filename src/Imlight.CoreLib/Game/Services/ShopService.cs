@@ -108,7 +108,7 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(itemTemplateID);
         var isPet = PetFactory.IsPetTemplate(itemTemplateID);
 
-        if (BadgeGate.Blocks(template?.m_purchaseRequirements, SessionActor.ActorRef, GetActiveGameObject(), playerWizard, SessionActor.GetZoneActor())) {
+        if (BadgeGate.Blocks(template?.m_purchaseRequirements, itemTemplateID, SessionActor.ActorRef, GetActiveGameObject(), playerWizard, SessionActor.GetZoneActor())) {
             Logger.Warning("{0} tried to buy item {1} without the badge it requires.",
                 Logger.Args(playerWizard.PlayerNameBehavior.GetWizardName(), itemTemplateID));
             SendShopDenyMessage();

@@ -26,7 +26,7 @@
  * Found by reflection in RequirementDispatcher; runs for every requirement list that holds one of the two.
  *
  * NOTE:
- * A badge name the catalog does not know fails the requirement and is warned about once.
+ * A badge name the catalog does not know fails the requirement and is warned about once. Under the purchase gate a badge Imlight cannot award counts as met.
  *
  * TODO:
  * Do ReqHasBadge and ReqBaseHasBadge differ? Both are answered the same way.
@@ -37,6 +37,7 @@
  */
 
 using System.Collections.Concurrent;
+using Imcodec.Cryptography;
 using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
@@ -46,13 +47,13 @@ namespace Imlight.CoreLib.Game.Requirements.Handlers;
 
 internal sealed class ReqHasBadgeHandler : BaseRequirementHandler<ReqHasBadge> {
 
-    public override bool Evaluate(IRequirementContext context) => HasBadgeRequirement.IsMet(context, Requirement.m_badgeName);
+    public override bool Evaluate(IRequirementContext context) => HasBadgeRequirement.IsMet(context, Requirement.m_badgeName, Requirement.m_applyNOT);
 
 }
 
 internal sealed class ReqBaseHasBadgeHandler : BaseRequirementHandler<ReqBaseHasBadge> {
 
-    public override bool Evaluate(IRequirementContext context) => HasBadgeRequirement.IsMet(context, Requirement.m_badgeName);
+    public override bool Evaluate(IRequirementContext context) => HasBadgeRequirement.IsMet(context, Requirement.m_badgeName, Requirement.m_applyNOT);
 
 }
 
@@ -60,13 +61,18 @@ internal static class HasBadgeRequirement {
 
     private static readonly ConcurrentDictionary<string, byte> s_warnedNames = new();
 
-    public static bool IsMet(IRequirementContext context, ByteString badgeName) {
+    public static bool IsMet(IRequirementContext context, ByteString badgeName, bool applyNot) {
         var wizard = context.GetWizard();
         if (wizard is null || badgeName.IsEmpty) {
             return false;
         }
 
         string name = badgeName;
+        if (context is BadgeGate.GateContext && !BadgeCatalog.Current.IsEarnable(StringHash.Compute(name))) {
+            // The dispatcher flips the answer of a NOT requirement, so the answer that lets the sale through depends on it.
+            return !applyNot;
+        }
+
         if (!BadgeCatalog.Current.TryGetByName(name, out var definition)) {
             if (s_warnedNames.TryAdd(name, 0)) {
                 Logger.Warning("Requirement names badge {0}, which is not in the badge catalog; it fails.", Logger.Args(name));
