@@ -60,6 +60,11 @@ internal static class RentalItems {
 
     internal static bool TryGetTemplate(WizClientObjectItem item, out RentalBehaviorTemplate rentalTemplate, out WizItemTemplate template) {
         template = item is null ? null : ItemHelper.GetItemTemplate(item);
+
+        return TryGetRentalTemplate(template, out rentalTemplate);
+    }
+
+    internal static bool TryGetRentalTemplate(WizItemTemplate template, out RentalBehaviorTemplate rentalTemplate) {
         rentalTemplate = template?.m_behaviors?.OfType<RentalBehaviorTemplate>().FirstOrDefault();
 
         return rentalTemplate is not null;
