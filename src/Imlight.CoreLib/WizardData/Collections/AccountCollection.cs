@@ -399,6 +399,27 @@ public static class AccountCollection {
     }
 
     /// <summary>
+    /// Runs <paramref name="work"/> against an account and one of its characters in a single session, so every
+    /// document the callback stores or deletes commits together with them. The account lane is taken first and the
+    /// character lane second, the only order the lanes allow.
+    /// </summary>
+    /// <param name="accountId">The account to load.</param>
+    /// <param name="charId">The character to load.</param>
+    /// <param name="work">
+    /// Receives the open session, the stored account and the stored character; returns <c>true</c> to save the session.
+    /// </param>
+    /// <returns><c>false</c> when the account or the character is missing or <paramref name="work"/> returned <c>false</c>.</returns>
+    internal static bool UpdateAccountAndCharacterWithSession(ulong accountId, ulong charId,
+                                                              Func<IDocumentSession, Account, Wizard, bool> work) {
+        return WithWriteLane(accountId, () => WizardCollection.UpdateCharacterWithSession(charId, (session, storedCharacter) => {
+            var storedAccount = session.Query<Account>(collectionName: CollectionName)
+                .FirstOrDefault(account => account.AccountId == accountId);
+
+            return storedAccount is not null && work(session, storedAccount, storedCharacter);
+        }));
+    }
+
+    /// <summary>
     /// Writes an account's Crowns together with a character's backpack in one transaction: the Crowns, the ids of the
     /// backpack, the documents of the items that entered it and the documents of the items that left it. Either all
     /// of it is stored or none of it, so a crash cannot leave the player with both the paid-for item and its inputs.
@@ -412,14 +433,7 @@ public static class AccountCollection {
                                                 IReadOnlyCollection<WizClientObjectItem> addedItems,
                                                 IReadOnlyCollection<ulong> removedItemIds) {
         try {
-            // The account lane comes first, then the character lane that UpdateCharacterWithSession takes.
-            return WithWriteLane(account.AccountId, () => WizardCollection.UpdateCharacterWithSession(owner.CharId, (session, storedOwner) => {
-                var storedAccount = session.Query<Account>(collectionName: CollectionName)
-                    .FirstOrDefault(a => a.AccountId == account.AccountId);
-                if (storedAccount is null) {
-                    return false;
-                }
-
+            return UpdateAccountAndCharacterWithSession(account.AccountId, owner.CharId, (session, storedAccount, storedOwner) => {
                 storedAccount.Crowns = account.Crowns;
                 storedOwner.InventoryBehavior = owner.InventoryBehavior;
                 foreach (var item in addedItems) {
@@ -435,7 +449,7 @@ public static class AccountCollection {
                 }
 
                 return true;
-            }));
+            });
         } catch (Exception ex) {
             Logger.Error("Failed to save the Crowns of account {AccountId} with the backpack of character {CharId}: {Reason}",
                 Logger.Args(account.AccountId, owner.CharId, ex.Message));
