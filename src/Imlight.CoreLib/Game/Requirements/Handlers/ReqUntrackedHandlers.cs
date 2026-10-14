@@ -6,19 +6,22 @@ namespace Imlight.CoreLib.Game.Requirements.Handlers;
 
 /// <summary>
 /// Requirement classes the server does not track (effects, transformations, the tutorial, placeholders whose
-/// purpose is unknown). They passed while their class decoded as null, so they keep passing; each class logs
+/// purpose is unknown). They passed while their class decoded as null, so they keep passing, except polymorph
+/// and transformation checks: the server applies neither outside combat, so those answer false. Each class logs
 /// once so a trigger that depends on one can be found.
 /// </summary>
 internal static class UntrackedRequirement {
 
     private static readonly ConcurrentDictionary<string, byte> s_logged = new();
 
-    public static bool Pass(string className) {
+    public static bool Pass(string className) => Answer(className, true);
+
+    public static bool Answer(string className, bool result) {
         if (s_logged.TryAdd(className, 0)) {
-            Logger.Information("Requirement {0} is not tracked by the server; it always passes.", Logger.Args(className));
+            Logger.Information("Requirement {0} is not tracked by the server; it always answers {1}.", Logger.Args(className, result));
         }
 
-        return true;
+        return result;
     }
 
 }
@@ -49,7 +52,7 @@ internal sealed class ReqHasEffectHandler : BaseRequirementHandler<ReqHasEffect>
 
 internal sealed class ReqHasPolymorphEffectHandler : BaseRequirementHandler<ReqHasPolymorphEffect> {
 
-    public override bool Evaluate(IRequirementContext context) => UntrackedRequirement.Pass(nameof(ReqHasPolymorphEffect));
+    public override bool Evaluate(IRequirementContext context) => UntrackedRequirement.Answer(nameof(ReqHasPolymorphEffect), false);
 
 }
 
@@ -73,7 +76,7 @@ internal sealed class ReqUnknown2E532A74Handler : BaseRequirementHandler<ReqUnkn
 
 internal sealed class ReqHasTransformationHandler : BaseRequirementHandler<ReqHasTransformation> {
 
-    public override bool Evaluate(IRequirementContext context) => UntrackedRequirement.Pass(nameof(ReqHasTransformation));
+    public override bool Evaluate(IRequirementContext context) => UntrackedRequirement.Answer(nameof(ReqHasTransformation), false);
 
 }
 
