@@ -51,6 +51,7 @@ internal static class PvPArenaErrors {
     public const string InvalidTournamentType = "Error_InvalidTournamentType";
     public const string InvalidMatchNameId = "Error_InvalidMatchNameID";
     public const string MatchNotAllowed = "Error_ErrorMatchNotAllowed";
+    public const string PlayerDeclined = "Error_PlayerDeclined";
 
     public static WIZARD_12_PROTOCOL.MSG_ARENA_ERROR Message(string key)
         => new() { Error = StringHash.Compute(key) };

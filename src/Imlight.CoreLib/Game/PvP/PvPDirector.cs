@@ -48,6 +48,7 @@ using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.World;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 
@@ -64,6 +65,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     private static readonly TimeSpan s_matchmakingInterval = TimeSpan.FromSeconds(1);
     private static TimeSpan s_departureGrace = TimeSpan.FromSeconds(60);
     private static string DepartureTimerKey(ulong charId) => $"departure-{charId}";
+    private static string ConfirmTimerKey(ulong matchId) => $"confirm-{matchId}";
 
     public static IActorRef Instance { get; private set; }
 
@@ -72,7 +74,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     private readonly Dictionary<ulong, IActorRef> _sessions = [];
     private readonly Dictionary<ulong, PvPPlayerProfile> _profiles = [];
     private readonly Dictionary<ulong, CoreObject> _playerObjects = [];
-    private readonly Dictionary<ulong, List<IMessage>> _queuedMessages = [];
+    private readonly Dictionary<ulong, List<object>> _queuedMessages = [];
     private readonly PvPQueue _queue = new();
     private readonly Dictionary<ulong, PvPMatch> _matches = [];
     private readonly Dictionary<ulong, ulong> _matchIdByPlayer = [];
@@ -194,7 +196,10 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             SeasonId: message.SeasonId,
             ExpandSearch: message.ExpandSearch,
             EnteredAtUtc: DateTime.UtcNow,
-            Rating: (int) Math.Round(PvPMatchmaker.GetRating(levelModifiers, (int) profile.Level))
+            Rating: (int) Math.Round(PvPMatchmaker.GetRating(levelModifiers, (int) profile.Level)),
+            OriginZone: profile.ZonePath,
+            OriginZoneDisplayName: profile.ZoneDisplayName,
+            OriginLocation: profile.Location
         );
         _queue.Add(entry);
         PvPRegistry.SetQueued(charId, true);
@@ -231,6 +236,53 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
     #endregion
 
+    #region Matches
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_CONFIRMMATCH))]
+    private void ReceiveConfirmMatch(PVP_111_PROTOCOL.MSG_CONFIRMMATCH message) {
+        var charId = message.CharId;
+        if (!TryGetMatch(charId, out var match) || match.State != PvPMatchState.Confirming) {
+            Logger.Warning("{CharId} answered a PvP match prompt, but has no match to confirm.", Logger.Args(charId));
+
+            return;
+        }
+
+        var entry = match.GetEntry(charId);
+        if (entry.TournamentNameId != message.TournamentNameId) {
+            Logger.Warning("{CharId} answered the prompt of tournament {TournamentId}, not the one of the match.",
+                Logger.Args(charId, message.TournamentNameId));
+
+            return;
+        }
+
+        if (!message.Accept) {
+            CancelMatch(match, PvPCancelReason.Declined, charId);
+
+            return;
+        }
+
+        if (!match.Accept(charId)) {
+            return;
+        }
+
+        if (!match.AllAccepted) {
+            SendStatus(entry, PvPMatchActorBuilder.StatusWaitingForOpponent);
+
+            return;
+        }
+
+        BeginTravel(match);
+    }
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_MATCHCANCELLED))]
+    private void ReceiveMatchCancelled(PVP_111_PROTOCOL.MSG_MATCHCANCELLED message) {
+        if (_matches.TryGetValue(message.MatchId, out var match)) {
+            CancelMatch(match, message.Reason, culpritCharId: 0);
+        }
+    }
+
+    #endregion
+
     #region State
 
     private bool IsQueuedOrInMatch(ulong charId)
@@ -254,16 +306,135 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         Logger.Debug("PvP match {MatchId} pairs {First} and {Second}.", Logger.Args(match.Id, first.CharId, second.CharId));
+
+        PvPMatchFactory.TryGetMatch(first.MatchNameId, out var template);
+        var confirmTimeout = TimeSpan.FromSeconds(Math.Max(1, template?.m_timeout ?? 0));
+        Timers.StartSingleTimer(
+            ConfirmTimerKey(match.Id),
+            new PVP_111_PROTOCOL.MSG_MATCHCANCELLED { MatchId = match.Id, Reason = PvPCancelReason.ConfirmTimeout },
+            confirmTimeout
+        );
+
+        foreach (var entry in match.Entries) {
+            SendToPlayer(entry.CharId, new WIZARD_12_PROTOCOL.MSG_PVPCONFIRM {
+                TournamentNameID = entry.TournamentNameId,
+                Confirm = 0,
+                MatchActor = PvPMatchActorBuilder.BuildQueued(entry, PvPMatchActorBuilder.StatusMatchFound)
+            });
+        }
+    }
+
+    private void BeginTravel(PvPMatch match) {
+        if (!TryChooseArena(match, out var arenaZone)) {
+            Logger.Error("PvP match {MatchId} has no arena zone that exists.", Logger.Args(match.Id));
+            CancelMatch(match, PvPCancelReason.NoArena, culpritCharId: 0);
+
+            return;
+        }
+
+        Timers.Cancel(ConfirmTimerKey(match.Id));
+        match.ArenaZone = arenaZone;
+        match.State = PvPMatchState.Travelling;
+
+        foreach (var entry in match.Entries) {
+            SendStatus(entry, PvPMatchActorBuilder.StatusWaitingToTeleport);
+            SendToPlayer(entry.CharId, new PVP_111_PROTOCOL.MSG_ENTERMATCH {
+                MatchId = match.Id,
+                ArenaZone = arenaZone,
+                InstanceOwnerId = match.InstanceOwnerId
+            });
+        }
+    }
+
+    private static bool TryChooseArena(PvPMatch match, out string arenaZone) {
+        arenaZone = null;
+        if (!PvPMatchFactory.TryGetMatch(match.Entries[0].MatchNameId, out var template)) {
+            return false;
+        }
+
+        var arenas = template.m_zones.Select(zone => (string) zone).Where(AccessPassManager.DoesZoneExist).ToList();
+        if (arenas.Count == 0) {
+            return false;
+        }
+
+        arenaZone = arenas[Random.Shared.Next(arenas.Count)];
+
+        return true;
+    }
+
+    private void CancelMatch(PvPMatch match, PvPCancelReason reason, ulong culpritCharId) {
+        if (match.State == PvPMatchState.Ended) {
+            return;
+        }
+
+        Timers.Cancel(ConfirmTimerKey(match.Id));
+        match.State = PvPMatchState.Ended;
+        _matches.Remove(match.Id);
+
+        Logger.Debug("PvP match {MatchId} is cancelled: {Reason}.", Logger.Args(match.Id, reason));
+
+        foreach (var entry in match.Entries) {
+            _matchIdByPlayer.Remove(entry.CharId);
+            PvPRegistry.SetInMatch(entry.CharId, false);
+        }
+
+        foreach (var entry in match.Entries) {
+            var isCulprit = entry.CharId == culpritCharId;
+            var requeue = reason switch {
+                PvPCancelReason.Declined or PvPCancelReason.OpponentLeft => !isCulprit,
+                PvPCancelReason.ConfirmTimeout => match.HasAccepted(entry.CharId),
+                _ => false
+            };
+
+            if (requeue) {
+                if (reason == PvPCancelReason.Declined) {
+                    SendToPlayer(entry.CharId, PvPArenaErrors.Message(PvPArenaErrors.PlayerDeclined));
+                }
+
+                Requeue(entry);
+            } else if (!isCulprit) {
+                // The client of a player who declined resets itself, and one who left has no client to tell.
+                SendIdle(entry.CharId);
+            }
+        }
+    }
+
+    private void Requeue(PvPQueueEntry entry) {
+        if (!_profiles.ContainsKey(entry.CharId) || !_queue.Add(entry)) {
+            return;
+        }
+
+        PvPRegistry.SetQueued(entry.CharId, true);
+        SendQueueStatus(entry);
+    }
+
+    private bool TryGetMatch(ulong charId, out PvPMatch match) {
+        match = null;
+
+        return _matchIdByPlayer.TryGetValue(charId, out var matchId) && _matches.TryGetValue(matchId, out match);
     }
 
     private void SendQueueStatus(PvPQueueEntry entry)
+        => SendStatus(entry, PvPMatchActorBuilder.StatusFindingMatch);
+
+    private void SendStatus(PvPQueueEntry entry, int status)
         => SendToPlayer(entry.CharId, new GAME_5_PROTOCOL.MSG_MATCHMAKERUPDATE {
             CharacterID = entry.CharId,
-            MatchActor = PvPMatchActorBuilder.BuildQueued(entry, PvPMatchActorBuilder.StatusFindingMatch)
+            MatchActor = PvPMatchActorBuilder.BuildQueued(entry, status)
+        });
+
+    private void SendIdle(ulong charId)
+        => SendToPlayer(charId, new GAME_5_PROTOCOL.MSG_MATCHMAKERUPDATE {
+            CharacterID = charId,
+            MatchActor = PvPMatchActorBuilder.BuildIdle(charId)
         });
 
     private void Leave(ulong charId) {
         RemoveFromQueue(charId);
+        if (TryGetMatch(charId, out var match)) {
+            CancelMatch(match, PvPCancelReason.OpponentLeft, charId);
+        }
+
         Forget(charId);
     }
 
@@ -274,7 +445,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         Timers.Cancel(DepartureTimerKey(charId));
     }
 
-    private void SendToPlayer(ulong charId, IMessage message) {
+    private void SendToPlayer(ulong charId, object message) {
         if (_sessions.TryGetValue(charId, out var session)) {
             session.Tell(message);
 

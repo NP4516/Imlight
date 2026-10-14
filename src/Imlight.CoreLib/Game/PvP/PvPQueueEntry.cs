@@ -23,11 +23,12 @@
  * One queued player: what they asked to play and since when.
  * 
  * USAGE EXAMPLE:
- * new PvPQueueEntry(charId, realm, tournamentId, matchId, leagueId, seasonId, false, DateTime.UtcNow, rating);
+ * new PvPQueueEntry(charId, realm, tournamentId, matchId, leagueId, seasonId, false, DateTime.UtcNow, rating, zone, zoneName, location);
  * 
  * NOTE:
  * The queue key is the realm, the tournament and the match: only players with equal keys can be paired.
- * The rating is the one of the match level table at the level the player had when they joined.
+ * The rating is the one of the match level table at the level the player had when they joined. The origin is
+ * the zone, its display name and the location the player queued from.
  * 
  * TODO:
  * 
@@ -50,4 +51,7 @@ internal sealed record PvPQueueEntry(
     uint SeasonId,
     bool ExpandSearch,
     DateTime EnteredAtUtc,
-    int Rating);
+    int Rating,
+    string OriginZone,
+    string OriginZoneDisplayName,
+    string OriginLocation);

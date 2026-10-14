@@ -123,6 +123,24 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
         }
     }
 
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PVPCONFIRM))]
+    private void ReceivePvPConfirm(WIZARD_12_PROTOCOL.MSG_PVPCONFIRM message) {
+        var wizard = GetActiveWizard();
+
+        // A player in a PvE duel can answer once the duel is over; the match waits for them.
+        if (message.Confirm != 0 && (wizard.IsInDuel || wizard.IsInCombatGrace)) {
+            SendToSocket(PvPArenaErrors.Message(PvPArenaErrors.PlayerIneligible));
+
+            return;
+        }
+
+        TellDirector(new PVP_111_PROTOCOL.MSG_CONFIRMMATCH {
+            CharId = wizard.CharId,
+            TournamentNameId = message.TournamentNameID,
+            Accept = message.Confirm != 0
+        });
+    }
+
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData))]
     private void ReceiveAdvPvPEloData(WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData message)
         => SendToSocket(new WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData {

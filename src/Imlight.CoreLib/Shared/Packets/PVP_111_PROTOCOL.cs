@@ -118,6 +118,7 @@ public sealed class PVP_111_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 111;
 
         public ulong CharId;
+        public uint TournamentNameId;
         public bool Accept;
 
     }

@@ -51,6 +51,7 @@ internal static class PvPMatchActorBuilder {
 
     public const int StatusIdle = 0;
     public const int StatusFindingMatch = 4;
+    public const int StatusMatchFound = 8;
     public const int StatusWaitingForOpponent = 10;
     public const int StatusWaitingToTeleport = 11;
     public const int StatusInArena = 12;

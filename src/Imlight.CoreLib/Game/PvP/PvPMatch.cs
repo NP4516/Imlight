@@ -27,7 +27,8 @@
  * var match = new PvPMatch(matchId, [first, second]);
  * 
  * NOTE:
- * 
+ * The queue entries carry the zone, display name and location each player queued from, which is where a
+ * finished match sends them back. The instance owner id has the top bit set, so it never equals a character id.
  * 
  * TODO:
  * 
@@ -44,10 +45,29 @@ namespace Imlight.CoreLib.Game.PvP;
 
 internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
 
+    private readonly HashSet<ulong> _accepted = [];
+
     public ulong Id { get; } = id;
 
     public IReadOnlyList<PvPQueueEntry> Entries { get; } = entries;
 
     public IEnumerable<ulong> CharIds => Entries.Select(entry => entry.CharId);
+
+    public PvPMatchState State { get; set; } = PvPMatchState.Confirming;
+
+    public string ArenaZone { get; set; }
+
+    public ulong InstanceOwnerId => (1UL << 63) | Id;
+
+    public bool AllAccepted => _accepted.Count == Entries.Count;
+
+    public bool HasAccepted(ulong charId)
+        => _accepted.Contains(charId);
+
+    public bool Accept(ulong charId)
+        => _accepted.Add(charId);
+
+    public PvPQueueEntry GetEntry(ulong charId)
+        => Entries.FirstOrDefault(entry => entry.CharId == charId);
 
 }
