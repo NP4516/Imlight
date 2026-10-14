@@ -165,7 +165,11 @@ internal static class Program {
         LoginWarmup.Run();
 
         // The login and game servers accept no connection until everything above is done.
-        StartListening(loginServer);
+        if (!StartListening(loginServer)) {
+            Environment.ExitCode = 1;
+
+            return;
+        }
 
         // Keep program busy with a while loop.
         Logger.Information("Imlight may now be connected to.");
@@ -177,15 +181,19 @@ internal static class Program {
         }
     }
 
-    private static void StartListening(IActorRef loginServer) {
+    private static bool StartListening(IActorRef loginServer) {
         try {
             var message = new SERVER_100_PROTOCOL.MSG_STARTLISTENING();
             _ = loginServer
                 .Ask<SERVER_100_PROTOCOL.MSG_STARTLISTENING_COMPLETE>(message, Server.StartListeningTimeout)
                 .GetAwaiter()
                 .GetResult();
+
+            return true;
         } catch (Exception ex) {
             Logger.Fatal("The login and game servers did not start listening. {Exception}", Logger.Args(ex));
+
+            return false;
         }
     }
 
