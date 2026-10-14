@@ -30,6 +30,7 @@
  * NOTE:
  * Utilizes Akka.NET actor system for process management.
  * A score settles once per round: the client opens a round, then reports one score.
+ * A kiosk round grants its rewards before the window reply is sent.
  * 
  * TODO:
  * 
@@ -152,12 +153,8 @@ internal sealed class MinigameProcess : Process {
             return;
         }
 
-        var noLoot = new LootInfoList {
-            m_goldInfo = new GoldLootInfo(),
-            m_loot = [],
-            m_lootRarityList = new(),
-        };
-        SendFinalRewardsResponse(score, leaderboard, noLoot, character.Wizard);
+        var reward = MinigameRewardGranter.Grant(Sender, character.Wizard, _minigameInfo, score);
+        SendFinalRewardsResponse(score, leaderboard, reward, character.Wizard);
     }
 
     private bool ExceedsScoreCap(int score, Wizard wizard) {
@@ -203,7 +200,7 @@ internal sealed class MinigameProcess : Process {
         Sender.Tell(reply, Self);
     }
 
-    private void SendFinalRewardsResponse(int score, ScoreTrackingList leaderboard, LootInfoList loot, Wizard wizard) {
+    private void SendFinalRewardsResponse(int score, ScoreTrackingList leaderboard, MinigameRewardResult reward, Wizard wizard) {
         // Track the score for the player.
         var genderString = wizard.PlayerNameBehavior.Gender.ToString();
         genderString = genderString.Replace("eGender.", "");
@@ -234,23 +231,20 @@ internal sealed class MinigameProcess : Process {
         }
 
         // Serialize the loot.
-        if (!_serializer.Serialize(loot, 5, out var lootData)) {
+        if (!_serializer.Serialize(reward.Loot, 5, out var lootData)) {
             Logger.Error("{0} {1} failed to serialize loot data.",
                 Logger.Args(nameof(MinigameProcess), ProcessName));
 
             return;
         }
 
-        // Success is only true if the user has gotten any of the rewards.
-        var success = loot.m_loot.Count > 0 || loot.m_goldInfo.m_goldAmount > 0 ? 1 : 0;
-
         var replyEnd = new WIZARD_12_PROTOCOL.MSG_MINIGAMEREWARDS {
             Data = lootData,
             Scores = leaderboardData,
             MinigameIndex = _minigameIndex,
-            FinalPhase = 0,
+            FinalPhase = reward.FinalPhase,
             Score = score,
-            Success = success
+            Success = reward.Success ? 1 : 0
         };
         Sender.Tell(replyEnd, Self);
     }
