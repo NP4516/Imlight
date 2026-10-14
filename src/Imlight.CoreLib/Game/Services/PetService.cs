@@ -232,7 +232,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
             wizard.SavePet(pet);
             CoreObjectFactory.FindBehaviorInstance(pet, out petBehavior);
         } else {
-            Logger.Warning("Egg {EggId} hatched, but the wizard has no pet item with that id.", Logger.Args(egg.m_globalID));
+            Logger.Warning("Egg {EggId} hatched, but the wizard has no pet item with that id.", Logger.Args(egg.m_globalID.Full));
             pet = null;
         }
 
