@@ -317,28 +317,6 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set the pet's happiness to {value}, up to its maximum.");
     }
 
-    [Command("petenergy")]
-    [AuthRequired(AuthLevel.QualityAssurance)]
-    private void SetPetEnergyCommand(string energy) {
-        if (!int.TryParse(energy, out var value) || value < 0) {
-            InformSenderClient("Invalid energy.");
-
-            return;
-        }
-
-        var wizard = Context.Character;
-        var maxEnergy = MagicLevelsConfig.GetPlayerLevelInfo(wizard.MagicSchoolBehavior.MagicSchool, wizard.MagicSchoolBehavior.Level).m_petEnergy;
-        wizard.UpdateEnergy(Math.Min(value, maxEnergy));
-
-        Context.SessionActor.Tell(new PET_9_PROTOCOL.MSG_PETENERGYTICK {
-            GlobalID = wizard.GameObjectID,
-            Energy = wizard.PetOwnerBehavior.Energy,
-            MaxEnergy = maxEnergy,
-            TickTime = (int) wizard.PetOwnerBehavior.LastEnergyTickEpoch
-        }, null);
-        InformSenderClient($"Set pet energy to {wizard.PetOwnerBehavior.Energy} of {maxEnergy}.");
-    }
-
     [Command("pettalent")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void GivePetTalentCommand(string talentName) {
