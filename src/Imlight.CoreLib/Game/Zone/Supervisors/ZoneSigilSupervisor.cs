@@ -79,7 +79,14 @@ internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor
                 continue;
             }
 
-            var template = (GameObjectTemplate) CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID);
+            var template = CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID) as GameObjectTemplate;
+            if (template is null) {
+                Logger.Warning("Combat sigil template {TemplateId} not found; skipping.",
+                    Logger.Args(objectInfo.m_templateID));
+
+                continue;
+            }
+
             var coreObject = CoreObjectFactory.FinalizeCoreObject(objectInfo, template);
             if (coreObject is null) {
                 Logger.Warning("Could not finalize combat sigil (template {TemplateId}); skipping.",
