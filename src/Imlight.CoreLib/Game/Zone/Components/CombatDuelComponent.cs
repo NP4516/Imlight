@@ -41,7 +41,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/09/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -119,6 +119,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     public byte AliveAndInDuelCreatureCount
         => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && x.IsAlive && x.AddedToDuel);
     public ulong SigilId => Entity.ActiveGameObject.m_globalID;
+
+    // Wizards of one side that fight on, whichever side that is.
+    public byte AliveHumanCount(CombatTeam team)
+        => (byte) SubCircles.Count(x => x.Occupied && x.IsHumanPlayer && x.OccupiedTeam == team && x.IsAlive && x.AddedToDuel);
 
     // Keyed by the actor: a CoreObject is a record whose hash follows its location.
     private readonly HashSet<IActorRef> _entitiesInRange = [];
@@ -244,6 +248,19 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
     internal new void PlayerBroadcast(IMessage message) => EnactActionOnSubCircles(circle => {
         if (circle.OccupiedTeam == CombatTeam.Player) {
+            circle.ParticipantActor.Tell(message);
+        }
+    });
+
+    // Everyone with a client: the wizards of either side and their minions, not the creatures of the AI.
+    internal void HumanBroadcast(IMessage message) => EnactActionOnSubCircles(circle => {
+        if (!circle.IsAiCreature) {
+            circle.ParticipantActor.Tell(message);
+        }
+    });
+
+    internal void TeamBroadcast(CombatTeam team, IMessage message) => EnactActionOnSubCircles(circle => {
+        if (circle.OccupiedTeam == team) {
             circle.ParticipantActor.Tell(message);
         }
     });
@@ -493,7 +510,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         // Players can be healed and therefore don't need to be removed.
         EnactActionOnSubCircles(circle => {
             // A dead minion can't be revived; remove it like an enemy.
-            if ((circle.OccupiedTeam == CombatTeam.Monster || circle.IsSummonedMinion) && !circle.IsAlive) {
+            if (!circle.IsHumanPlayer && !circle.IsAlive) {
                 var removeMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEATH();
                 circle.ParticipantActor.Tell(removeMsg);
             }
@@ -676,13 +693,17 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
                 WorldPosition = rotatedSigilPos,
                 WorldRotation = faceTowardsYaw,
                 SlotName = subCircles[i].m_locationPreference,
-                SlotType = subCircles[i].m_locationType == "MonsterCircle" ? CombatSlotType.Creature : CombatSlotType.Player
+                SlotType = IsCreatureSide(subCircles[i].m_locationType) ? CombatSlotType.Creature : CombatSlotType.Player
             };
             subCircleObjs[i] = subCircle;
         }
 
         return subCircleObjs;
     }
+
+    // The red circles of a PvP sigil are the first four, like the monster circles of a combat sigil.
+    private static bool IsCreatureSide(string locationType)
+        => locationType is "MonsterCircle" or "RedCircle";
 
     private void EnactActionOnSubCircles(Action<CombatDuelSubCircle> action) {
         foreach (var subCircle in ActiveSubCircles) {
@@ -699,6 +720,9 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
         return null;
     }
+
+    private CombatDuelSubCircle GetAvailableSubCircle(CombatTeam team)
+        => team == CombatTeam.Monster ? GetAvailableSubCircleTeamCreature() : GetAvailableSubCircleTeamPlayer();
 
     private CombatDuelSubCircle GetAvailableSubCircleTeamPlayer() {
         for (int i = 4; i < 8; i++) {
@@ -742,9 +766,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         => circle.RemoveParticipant();
 
     private void SpawnAndAssignMinion(uint creatureTid, CombatDuelSubCircle caster) {
-        var slot = GetAvailableSubCircleTeamPlayer();
+        // A PvE minion fights for the wizards whoever summoned it; in PvP it fights for its summoner.
+        var slot = Duel.m_bPVP ? GetAvailableSubCircle(caster.OccupiedTeam) : GetAvailableSubCircleTeamPlayer();
         if (slot is null) {
-            Logger.Information("Duel {0} | minion summon (tid {1}) skipped, no free player-team slot.",
+            Logger.Information("Duel {0} | minion summon (tid {1}) skipped, no free slot on the side of the caster.",
                 Logger.Args(Duel.m_duelID.Full, creatureTid));
 
             return;
@@ -957,8 +982,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             Time = planningPhaseTimer,
         };
 
-        PlayerBroadcast(combatUiMsg);
-        PlayerBroadcast(planningMsg);
+        HumanBroadcast(combatUiMsg);
+        HumanBroadcast(planningMsg);
     }
 
     private void SendCombatStats() => EnactActionOnSubCircles(circle => {
@@ -992,7 +1017,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         // Serialize the combat hand and send it to the participant, locally.
         // We're skipping creatures for now.
         EnactActionOnSubCircles(circle => {
-            if (circle.OccupiedTeam == CombatTeam.Monster) {
+            if (circle.IsAiCreature) {
                 return;
             }
 
@@ -1020,7 +1045,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
     internal void SendCurrentCombatHand(CombatDuelSubCircle circle) {
         // As-is, no draw or refill, so a discarded slot stays visibly open for the vault draw.
-        if (circle is null || circle.OccupiedTeam == CombatTeam.Monster) {
+        if (circle is null || circle.IsAiCreature) {
             return;
         }
 
@@ -1114,7 +1139,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         ZoneBroadcast(msg);
     }
 
-    private void SendCombatMoveSelection(ulong participantId, byte moveType, Spell spell, byte targetIndex) {
+    private void SendCombatMoveSelection(CombatTeam team, ulong participantId, byte moveType, Spell spell, byte targetIndex) {
         byte isItemCard = (byte) (spell?.m_itemCard ?? false ? 1 : 0);
         byte isTreasureCard = (byte) (spell?.m_treasureCard ?? false ? 1 : 0);
         byte isBattleCard = (byte) (spell?.m_battleCard ?? false ? 1 : 0);
@@ -1131,7 +1156,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             IsTreasureCard = isTreasureCard,
             IsBattleCard = isBattleCard,
         };
-        PlayerBroadcast(msg);
+        // The chosen card is for the side of the caster only; the other side sees it when it is cast.
+        TeamBroadcast(team, msg);
     }
 
     private void HandleDiscardMove(CombatDuelSubCircle caster, int spellSelection) {
@@ -1156,8 +1182,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         // If the participant passes, we don't need to know what spell they were casting.
         CombatResolver.AddCombatMove(CombatMoveType.Pass, caster, null, null);
 
-        if (caster.OccupiedTeam == CombatTeam.Player) {
-            SendCombatMoveSelection(caster.ParticipantObject.m_globalID, (byte) CombatMoveType.Pass, null, 0);
+        if (!caster.IsAiCreature) {
+            SendCombatMoveSelection(caster.OccupiedTeam, caster.ParticipantObject.m_globalID, (byte) CombatMoveType.Pass, null, 0);
         }
     }
 
@@ -1191,8 +1217,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         CombatResolver.AddCombatMove(CombatMoveType.Attack, caster, target, spell);
 
         // Minions are AI-driven; their telegraph comes from ResendMinionMoveSelections, not an echo.
-        if (!caster.IsSummonedMinion && caster.OccupiedTeam == CombatTeam.Player) {
-            SendCombatMoveSelection(caster.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack, spell, (byte) spellTarget);
+        if (!caster.IsSummonedMinion && !caster.IsAiCreature) {
+            SendCombatMoveSelection(caster.OccupiedTeam, caster.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack, spell, (byte) spellTarget);
         }
     }
 
@@ -1201,8 +1227,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         CombatResolver.AddCombatMove(CombatMoveType.ChangeMind, caster, null, null);
 
         // Echo the change mind action to each player participant
-        if (caster.OccupiedTeam == CombatTeam.Player) {
-            SendCombatMoveSelection(caster.ParticipantObject.m_globalID, (byte) CombatMoveType.ChangeMind, null, 0);
+        if (!caster.IsAiCreature) {
+            SendCombatMoveSelection(caster.OccupiedTeam, caster.ParticipantObject.m_globalID, (byte) CombatMoveType.ChangeMind, null, 0);
         }
     }
 
@@ -1470,12 +1496,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void RemovePlayersFromDuel() => EnactActionOnSubCircles(circle => {
-        if (circle.OccupiedTeam != CombatTeam.Player) {
-            return;
-        }
-
         // Minions have no hub to return to; DespawnDuel tears them down.
-        if (circle.IsSummonedMinion) {
+        if (!circle.IsHumanPlayer) {
             return;
         }
 
@@ -1520,11 +1542,11 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
             var action = CombatResolver.GetQueuedAction(circle);
             if (action is null || action.Spell is null || action.SelectedTarget is null) {
-                SendCombatMoveSelection(circle.ParticipantObject.m_globalID, (byte) CombatMoveType.Pass, null, 0);
+                SendCombatMoveSelection(circle.OccupiedTeam, circle.ParticipantObject.m_globalID, (byte) CombatMoveType.Pass, null, 0);
                 return;
             }
 
-            SendCombatMoveSelection(circle.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack,
+            SendCombatMoveSelection(circle.OccupiedTeam, circle.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack,
                 action.Spell, (byte) action.SelectedTarget.SlotIndex);
         });
         var delay = TimeSpan.FromSeconds(PLANNING_TIME);

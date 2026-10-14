@@ -38,7 +38,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 08/13/2026
+ * Last Updated: 10/14/2026
  */
 
 using Akka.Actor;
@@ -122,19 +122,11 @@ public class CombatDuelSubCircle {
         }
     }
     internal bool Occupied => ParticipantObject is not null;
-    internal CombatTeam OccupiedTeam {
-        get {
-            if (ParticipantObject is null) {
-                return CombatTeam.Player;
-            }
-
-            if (IsSummonedMinion) {
-                return CombatTeam.Player;
-            }
-
-            return ParticipantObject.m_templateID == 1 ? CombatTeam.Player : CombatTeam.Monster;
-        }
-    }
+    internal bool IsHumanPlayer => ParticipantObject?.m_templateID == 1;
+    // A creature of the AI: neither a wizard nor a minion that a wizard or creature summoned.
+    internal bool IsAiCreature => Occupied && !IsHumanPlayer && !IsSummonedMinion;
+    // The side of the circle the participant stands on; a minion stands on the side of its summoner.
+    internal CombatTeam OccupiedTeam => SlotType == CombatSlotType.Creature && Occupied ? CombatTeam.Monster : CombatTeam.Player;
     internal bool IsAlive => ParticipantGameStats?.m_currentHitpoints > 0;
     internal bool CheatNoFizzle;
     internal CombatDeck _combatDeck;
@@ -161,10 +153,8 @@ public class CombatDuelSubCircle {
         ParticipantObject = participantObject;
         IsSummonedMinion = isSummonedMinion;
 
-        var isHumanPlayer = participantObject.m_templateID == 1;
-
         // Set the CombatParticipant based on what team they are.
-        if (isHumanPlayer) {
+        if (IsHumanPlayer) {
             InitializePlayerSubCircle();
         }
         else {
