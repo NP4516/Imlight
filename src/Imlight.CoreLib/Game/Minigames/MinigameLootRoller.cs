@@ -41,6 +41,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
@@ -146,7 +147,8 @@ internal static class MinigameLootRoller {
         }
 
         if (!double.IsFinite(outcome.DropRate) || outcome.DropRate <= 0) {
-            return $"the {outcome.Kind} outcome has the drop rate {outcome.DropRate}, it needs a weight above 0";
+            return string.Create(CultureInfo.InvariantCulture,
+                $"the {outcome.Kind} outcome has the drop rate {outcome.DropRate}, it needs a weight above 0");
         }
 
         return ParseKind(outcome.Kind) switch {
@@ -170,7 +172,8 @@ internal static class MinigameLootRoller {
         }
 
         if (usesPercent && (!(outcome.ManaPercent > 0) || outcome.ManaPercent > 1)) {
-            return $"a Mana outcome has ManaPercent {outcome.ManaPercent}, it is a fraction of max mana above 0 up to 1";
+            return string.Create(CultureInfo.InvariantCulture,
+                $"a Mana outcome has ManaPercent {outcome.ManaPercent}, it is a fraction of max mana above 0 up to 1");
         }
 
         return null;
