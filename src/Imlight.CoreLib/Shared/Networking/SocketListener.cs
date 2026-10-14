@@ -36,7 +36,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/10/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -273,6 +273,7 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
             or GAME_5_PROTOCOL.MSG_ZONETRANSFERACK
             or GAME_5_PROTOCOL.MSG_ZONETRANSFERNACK
             or GAME_5_PROTOCOL.MSG_RETRYTELEPORT
+            or WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTDEEDZONE
             or LOGIN_7_PROTOCOL.MSG_USER_VALIDATE
             or LOGIN_7_PROTOCOL.MSG_USER_AUTHEN_V3;
 
