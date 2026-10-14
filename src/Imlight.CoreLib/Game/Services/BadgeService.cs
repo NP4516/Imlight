@@ -41,6 +41,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Badges;
 using Imlight.CoreLib.Game.Requirements;
@@ -49,6 +50,7 @@ using Imlight.CoreLib.Game.Results;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.WizardData.Models.World;
@@ -105,6 +107,40 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
     [MessageHandler(typeof(GROUP_109_PROTOCOL.MSG_LEVELCHANGED))]
     private void ReceiveLevelChanged(GROUP_109_PROTOCOL.MSG_LEVELCHANGED message) {
         ReceiveBadgeEvent(new CHARACTER_103_PROTOCOL.MSG_BADGEEVENT { Kind = BadgeEventKind.Recheck });
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
+    private void ReceiveCombatVictory(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) {
+        var catalog = BadgeCatalog.Current;
+        if (!catalog.IsReady || message.MobTemplateIds is not { Length: > 0 }) {
+            return;
+        }
+
+        // Each defeated mob advances a counter once, however many of its adjectives name that counter.
+        var kills = new Dictionary<string, ulong>(StringComparer.Ordinal);
+        foreach (var templateId in message.MobTemplateIds) {
+            if (CoreObjectFactory.GetCoreTemplate(templateId) is not GameObjectTemplate mob) {
+                continue;
+            }
+
+            var adjectives = mob.m_adjectiveList?.Where(a => !a.IsEmpty).Select(a => (string) a) ?? [];
+            foreach (var counterKey in catalog.GetCounterKeysForAdjectives(adjectives)) {
+                kills[counterKey] = kills.GetValueOrDefault(counterKey) + 1;
+            }
+        }
+
+        if (kills.Count == 0) {
+            return;
+        }
+
+        var wizard = GetActiveWizard();
+        var changes = new BadgeEngine(wizard, catalog).Execute(engine => {
+            foreach (var (counterKey, count) in kills) {
+                engine.Increment(counterKey, count);
+            }
+        });
+
+        FinishChanges(wizard, changes, sendBatches: true);
     }
 
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_REQUESTNEWBADGE))]
