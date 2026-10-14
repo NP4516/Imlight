@@ -44,6 +44,7 @@ using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Minigames;
+using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 
@@ -98,11 +99,28 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
     private void ReceiveMinigameSelect(WIZARD_12_PROTOCOL.MSG_MINIGAMESELECT message) {
         var minigameIndex = message.Index;
         var minigameInfo = MinigameConfig.GetMinigameInfo(minigameIndex);
-        var wizardName = GetActiveWizard().PlayerNameBehavior.GetWizardName();
+        var wizard = GetActiveWizard();
+        var wizardName = wizard.PlayerNameBehavior.GetWizardName();
 
         if (minigameInfo == null) {
             Logger.Error("{0} tried to start up minigame at non-existing index {1}", 
                 Logger.Args(wizardName, minigameIndex));
+
+            return;
+        }
+
+        // Ensure that the player picked the minigame at a kiosk in the zone.
+        var kiosk = GetZoneObject(message.npcGlobalID);
+        if (kiosk?.GetComponentOfType<InteractMinigameComponent>() is null) {
+            Logger.Warning("{Wizard} tried to start minigame {Index} from {Object}, which is not a kiosk in the zone",
+                Logger.Args(wizardName, minigameIndex, message.npcGlobalID));
+
+            return;
+        }
+
+        if (MinigameConfig.IsMinigameZone(wizard.Zone)) {
+            Logger.Warning("{Wizard} tried to start minigame {Index} while already in minigame zone {Zone}",
+                Logger.Args(wizardName, minigameIndex, wizard.Zone));
 
             return;
         }
