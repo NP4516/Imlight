@@ -98,8 +98,10 @@ internal static class MinigameRewardGranter {
         var room = Math.Max(0, wizard.GameStats.m_baseGoldPouch - wizard.GameStats.m_currentGold);
         var gold = Math.Min(outcome.Amount, room);
         if (gold <= 0) {
-            Logger.Information("Minigame gold reward of {Gold} dropped, the pouch of {Wizard} is full",
-                Logger.Args(outcome.Amount, wizard.PlayerNameBehavior.GetWizardName()));
+            if (outcome.Amount > 0) {
+                Logger.Information("Minigame gold reward of {Gold} dropped, the pouch of {Wizard} is full",
+                    Logger.Args(outcome.Amount, wizard.PlayerNameBehavior.GetWizardName()));
+            }
 
             return 0;
         }
