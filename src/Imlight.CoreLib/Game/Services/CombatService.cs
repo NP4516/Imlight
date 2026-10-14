@@ -334,7 +334,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
     private void SyncPetForMount() {
         if (EquipmentService.HidePetWhileMounted) {
-            SessionActor.ActorRef.Tell(new EquipmentService.SyncPetForMountMessage());
+            SessionActor.ActorRef.Tell(new SERVICE_101_PROTOCOL.MSG_SYNC_PET_FOR_MOUNT());
         }
     }
 

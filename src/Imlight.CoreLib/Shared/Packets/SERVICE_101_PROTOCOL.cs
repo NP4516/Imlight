@@ -222,4 +222,15 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Asks the equipment service to re-sync the summoned pet after the mount
+    /// changed outside its own equip handlers.
+    /// </summary>
+    public class MSG_SYNC_PET_FOR_MOUNT : IServerMessage {
+
+        public byte MessageOrder { get; } = 20;
+        public byte ServiceID { get; } = 101;
+
+    }
+
 }
