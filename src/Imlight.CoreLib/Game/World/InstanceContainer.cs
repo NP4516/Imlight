@@ -34,7 +34,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/14/2026
  */
 
 using Akka.Actor;
@@ -121,6 +121,11 @@ internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocol
             Logger.Args(message.ZoneName, _instanceOwnerId));
 
         Context.Stop(zoneActor);
+
+        // A match container serves one match only, so nothing will ever transfer into it again.
+        if (_zones.Count == 0 && PvP.PvPMatch.IsInstanceOwnerId(_instanceOwnerId)) {
+            Context.Parent.Tell(new ZONE_102_PROTOCOL.MSG_INSTANCECONTAINEREMPTY { OwnerId = _instanceOwnerId });
+        }
     }
 
     private IActorRef CreateZone(string zoneName) {

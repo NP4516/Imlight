@@ -47,6 +47,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.PvP;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -56,6 +57,7 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
     private bool _isPresent;
     private bool _isLoggingOut;
     private string _realmName;
+    private PvPArenaReturn _arenaReturn;
     private readonly PvPWindowState _window = new();
 
     protected static Props Props(SessionActor parentActor)
@@ -150,6 +152,21 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
             RecordCacheID = 0
         });
 
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_ENTERMATCH))]
+    private void ReceiveEnterMatch(PVP_111_PROTOCOL.MSG_ENTERMATCH message)
+        => Teleport(message.ArenaZone, doTeleportEffects: false, makePrivate: true, ownerCharId: message.InstanceOwnerId);
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_MATCHJOINED))]
+    private void ReceiveMatchJoined(PVP_111_PROTOCOL.MSG_MATCHJOINED message)
+        => _arenaReturn = new PvPArenaReturn(message.ReturnZone, message.ReturnZoneDisplayName, message.ReturnLocation);
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_LEAVEARENA))]
+    private void ReceiveLeaveArena(PVP_111_PROTOCOL.MSG_LEAVEARENA message) {
+        _arenaReturn = null;
+
+        Teleport(message.ReturnZone, doTeleportEffects: true, makePrivate: false, destinationLocation: message.ReturnLocation);
+    }
+
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_QUERY_LOGOUT))]
     private void ReceiveQueryLogout(GAME_5_PROTOCOL.MSG_QUERY_LOGOUT message)
         => AnnounceDeparture(isLogout: true);
@@ -172,11 +189,34 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
         _isPresent = false;
         _isLoggingOut |= isLogout;
 
+        if (isLogout) {
+            RestoreLocationBeforeArena();
+        }
+
         TellDirector(new PVP_111_PROTOCOL.MSG_PLAYERDEPARTED {
             CharId = _charId,
             Session = SessionActor.ActorRef,
             IsLogout = isLogout
         });
+    }
+
+    private void RestoreLocationBeforeArena() {
+        // The attach into the arena saved the arena as the zone of the wizard, and nobody else can join that
+        // private instance; the next login must start where the player queued.
+        var wizard = GetActiveWizard();
+        if (_arenaReturn is null || wizard is null) {
+            return;
+        }
+
+        wizard.SetZone(_arenaReturn.Zone, _arenaReturn.ZoneDisplayName);
+
+        var location = Util.GetVectorFromCompactString(_arenaReturn.Location);
+        if (location.X != 0 || location.Y != 0 || location.Z != 0) {
+            wizard.SetPersistentLocation(new Imcodec.Math.Vector3(location.X, location.Y, location.Z));
+            wizard.SetPersistentOrientation(location.W);
+        }
+
+        _arenaReturn = null;
     }
 
     private void SendAll(IReadOnlyList<IMessage> messages) {

@@ -22,6 +22,8 @@ using Akka.Actor;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.PvP;
+using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -35,6 +37,7 @@ namespace Imlight.CoreLib.Game.Zone.Supervisors;
 internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor(zone) {
 
     private readonly Dictionary<CoreObject, IActorRef> _sigils = [];
+    private readonly Dictionary<IActorRef, ulong> _pvpSigilObjectIds = [];
     
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS))]
     public override void ReceiveZoneLoadResults(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS message) {
@@ -98,6 +101,9 @@ internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor
             objectActor.Tell(detailsMsg);
 
             _sigils.Add(coreObject, objectActor);
+            if (SigilFactory.GetSigilTemplate(((CombatSigilObjectInfo) objectInfo).m_sigilType) is PvPCombatSigilTemplate) {
+                _pvpSigilObjectIds.Add(objectActor, coreObject.m_globalID);
+            }
         }
 
         ReportLoadedWhenEntitiesLoad();
@@ -107,6 +113,8 @@ internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor
         foreach (var coreObject in _sigils.Where(x => x.Value.Equals(entityActor)).Select(x => x.Key).ToList()) {
             _sigils.Remove(coreObject);
         }
+
+        _pvpSigilObjectIds.Remove(entityActor);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL))]
@@ -120,6 +128,24 @@ internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor
             .FirstOrDefault();
         
         closestSigil.Value?.Forward(message);
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH))]
+    private void ReceiveStartPvPMatch(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH message) {
+        if (_pvpSigilObjectIds.Count == 0) {
+            Logger.Error("Zone {ZoneName} has no PvP sigil; match {MatchId} cannot start.",
+                Logger.Args(Zone.ZonePath, message.MatchId));
+
+            PvPDirector.Instance?.Tell(new PVP_111_PROTOCOL.MSG_MATCHCANCELLED {
+                MatchId = message.MatchId,
+                Reason = PvPCancelReason.NoArena
+            });
+
+            return;
+        }
+
+        // Several sigils: the lowest object id hosts the match.
+        _pvpSigilObjectIds.OrderBy(x => x.Value).First().Key.Forward(message);
     }
 
     private static bool IsObjectEligibleForSpawn(CoreObjectInfo objectInfo) 

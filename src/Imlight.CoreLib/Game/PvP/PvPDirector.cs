@@ -66,6 +66,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     private static TimeSpan s_departureGrace = TimeSpan.FromSeconds(60);
     private static string DepartureTimerKey(ulong charId) => $"departure-{charId}";
     private static string ConfirmTimerKey(ulong matchId) => $"confirm-{matchId}";
+    private static string ArrivalTimerKey(ulong matchId) => $"arrival-{matchId}";
 
     public static IActorRef Instance { get; private set; }
 
@@ -78,6 +79,8 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     private readonly PvPQueue _queue = new();
     private readonly Dictionary<ulong, PvPMatch> _matches = [];
     private readonly Dictionary<ulong, ulong> _matchIdByPlayer = [];
+    private readonly Dictionary<ulong, PvPStrandedPlayer> _strandedPlayers = [];
+    private readonly HashSet<string> _failedArenas = new(StringComparer.OrdinalIgnoreCase);
     private ulong _matchSequence;
 
     // ctor
@@ -118,6 +121,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         Timers.Cancel(DepartureTimerKey(charId));
 
         ReplayQueuedMessages(charId, message.Session);
+        HandleArenaPresence(charId, profile, message.Session);
     }
 
     [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_PLAYERDEPARTED))]
@@ -130,6 +134,11 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         _sessions.Remove(charId);
+
+        // A stranded player zones on their way and announces themselves again; only a logout ends the wait.
+        if (message.IsLogout) {
+            _strandedPlayers.Remove(charId);
+        }
 
         if (message.IsLogout || !IsQueuedOrInMatch(charId)) {
             Leave(charId);
@@ -221,6 +230,8 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
     [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_MATCHMAKINGTICK))]
     private void ReceiveMatchmakingTick(PVP_111_PROTOCOL.MSG_MATCHMAKINGTICK message) {
+        PurgeStrandedPlayers();
+
         if (_queue.Count < 2) {
             return;
         }
@@ -276,9 +287,31 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
     [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_MATCHCANCELLED))]
     private void ReceiveMatchCancelled(PVP_111_PROTOCOL.MSG_MATCHCANCELLED message) {
-        if (_matches.TryGetValue(message.MatchId, out var match)) {
-            CancelMatch(match, message.Reason, culpritCharId: 0);
+        if (!_matches.TryGetValue(message.MatchId, out var match)) {
+            return;
         }
+
+        if (message.Reason == PvPCancelReason.NoArena && match.ArenaZone is not null && _failedArenas.Add(match.ArenaZone)) {
+            Logger.Error("Arena {ArenaZone} cannot host a PvP match and is not chosen again.", Logger.Args(match.ArenaZone));
+        }
+
+        CancelMatch(match, message.Reason, culpritCharId: 0);
+    }
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_MATCHENDED))]
+    private void ReceiveMatchEnded(PVP_111_PROTOCOL.MSG_MATCHENDED message) {
+        if (!_matches.TryGetValue(message.MatchId, out var match) || match.State != PvPMatchState.InProgress) {
+            Logger.Warning("PvP match {MatchId} reported its end, but is not in progress.", Logger.Args(message.MatchId));
+
+            return;
+        }
+
+        Logger.Debug("PvP match {MatchId} ended: winning team {WinningTeam}, {ForfeitCount} forfeit(s).",
+            Logger.Args(match.Id, message.WinningTeam, message.ForfeitedCharIds.Count));
+
+        match.State = PvPMatchState.Ended;
+        ForgetMatch(match);
+        ReturnPlayers(match, culpritCharId: 0);
     }
 
     #endregion
@@ -325,7 +358,8 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     }
 
     private void BeginTravel(PvPMatch match) {
-        if (!TryChooseArena(match, out var arenaZone)) {
+        PvPMatchFactory.TryGetMatch(match.Entries[0].MatchNameId, out var template);
+        if (!TryChooseArena(match, template, out var arenaZone)) {
             Logger.Error("PvP match {MatchId} has no arena zone that exists.", Logger.Args(match.Id));
             CancelMatch(match, PvPCancelReason.NoArena, culpritCharId: 0);
 
@@ -336,7 +370,19 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         match.ArenaZone = arenaZone;
         match.State = PvPMatchState.Travelling;
 
+        Timers.StartSingleTimer(
+            ArrivalTimerKey(match.Id),
+            new PVP_111_PROTOCOL.MSG_MATCHCANCELLED { MatchId = match.Id, Reason = PvPCancelReason.ArrivalTimeout },
+            GetArrivalTimeout(template)
+        );
+
         foreach (var entry in match.Entries) {
+            // The client attaches again after the transfer; the owner assigned here puts both players in one instance.
+            ZoneInstanceOwners.Assign(entry.CharId, arenaZone, match.InstanceOwnerId);
+            if (_sessions.TryGetValue(entry.CharId, out var lobbySession)) {
+                match.LobbySessions[entry.CharId] = lobbySession;
+            }
+
             SendStatus(entry, PvPMatchActorBuilder.StatusWaitingToTeleport);
             SendToPlayer(entry.CharId, new PVP_111_PROTOCOL.MSG_ENTERMATCH {
                 MatchId = match.Id,
@@ -346,13 +392,19 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         }
     }
 
-    private static bool TryChooseArena(PvPMatch match, out string arenaZone) {
+    private bool TryChooseArena(PvPMatch match, MatchTemplate template, out string arenaZone) {
         arenaZone = null;
-        if (!PvPMatchFactory.TryGetMatch(match.Entries[0].MatchNameId, out var template)) {
+        if (template is null) {
             return false;
         }
 
-        var arenas = template.m_zones.Select(zone => (string) zone).Where(AccessPassManager.DoesZoneExist).ToList();
+        // A zone a player already stands in would only teleport them within it, never into the private arena.
+        var arenas = template.m_zones
+            .Select(zone => (string) zone)
+            .Where(zone => AccessPassManager.DoesZoneExist(zone)
+                           && !_failedArenas.Contains(zone)
+                           && match.Entries.All(entry => !string.Equals(entry.OriginZone, zone, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
         if (arenas.Count == 0) {
             return false;
         }
@@ -362,20 +414,99 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         return true;
     }
 
+    private static TimeSpan GetArrivalTimeout(MatchTemplate template)
+        => TimeSpan.FromSeconds(Math.Max(1d, template?.m_incompleteMatchTimeout ?? 0));
+
+    private void HandleArenaPresence(ulong charId, PvPPlayerProfile profile, IActorRef session) {
+        if (TryGetMatch(charId, out var match) && match.State == PvPMatchState.Travelling
+            && string.Equals(profile.ZonePath, match.ArenaZone, StringComparison.OrdinalIgnoreCase)
+            && !(match.LobbySessions.TryGetValue(charId, out var lobbySession) && lobbySession.Equals(session))
+            && match.Arrive(charId)) {
+            var entry = match.GetEntry(charId);
+            var returnTo = PvPArenaReturn.For(entry);
+            SendToPlayer(charId, new PVP_111_PROTOCOL.MSG_MATCHJOINED {
+                MatchId = match.Id,
+                ReturnZone = returnTo.Zone,
+                ReturnZoneDisplayName = returnTo.ZoneDisplayName,
+                ReturnLocation = returnTo.Location
+            });
+            SendStatus(entry, PvPMatchActorBuilder.StatusInArena);
+
+            if (match.AllArrived) {
+                StartMatch(match);
+            }
+
+            return;
+        }
+
+        // A player who was on the way when the match was cancelled arrives into an arena without a match.
+        if (_strandedPlayers.TryGetValue(charId, out var stranded)
+            && stranded.ExpiresAtUtc > DateTime.UtcNow
+            && string.Equals(profile.ZonePath, stranded.ArenaZone, StringComparison.OrdinalIgnoreCase)
+            && !stranded.LobbySession.Equals(session)) {
+            _strandedPlayers.Remove(charId);
+
+            SendIdle(charId);
+            SendToPlayer(charId, new PVP_111_PROTOCOL.MSG_LEAVEARENA {
+                ReturnZone = stranded.ReturnTo.Zone,
+                ReturnLocation = stranded.ReturnTo.Location
+            });
+        }
+    }
+
+    private void StartMatch(PvPMatch match) {
+        Timers.Cancel(ArrivalTimerKey(match.Id));
+
+        if (match.CharIds.Any(charId => !_sessions.ContainsKey(charId) || !_profiles.ContainsKey(charId) || !_playerObjects.ContainsKey(charId))) {
+            CancelMatch(match, PvPCancelReason.OpponentLeft, culpritCharId: 0);
+
+            return;
+        }
+
+        var zoneActors = match.CharIds.Select(charId => _profiles[charId].ZoneActor).Distinct().ToList();
+        if (zoneActors.Count != 1 || zoneActors[0] is null || zoneActors[0].Equals(ActorRefs.Nobody)) {
+            Logger.Error("The players of PvP match {MatchId} are not in one zone actor; the match is cancelled.", Logger.Args(match.Id));
+            CancelMatch(match, PvPCancelReason.NoArena, culpritCharId: 0);
+
+            return;
+        }
+
+        match.State = PvPMatchState.InProgress;
+
+        var roster = match.Entries
+            .Select((entry, teamIndex) => new PvPRosterEntry(entry.CharId, _sessions[entry.CharId], _playerObjects[entry.CharId], teamIndex))
+            .ToList();
+        zoneActors[0].Tell(new ZONE_102_PROTOCOL.MSG_STARTPVPMATCH { MatchId = match.Id, Roster = roster });
+
+        Logger.Debug("PvP match {MatchId} starts in {ArenaZone}.", Logger.Args(match.Id, match.ArenaZone));
+    }
+
+    private void PurgeStrandedPlayers() {
+        if (_strandedPlayers.Count == 0) {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var charId in _strandedPlayers.Where(x => x.Value.ExpiresAtUtc <= now).Select(x => x.Key).ToList()) {
+            _strandedPlayers.Remove(charId);
+        }
+    }
+
     private void CancelMatch(PvPMatch match, PvPCancelReason reason, ulong culpritCharId) {
         if (match.State == PvPMatchState.Ended) {
             return;
         }
 
-        Timers.Cancel(ConfirmTimerKey(match.Id));
+        var wasInArenaPhase = match.State is PvPMatchState.Travelling or PvPMatchState.InProgress;
         match.State = PvPMatchState.Ended;
-        _matches.Remove(match.Id);
+        ForgetMatch(match);
 
         Logger.Debug("PvP match {MatchId} is cancelled: {Reason}.", Logger.Args(match.Id, reason));
 
-        foreach (var entry in match.Entries) {
-            _matchIdByPlayer.Remove(entry.CharId);
-            PvPRegistry.SetInMatch(entry.CharId, false);
+        if (wasInArenaPhase) {
+            ReturnPlayers(match, culpritCharId);
+
+            return;
         }
 
         foreach (var entry in match.Entries) {
@@ -395,6 +526,48 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             } else if (!isCulprit) {
                 // The client of a player who declined resets itself, and one who left has no client to tell.
                 SendIdle(entry.CharId);
+            }
+        }
+    }
+
+    private void ForgetMatch(PvPMatch match) {
+        Timers.Cancel(ConfirmTimerKey(match.Id));
+        Timers.Cancel(ArrivalTimerKey(match.Id));
+        _matches.Remove(match.Id);
+
+        foreach (var entry in match.Entries) {
+            _matchIdByPlayer.Remove(entry.CharId);
+            PvPRegistry.SetInMatch(entry.CharId, false);
+            if (match.ArenaZone is not null) {
+                ZoneInstanceOwners.Clear(entry.CharId, match.ArenaZone);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Pushes every player an idle match status and sends the ones in the arena back. A player still on the way
+    /// is sent back when they arrive.
+    /// </summary>
+    private void ReturnPlayers(PvPMatch match, ulong culpritCharId) {
+        PvPMatchFactory.TryGetMatch(match.Entries[0].MatchNameId, out var template);
+
+        foreach (var entry in match.Entries.Where(entry => entry.CharId != culpritCharId)) {
+            var returnTo = PvPArenaReturn.For(entry);
+            if (match.ArenaZone is not null && !match.HasArrived(entry.CharId)) {
+                match.LobbySessions.TryGetValue(entry.CharId, out var lobbySession);
+                _strandedPlayers[entry.CharId] = new PvPStrandedPlayer(
+                    match.ArenaZone, lobbySession ?? ActorRefs.Nobody, returnTo, DateTime.UtcNow + GetArrivalTimeout(template));
+                SendIdle(entry.CharId);
+
+                continue;
+            }
+
+            SendIdle(entry.CharId);
+            if (match.HasArrived(entry.CharId)) {
+                SendToPlayer(entry.CharId, new PVP_111_PROTOCOL.MSG_LEAVEARENA {
+                    ReturnZone = returnTo.Zone,
+                    ReturnLocation = returnTo.Location
+                });
             }
         }
     }
@@ -431,7 +604,9 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
     private void Leave(ulong charId) {
         RemoveFromQueue(charId);
-        if (TryGetMatch(charId, out var match)) {
+
+        // A match in progress is the business of its duel: the player forfeits there and the duel ends the match.
+        if (TryGetMatch(charId, out var match) && match.State != PvPMatchState.InProgress) {
             CancelMatch(match, PvPCancelReason.OpponentLeft, charId);
         }
 

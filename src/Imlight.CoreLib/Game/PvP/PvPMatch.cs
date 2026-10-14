@@ -29,6 +29,8 @@
  * NOTE:
  * The queue entries carry the zone, display name and location each player queued from, which is where a
  * finished match sends them back. The instance owner id has the top bit set, so it never equals a character id.
+ * The lobby session of a player is the one that was sent to the arena; a presence from another session in the
+ * arena zone is the arrival.
  * 
  * TODO:
  * 
@@ -40,12 +42,16 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using Akka.Actor;
 
 namespace Imlight.CoreLib.Game.PvP;
 
 internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
 
+    public const ulong InstanceOwnerFlag = 1UL << 63;
+
     private readonly HashSet<ulong> _accepted = [];
+    private readonly HashSet<ulong> _arrived = [];
 
     public ulong Id { get; } = id;
 
@@ -57,7 +63,14 @@ internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
 
     public string ArenaZone { get; set; }
 
-    public ulong InstanceOwnerId => (1UL << 63) | Id;
+    public ulong InstanceOwnerId => InstanceOwnerFlag | Id;
+
+    public Dictionary<ulong, IActorRef> LobbySessions { get; } = [];
+
+    public bool AllArrived => _arrived.Count == Entries.Count;
+
+    public static bool IsInstanceOwnerId(ulong ownerId)
+        => (ownerId & InstanceOwnerFlag) != 0;
 
     public bool AllAccepted => _accepted.Count == Entries.Count;
 
@@ -66,6 +79,12 @@ internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
 
     public bool Accept(ulong charId)
         => _accepted.Add(charId);
+
+    public bool HasArrived(ulong charId)
+        => _arrived.Contains(charId);
+
+    public bool Arrive(ulong charId)
+        => _arrived.Add(charId);
 
     public PvPQueueEntry GetEntry(ulong charId)
         => Entries.FirstOrDefault(entry => entry.CharId == charId);

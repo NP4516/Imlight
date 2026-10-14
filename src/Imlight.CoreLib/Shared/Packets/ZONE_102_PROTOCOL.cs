@@ -534,6 +534,19 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     }
 
     /// <summary>
+    /// Sent by an <see cref="World.InstanceContainer"/> of a PvP match to its <see cref="World.GameWorld"/> when its
+    /// last zone is dropped: the world removes the container.
+    /// </summary>
+    public sealed class MSG_INSTANCECONTAINEREMPTY : IServerMessage {
+
+        public byte MessageOrder { get; } = 84;
+        public byte ServiceID { get; } = 102;
+
+        public ulong OwnerId;
+
+    }
+
+    /// <summary>
     /// Called by a <see cref="PathMovementComponent"/> to itself to indicate the interval to check for interactions.
     /// </summary>
     public sealed class MSG_CREATUREFISHINTERACTIONINTERVAL : IServerMessage {

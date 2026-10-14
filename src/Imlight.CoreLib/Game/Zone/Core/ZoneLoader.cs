@@ -35,7 +35,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -46,6 +46,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Wad;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -60,6 +61,8 @@ internal sealed class ZoneLoader : ReceiveProtocolDispatcher {
     private const string NODE_DATA_FILE_NAME = "pathNodeData.bin";
     private const string VOLUME_DATA_FILE_NAME = "volumes.xml";
     private const string TRIGGER_DATA_FILE_NAME = "triggers.xml";
+
+    private static readonly ClientGeneratedTypeRegistry s_typeRegistry = CreateTypeRegistry();
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONELOADBEGIN))]
     private void ReceiveZoneBeginLoad(ZONE_102_PROTOCOL.MSG_ZONELOADBEGIN message) {
@@ -176,7 +179,7 @@ internal sealed class ZoneLoader : ReceiveProtocolDispatcher {
             return null;
         }
 
-        var serializer = new BindSerializer();
+        var serializer = CreateSerializer();
         if (!serializer.Deserialize<T>(data, 1, out var result)) {
             Logger.Error("Failed to deserialize {DataName} from {FileName}", Logger.Args(dataName, fileName));
 
@@ -184,6 +187,16 @@ internal sealed class ZoneLoader : ReceiveProtocolDispatcher {
         }
 
         return result;
+    }
+
+    internal static BindSerializer CreateSerializer()
+        => new() { TypeRegistry = s_typeRegistry };
+
+    private static ClientGeneratedTypeRegistry CreateTypeRegistry() {
+        var registry = new ClientGeneratedTypeRegistry();
+        registry.RegisterType(PvPSigilObjectInfo.ClassHash, typeof(PvPSigilObjectInfo));
+
+        return registry;
     }
 
 }
