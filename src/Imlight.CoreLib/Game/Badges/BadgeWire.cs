@@ -56,14 +56,6 @@ internal static class BadgeWire {
 
     private const uint SerializationFlags = 4;
 
-    /// <summary>
-    /// Builds the messages for <paramref name="entries"/>: segments first, then one MSG_BADGES.
-    /// </summary>
-    /// <param name="wizard">The character whose badge state decides progress and completion.</param>
-    /// <param name="catalog">The badge catalog.</param>
-    /// <param name="entries">The badges to send; the whole held list for a full update.</param>
-    /// <param name="full">Whether the client resets its list (login) or only upserts the entries.</param>
-    /// <returns>The messages in send order, or an empty list when the payload cannot be sent.</returns>
     internal static List<IMessage> Build(Wizard wizard, BadgeCatalog catalog, IReadOnlyCollection<BadgeDefinition> entries, bool full) {
         var state = wizard.BadgeBehavior;
         var ordered = full ? entries.OrderBy(d => d.Id) : entries.OrderBy(d => d.Index).ThenBy(d => d.Id);

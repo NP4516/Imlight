@@ -49,21 +49,12 @@ internal sealed class BadgeEngine(Wizard wizard, BadgeCatalog catalog) {
     private readonly ServerBadgeBehavior _state = wizard.BadgeBehavior;
     private bool _stateChanged;
 
-    /// <summary>
-    /// What one engine run changed, in the order the client is told: the entries that moved first, then the ones that completed.
-    /// </summary>
-    /// <param name="Batches">The incremental MSG_BADGES payloads, each sorted by Index; empty batches are left out.</param>
-    /// <param name="Completed">The badges that became complete in this run.</param>
-    /// <param name="StateChanged">Whether the stored state changed and has to be persisted.</param>
     internal sealed record Changes(IReadOnlyList<IReadOnlyList<BadgeDefinition>> Batches, IReadOnlyList<BadgeDefinition> Completed, bool StateChanged) {
 
         internal static Changes None { get; } = new([], [], false);
 
     }
 
-    /// <summary>
-    /// Runs the operations and reports what changed since before they ran.
-    /// </summary>
     internal Changes Execute(Action<BadgeEngine> operations) {
         _stateChanged = false;
         var before = Snapshot();
@@ -81,6 +72,7 @@ internal sealed class BadgeEngine(Wizard wizard, BadgeCatalog catalog) {
             }
         }
 
+        // The entries that moved go out before the completed ones, so a tier-up shows the next tier first.
         var batches = new List<IReadOnlyList<BadgeDefinition>>();
         foreach (var batch in new[] { moved, completed }) {
             if (batch.Count > 0) {
@@ -116,10 +108,6 @@ internal sealed class BadgeEngine(Wizard wizard, BadgeCatalog catalog) {
         }
     }
 
-    /// <summary>
-    /// Awards every auto-add badge whose prerequisites and requirements hold, until no further badge qualifies.
-    /// </summary>
-    /// <param name="meetsRequirements">Evaluates the requirement list of a record for this character.</param>
     internal void Recheck(Func<BadgeDefinition, bool> meetsRequirements) {
         bool awarded;
         do {
