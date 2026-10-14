@@ -305,6 +305,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         SendAddEffects(addedEffects);
         BroadcastEquipItem(item);
         _cachedMountId = 0;
+        SyncPetForMount();
     }
 
     private void EquipMountSubtle() {
@@ -328,6 +329,13 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
 
         _cachedMountId = 0;
+        SyncPetForMount();
+    }
+
+    private void SyncPetForMount() {
+        if (EquipmentService.HidePetWhileMounted) {
+            SessionActor.ActorRef.Tell(new EquipmentService.SyncPetForMountMessage());
+        }
     }
 
     private void UnEquipMount() {
@@ -354,6 +362,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
         SendRemoveEffects(removedEffects);
         BroadcastUnequipItem(slot);
+        SyncPetForMount();
     }
 
     private void BroadcastEquipItem(WizClientObjectItem item) {

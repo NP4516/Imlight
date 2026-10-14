@@ -76,6 +76,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         = ConfigurationManager.Settings["Character.HidePetWhileMounted"].AsBool();
     private ulong _summonedPetId;
 
+    internal static bool HidePetWhileMounted => s_hidePetWhileMounted;
+
+    internal sealed record SyncPetForMountMessage;
+
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new InventoryService(parentActor));
 
@@ -305,6 +309,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
 
         SpawnPetEntity(equipment.GetItem(message.PetItemId));
     }
+
+    [MessageHandler(typeof(SyncPetForMountMessage))]
+    private void ReceiveSyncPetForMount()
+        => SpawnPetEntity();
 
     private void DismissPetEntity() {
         if (_summonedPetId == 0) {
