@@ -40,6 +40,7 @@
  */
 
 using System;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
@@ -212,15 +213,15 @@ internal sealed class MinigameProcess : Process {
             GamerNameOverride = wizard.PlayerNameBehavior.NameOverride,
             GamerGender = genderString
         };
-        ScoreTrackingCollection.AddScoreTracking(scoreTrack);
+        var best = StoreScore(scoreTrack);
 
-        // Check if the user's score has beaten any of the top scores.
-        for (var i = 0; i < leaderboard.m_scores.Count; i++) {
-            if (score > leaderboard.m_scores[i].m_gameScore) {
-                leaderboard.m_scores[i] = scoreTrack.GetClientBehaviorInstance();
-                break;
-            }
-        }
+        // The board shows each gamer once, with their best score.
+        var shown = leaderboard.m_scores
+            .Where(x => x.m_gamerID.Full != best.GamerId.Full)
+            .Append(best.GetClientBehaviorInstance())
+            .OrderByDescending(x => x.m_gameScore)
+            .Take(ScoreTrackingCollection.LeaderboardSize);
+        leaderboard.m_scores = [.. shown];
 
         // Serialize the leaderboard data.
         if (!_serializer.Serialize(leaderboard, 5, out var leaderboardData)) {
@@ -247,6 +248,19 @@ internal sealed class MinigameProcess : Process {
             Success = reward.Success ? 1 : 0
         };
         Sender.Tell(replyEnd, Self);
+    }
+
+    private Imlight.CoreLib.WizardData.Models.Misc.ScoreTracking StoreScore(Imlight.CoreLib.WizardData.Models.Misc.ScoreTracking scoreTrack) {
+        try {
+            return ScoreTrackingCollection.AddScoreTracking(scoreTrack);
+        }
+        catch (Exception ex) {
+            // The rewards were granted already, so the window still opens with this score on the board.
+            Logger.Error("{0} {1} failed to store the score {2}: {3}",
+                Logger.Args(nameof(MinigameProcess), ProcessName, scoreTrack.GameScore, ex.GetBaseException().Message));
+
+            return scoreTrack;
+        }
     }
 
     private CHARACTER_103_PROTOCOL.MSG_CHARACTER QuerySenderCharacter() {
