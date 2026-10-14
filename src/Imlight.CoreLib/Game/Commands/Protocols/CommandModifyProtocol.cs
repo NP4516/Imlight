@@ -17,6 +17,7 @@
  */
 
 using System;
+using System.Globalization;
 using System.Linq;
 using Imcodec.CoreObject;
 using Imcodec.MessageLayer.Generated;
@@ -249,7 +250,7 @@ internal class CommandModifyProtocol : CommandProtocol {
     [Command("petlevel")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetPetLevelCommand(string level) {
-        if (!int.TryParse(level, out var petLevel)) {
+        if (!int.TryParse(level, NumberStyles.Integer, CultureInfo.InvariantCulture, out var petLevel)) {
             InformSenderClient("Invalid pet level.");
 
             return;
@@ -272,7 +273,7 @@ internal class CommandModifyProtocol : CommandProtocol {
     [Command("petxp")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddPetXpCommand(string xp) {
-        if (!uint.TryParse(xp, out var amount)) {
+        if (!uint.TryParse(xp, NumberStyles.Integer, CultureInfo.InvariantCulture, out var amount)) {
             InformSenderClient("Invalid XP amount.");
 
             return;
@@ -297,7 +298,7 @@ internal class CommandModifyProtocol : CommandProtocol {
     [Command("pethappiness")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetPetHappinessCommand(string happiness) {
-        if (!uint.TryParse(happiness, out var value)) {
+        if (!uint.TryParse(happiness, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)) {
             InformSenderClient("Invalid happiness.");
 
             return;
