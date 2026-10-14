@@ -71,6 +71,8 @@ internal static class HousingZones {
     private const string DormLayoutFile = "DormObjects.xml";
     private const string ItemLimitOverrideKey = "Housing.ItemLimitOverride";
     private const string MaxBlobSlotsKey = "Housing.MaxBlobSlots";
+    private const string DeedZoneTimeoutKey = "Housing.DeedZoneTimeoutSeconds";
+    private const int DefaultDeedZoneTimeoutSeconds = 90;
 
     private static Catalog s_catalog;
     private static int s_privateZoneTestRegistered;
@@ -98,6 +100,18 @@ internal static class HousingZones {
             }
 
             return HouseBlobCodec.MaxSlotsThatFit;
+        }
+    }
+
+    /// <summary>
+    /// How long to wait for the client to confirm that a house zone archive is ready:
+    /// <c>Housing.DeedZoneTimeoutSeconds</c>, or 90 seconds when it is not a positive number.
+    /// </summary>
+    internal static TimeSpan DeedZoneTimeout {
+        get {
+            var configured = ConfigurationManager.Settings[DeedZoneTimeoutKey].AsInt();
+
+            return TimeSpan.FromSeconds(configured > 0 ? configured : DefaultDeedZoneTimeoutSeconds);
         }
     }
 

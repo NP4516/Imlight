@@ -693,6 +693,11 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public bool ResetInstance;
 
+        /// <summary>
+        /// The lot of the house the player is entering. Zero for every ordinary zone.
+        /// </summary>
+        public ulong HouseLotGid;
+
     }
 
     /// <summary>

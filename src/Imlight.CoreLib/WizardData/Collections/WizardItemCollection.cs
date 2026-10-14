@@ -272,6 +272,29 @@ public static class WizardItemCollection {
     }
 
     /// <summary>
+    /// Saves the lot a stored deed item points at.
+    /// </summary>
+    /// <param name="item">The deed item.</param>
+    /// <param name="lotGid">The lot of the house the deed opens.</param>
+    /// <returns>True if the deed was found and saved, false otherwise.</returns>
+    public static bool ApplyDeedLot(WizClientObjectItem item, ulong lotGid) {
+        using var session = s_store.OpenSession();
+
+        var associatedItem = session.Query<WizClientObjectItem>(collectionName: CollectionName)
+            .Customize(query => query.WaitForNonStaleResults())
+            .FirstOrDefault(x => x.m_globalID == item.m_globalID && x.m_characterId == item.m_characterId);
+        if (associatedItem is null
+            || !CoreObjectFactory.FindBehaviorInstance<DeedBehavior>(associatedItem, out var deedBehavior)) {
+            return false;
+        }
+
+        deedBehavior.m_lotInstanceGID = lotGid;
+        session.SaveChanges();
+
+        return true;
+    }
+
+    /// <summary>
     /// Adds an item to the deck with the specified deck ID and spell template ID.
     /// </summary>
     /// <param name="deckId">The ID of the deck.</param>

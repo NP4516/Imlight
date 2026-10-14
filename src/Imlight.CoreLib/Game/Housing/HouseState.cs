@@ -87,6 +87,8 @@ internal sealed class HouseState {
 
     internal ulong OwnerCharId => _house.OwnerCharId;
 
+    internal string ZoneName => _house.ZoneName;
+
     internal int LiveCount {
         get {
             lock (_lock) {
