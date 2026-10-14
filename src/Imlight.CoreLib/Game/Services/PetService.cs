@@ -87,8 +87,9 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         SendToSocket(tickMsg);
 
         var tickTimeSeconds = tickTime - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var period = TimeSpan.FromSeconds(tickTimeSeconds + PET_ENERGY_TICK_DELAY);
-        Timers.StartPeriodicTimer("petEnergyTick", new CHARACTER_103_PROTOCOL.MSG_DOENERGYTICK(), period, period);
+        var firstTickDelay = TimeSpan.FromSeconds(tickTimeSeconds + PET_ENERGY_TICK_DELAY);
+        var tickInterval = TimeSpan.FromSeconds(EnergyTickIntervalInSeconds + PET_ENERGY_TICK_DELAY);
+        Timers.StartPeriodicTimer("petEnergyTick", new CHARACTER_103_PROTOCOL.MSG_DOENERGYTICK(), firstTickDelay, tickInterval);
 
         InitializeEggs(wizard);
     }
