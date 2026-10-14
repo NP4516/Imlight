@@ -78,7 +78,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
 
     internal static bool HidePetWhileMounted => s_hidePetWhileMounted;
 
-    internal sealed record SyncPetForMountMessage;
+    internal sealed record SyncPetForMountMessage : IServerMessage {
+        public byte MessageOrder => 0;
+        public byte ServiceID => 0;
+    }
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new InventoryService(parentActor));
