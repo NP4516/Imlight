@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Serialization;
+using Imlight.CoreLib.Game.Bank;
 using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -91,6 +92,7 @@ public class Wizard {
     public WizardCharacterBehavior WizardAvatar { get; set; }
     public ServerWizPlayerNameBehavior PlayerNameBehavior { get; set; }
     public ServerWizInventoryBehavior InventoryBehavior { get; set; }
+    public ServerWizStorageBehavior StorageBehavior { get; set; }
     public ServerWizEquipmentBehavior EquipmentBehavior { get; set; }
     public ServerMagicSchoolBehavior MagicSchoolBehavior { get; set; }
     public ServerWizSpellbookBehavior SpellbookBehavior { get; set; }
@@ -168,6 +170,7 @@ public class Wizard {
         InitializeDefaultPetSnackBehavior();
         InitializePetOwnerBehavior();
         InitializeDefaultInventory();
+        InitializeDefaultStorage();
         InitializeAlchemyBehavior();
 
         ObjectStateBehavior = new ServerObjectStateBehavior("PlayerMobileStates");
@@ -571,6 +574,117 @@ public class Wizard {
         unequipEffects = CharacterEffectHelper.RemoveEffectsFromWizard(this, template);
 
         return true;
+    }
+
+    /// <summary>
+    /// Adds an item whose behaviors are initialized to the character's bank and stores it.
+    /// </summary>
+    /// <param name="item">The item to bank.</param>
+    /// <returns>False if the bank is full, already holds the item or the character could not be saved.</returns>
+    public bool AddItemToBank(WizClientObjectItem item) {
+        if (item is null) {
+            Logger.Warning("Cannot add item to the bank because that item does not exist.");
+
+            return false;
+        }
+
+        // Ensure that the item is associated with this Wizard.
+        item.m_characterId = (GID) CharId;
+
+        if (!StorageBehavior.AddItem(item)) {
+            Logger.Warning("Could not add item {ItemId} to the bank of character {CharId}.",
+                Logger.Args(item.m_globalID.Full, CharId));
+
+            return false;
+        }
+
+        // Persistent save.
+        WizardItemCollection.AddItem(item);
+
+        return SaveItemsOrRollBack(() => StorageBehavior.RemoveItem(item));
+    }
+
+    /// <summary>
+    /// Moves a backpack item into the bank. Both lists change in the one write of the wizard document, so the
+    /// item is never in two lists or in none. An equipped item has to be unequipped first.
+    /// </summary>
+    /// <param name="itemId">The global id of the backpack item.</param>
+    /// <returns>False, with nothing changed, if the item is not in the backpack, the bank has no room or the save failed.</returns>
+    public bool InventoryToBankTransfer(ulong itemId) {
+        var item = InventoryBehavior.GetItem(itemId);
+        if (item is null) {
+            Logger.Warning("Tried to bank item with global id {ItemId} that does not exist in the inventory of character {CharId}.",
+                Logger.Args(itemId, CharId));
+
+            return false;
+        }
+
+        if (!StorageBehavior.HasRoomFor(item)) {
+            Logger.Debug("The bank of character {CharId} is full. Cannot bank item {ItemId}.", Logger.Args(CharId, itemId));
+
+            return false;
+        }
+
+        InventoryBehavior.RemoveItem(item);
+        if (!StorageBehavior.AddItem(item)) {
+            InventoryBehavior.AddItem(item);
+
+            return false;
+        }
+
+        // Persistent save.
+        return SaveItemsOrRollBack(() => {
+            StorageBehavior.RemoveItem(item);
+            InventoryBehavior.AddItem(item);
+        });
+    }
+
+    /// <summary>
+    /// Moves a bank item into the backpack. Both lists change in the one write of the wizard document.
+    /// </summary>
+    /// <param name="itemId">The global id of the bank item.</param>
+    /// <returns>False, with nothing changed, if the item is not in the bank, the backpack is full or the save failed.</returns>
+    public bool BankToInventoryTransfer(ulong itemId) {
+        var item = StorageBehavior.GetItem(itemId);
+        if (item is null) {
+            Logger.Warning("Tried to take item with global id {ItemId} from the bank of character {CharId}, but it is not there.",
+                Logger.Args(itemId, CharId));
+
+            return false;
+        }
+
+        if (InventoryBehavior.FreeSlots < 1) {
+            Logger.Debug("The inventory of character {CharId} is full. Cannot take item {ItemId} from the bank.", Logger.Args(CharId, itemId));
+
+            return false;
+        }
+
+        StorageBehavior.RemoveItem(item);
+        if (!InventoryBehavior.AddItem(item)) {
+            StorageBehavior.AddItem(item);
+
+            return false;
+        }
+
+        // Persistent save.
+        return SaveItemsOrRollBack(() => {
+            InventoryBehavior.RemoveItem(item);
+            StorageBehavior.AddItem(item);
+        });
+    }
+
+    private bool SaveItemsOrRollBack(System.Action rollBack) {
+        try {
+            if (WizardCollection.UpdateCharacterItems(this)) {
+                return true;
+            }
+        } catch (Exception ex) {
+            Logger.Error("Could not save the items of character {CharId}: {Reason}", Logger.Args(CharId, ex.Message));
+        }
+
+        rollBack();
+
+        return false;
     }
 
     public bool AddSnack(ulong snackTemplateId, out ClientPetSnackItem snackObj) {
@@ -1284,6 +1398,7 @@ public class Wizard {
     }
 
     internal void AfterDatabaseLoad() {
+        AfterDatabaseLoadStorageBehavior();
         AfterDatabaseLoadWizardGameStats();
         AfterDatabaseLoadSpellbookBehavior();
         AfterDatabaseloadMountOwnerBehavior();
@@ -1366,6 +1481,21 @@ public class Wizard {
             Items = [],
             InventoryItemIds = []
         };
+
+    private void InitializeDefaultStorage()
+        => StorageBehavior = new ServerWizStorageBehavior {
+            BankLimit = BankConfig.MaxBankItems
+        };
+
+    private void AfterDatabaseLoadStorageBehavior() {
+        // Characters stored before the bank existed have no storage behavior yet.
+        StorageBehavior ??= new ServerWizStorageBehavior();
+
+        // A stored limit of 0 means the ini key was unset at that time, so the ini value applies.
+        if (StorageBehavior.BankLimit <= 0) {
+            StorageBehavior.BankLimit = BankConfig.MaxBankItems;
+        }
+    }
 
     /// <summary>
     /// Adds the starter kit items (config-driven) to the inventory and database.

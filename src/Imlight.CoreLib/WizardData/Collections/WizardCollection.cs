@@ -26,6 +26,7 @@ using Raven.Client.Exceptions;
 using Raven.Client.Documents.Linq;
 using Raven.Client.Documents.Session;
 using Imlight.Common;
+using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.WizardData.Databases;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imcodec.ObjectProperty.TypeCache;
@@ -322,9 +323,11 @@ public static class WizardCollection {
     /// Updates the equipment of a character in the wizard collection.
     /// </summary>
     /// <param name="wizard">The wizard object containing the updated equipment.</param>
-    public static void UpdateCharacterItems(Wizard wizard) {
-        UpdateCharacter(wizard.CharId, existingCharacter => {
+    /// <returns>False when the character is not stored.</returns>
+    public static bool UpdateCharacterItems(Wizard wizard) {
+        return UpdateCharacter(wizard.CharId, existingCharacter => {
             existingCharacter.InventoryBehavior = wizard.InventoryBehavior;
+            existingCharacter.StorageBehavior = wizard.StorageBehavior;
             existingCharacter.EquipmentBehavior = wizard.EquipmentBehavior;
             existingCharacter.PetSnackBehavior = wizard.PetSnackBehavior;
             existingCharacter.AlchemyBehavior = wizard.AlchemyBehavior;
@@ -562,6 +565,13 @@ public static class WizardCollection {
 
         wizard.InventoryBehavior.Items = [.. items
             .Where(i => wizard.InventoryBehavior.InventoryItemIds
+            .Contains(i.m_globalID))
+        ];
+
+        // The bank items are stored the same way, with their ids in the StorageBehavior.
+        wizard.StorageBehavior ??= new ServerWizStorageBehavior();
+        wizard.StorageBehavior.Items = [.. items
+            .Where(i => wizard.StorageBehavior.BankItemIds
             .Contains(i.m_globalID))
         ];
 
