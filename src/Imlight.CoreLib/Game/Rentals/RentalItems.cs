@@ -35,6 +35,7 @@
  * Last Updated: 10/14/2026
  */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
@@ -68,6 +69,25 @@ internal static class RentalItems {
         rentalTemplate = template?.m_behaviors?.OfType<RentalBehaviorTemplate>().FirstOrDefault();
 
         return rentalTemplate is not null;
+    }
+
+    /// <summary>
+    /// Computes the absolute expiry of a rental whose timer starts now.
+    /// </summary>
+    /// <param name="rentalTemplate">The rental template that holds the duration.</param>
+    /// <param name="now">The start time in Unix seconds.</param>
+    /// <param name="expireTime">The expiry in Unix seconds, capped below the not started value.</param>
+    /// <returns>False if the template is not a calendar rental or its duration cannot be read.</returns>
+    internal static bool TryGetExpireTime(RentalBehaviorTemplate rentalTemplate, long now, out uint expireTime) {
+        expireTime = Unset;
+        if (rentalTemplate.m_timerType != TimerType.TimerType_Calendar
+            || !RentalDuration.TryParse(rentalTemplate.m_expireTime, out var duration)) {
+            return false;
+        }
+
+        expireTime = (uint) Math.Min(now + (long) duration.TotalSeconds, Unset - 1L);
+
+        return true;
     }
 
     internal static bool IsStarted(ClientRentalBehavior behavior)

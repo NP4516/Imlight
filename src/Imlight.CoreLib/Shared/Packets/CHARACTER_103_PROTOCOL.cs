@@ -466,4 +466,17 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Sent by the EquipmentService to the RentalService after a rental item was equipped: the timer of the rental
+    /// starts if it has not started yet.
+    /// </summary>
+    public sealed class MSG_STARTRENTAL : IServerMessage {
+
+        public byte MessageOrder { get; } = 60;
+        public byte ServiceID { get; } = 103;
+
+        public ulong ItemId;
+
+    }
+
 }

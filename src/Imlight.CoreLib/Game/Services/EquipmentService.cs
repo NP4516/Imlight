@@ -58,6 +58,7 @@ using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Game.Rentals;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
@@ -155,6 +156,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
 
         SendEquipItem(item, message.SlotName);
         SendAddEffects(effects);
+
+        if (RentalItems.TryGetBehavior(item, out _)) {
+            TellOtherServices(new CHARACTER_103_PROTOCOL.MSG_STARTRENTAL { ItemId = itemId });
+        }
 
         // A mount equipped indoors is dismounted right away; the reconcile no-ops in the open world.
         if (Enum.TryParse<EquipmentSlotType>(message.SlotName, true, out var equippedSlot)
