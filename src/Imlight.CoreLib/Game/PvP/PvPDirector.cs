@@ -550,11 +550,9 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         }
     }
 
-    /// <summary>
-    /// Pushes every player an idle match status and sends the ones in the arena back. A player still on the way
-    /// is sent back when they arrive.
-    /// </summary>
     private void ReturnPlayers(PvPMatch match, ulong culpritCharId) {
+        // Every player gets an idle match status and the ones in the arena are sent back. A player still on the way
+        // is sent back when they arrive.
         PvPMatchFactory.TryGetMatch(match.Entries[0].MatchNameId, out var template);
 
         foreach (var entry in match.Entries.Where(entry => entry.CharId != culpritCharId)) {

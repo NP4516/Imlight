@@ -125,7 +125,9 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     internal bool IsPvPDuel => _pvp is not null;
     private byte PlanningSeconds => IsPvPDuel ? PvPSettings.PracticePlanningSeconds : PLANNING_TIME;
 
-    // Wizards of one side that fight on, whichever side that is.
+    /// <summary>
+    /// Counts the wizards of one side that fight on, whichever side that is.
+    /// </summary>
     public byte AliveHumanCount(CombatTeam team)
         => (byte) SubCircles.Count(x => x.Occupied && x.IsHumanPlayer && x.OccupiedTeam == team && x.IsAlive);
 
@@ -259,7 +261,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         }
     });
 
-    // Everyone with a client: the wizards of either side and their minions, not the creatures of the AI.
+    /// <summary>
+    /// Sends the message to everyone with a client: the wizards of either side and their minions, not the
+    /// creatures of the AI.
+    /// </summary>
     internal void HumanBroadcast(IMessage message) => EnactActionOnSubCircles(circle => {
         if (!circle.IsAiCreature) {
             circle.ParticipantActor.Tell(message);
@@ -623,8 +628,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         Self.Tell(new COMBAT_106_PROTOCOL.MSG_NEWROUND());
     }
 
-    // Prepares the half turn of the acting team: only its members may queue moves, and its minions plan now.
     private void BeginPvPHalfTurn() {
+        // Only the members of the acting team may queue moves, and its minions plan now.
         var acting = _pvp.ActingTeam;
         CombatResolver.Reset();
         CombatResolver.ActingTeam = acting;
@@ -854,8 +859,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private void CancelPvPMatch(ulong matchId, PvPCancelReason reason)
         => PvPDirector.Instance?.Tell(new PVP_111_PROTOCOL.MSG_MATCHCANCELLED { MatchId = matchId, Reason = reason });
 
-    // Seating failed halfway: let the seated players go, then ask the director to send everyone back.
     private void AbortPvPDuel(ulong matchId, PvPCancelReason reason) {
+        // Seating failed halfway: let the seated players go, then ask the director to send everyone back.
         _isActive = false;
         if (_pvp is not null) {
             foreach (var entry in _pvp.Roster) {
@@ -917,9 +922,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         return subCircleObjs;
     }
 
-    // The red circles of a PvP sigil are the first four, like the monster circles of a combat sigil.
-    private static bool IsCreatureSide(string locationType)
-        => locationType is "MonsterCircle" or "RedCircle";
+    private static bool IsCreatureSide(string locationType) {
+        // The red circles of a PvP sigil are the first four, like the monster circles of a combat sigil.
+        return locationType is "MonsterCircle" or "RedCircle";
+    }
 
     private void EnactActionOnSubCircles(Action<CombatDuelSubCircle> action) {
         foreach (var subCircle in ActiveSubCircles) {
@@ -1635,8 +1641,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private bool IsPvPSideWiped()
         => AliveHumanCount(CombatTeam.Player) <= 0 || AliveHumanCount(CombatTeam.Monster) <= 0;
 
-    // The side with a wizard still standing wins; with none standing on either side it is a draw (-1).
     private int GetPvPWinningTeam() {
+        // The side with a wizard still standing wins; with none standing on either side it is a draw (-1).
         var blueStands = AliveHumanCount(CombatTeam.Player) > 0;
         var redStands = AliveHumanCount(CombatTeam.Monster) > 0;
 
@@ -1755,8 +1761,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         EnactActionOnSubCircles(circle => circle.RemoveParticipant());
     }
 
-    // Each player's session lets go of the duel; the director sends everyone back and closes the match.
     private void ReportPvPDuelEnded(int winningTeam) {
+        // Each player's session lets go of the duel; the director sends everyone back and closes the match.
         foreach (var entry in _pvp.Roster) {
             if (_pvp.IsDisconnected(entry.Session)) {
                 continue;
