@@ -92,6 +92,41 @@ internal class SeamstressService(SessionActor sessionActor) : MessageService(ses
         return true;
     }
 
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_UNSTITCHITEMS))]
+    private void ReceiveUnstitchItems(WIZARD_12_PROTOCOL.MSG_UNSTITCHITEMS message) {
+        var wizard = GetActiveWizard();
+        var success = SeamstressConfig.TryGetPrices(out _, out var unstitchCrowns)
+            && IsAtSeamstress(wizard, message.GlobalID)
+            && TryUnstitch(wizard, message.ItemID, ClampToInt(message.StatItemColor1), ClampToInt(message.StatItemColor2), unstitchCrowns);
+
+        SendConfirm(wizard, success);
+    }
+
+    private bool TryUnstitch(Wizard wizard, ulong itemId, int statItemColor1, int statItemColor2, int unstitchCrowns) {
+        var stitchedItem = FindItem(wizard, itemId);
+        if (stitchedItem is null) {
+            ReportTampering(wizard, $"Player tried to unstitch item {itemId}, which they do not own!");
+
+            return false;
+        }
+
+        if (!StitchRules.TryPlanUnstitch(stitchedItem, statItemColor1, statItemColor2, out var plan, out var reason)) {
+            return Deny(wizard, $"unstitch of item {itemId}", reason);
+        }
+
+        if (!StitchedItemFactory.TryCreate(wizard, plan.Stats, out var statsItem)
+            || !StitchedItemFactory.TryCreate(wizard, plan.Appearance, out var appearanceItem)) {
+            return Deny(wizard, $"unstitch of item {itemId}", "the results could not be built");
+        }
+
+        ReportJewelSockets(wizard, stitchedItem);
+        if (!TryApply(wizard, [stitchedItem], [statsItem, appearanceItem], unstitchCrowns, out var failure)) {
+            return Deny(wizard, $"unstitch of item {itemId}", failure);
+        }
+
+        return true;
+    }
+
     private bool TryApply(Wizard wizard, WizClientObjectItem[] inputs, WizClientObjectItem[] results, int crownsCost,
                           out string failure) {
         try {
@@ -158,6 +193,8 @@ internal class SeamstressService(SessionActor sessionActor) : MessageService(ses
 
     private static WizClientObjectItem FindItem(Wizard wizard, ulong itemId)
         => wizard.InventoryBehavior.GetItem(itemId) ?? wizard.EquipmentBehavior.GetItem(itemId);
+
+    private static int ClampToInt(uint value) => (int) Math.Min(value, int.MaxValue);
 
     private void SendConfirm(Wizard wizard, bool success)
         => SendToSocket(new WIZARD_12_PROTOCOL.MSG_STITCHITEMSCONFIRM {

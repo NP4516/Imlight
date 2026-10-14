@@ -64,6 +64,16 @@ internal static class StitchedItemFactory {
     }
 
     /// <summary>
+    /// Builds one of the plain items an unstitch gives back.
+    /// </summary>
+    /// <param name="wizard">The wizard that owns the item.</param>
+    /// <param name="plan">The planned item.</param>
+    /// <param name="item">The new item.</param>
+    /// <returns>False if the template is not an item template.</returns>
+    internal static bool TryCreate(Wizard wizard, UnstitchedItem plan, out WizClientObjectItem item)
+        => TryCreate(wizard, plan.TemplateId, plan.PrimaryColor, plan.SecondaryColor, plan.Pattern, out item);
+
+    /// <summary>
     /// Whether an item has jewel sockets, which a stitch would destroy or leave locked.
     /// </summary>
     /// <param name="item">The item in question.</param>
