@@ -255,8 +255,8 @@ internal sealed class MinigameProcess : Process {
             return ScoreTrackingCollection.AddScoreTracking(scoreTrack);
         } catch (Exception ex) {
             // The rewards were granted already, so the window still opens with this score on the board.
-            Logger.Error("{0} {1} failed to store the score {2}: {3}",
-                Logger.Args(nameof(MinigameProcess), ProcessName, scoreTrack.GameScore, ex.GetBaseException().Message));
+            Logger.Error("{Process} failed to store the score {Score}: {Reason}",
+                Logger.Args(ProcessName, scoreTrack.GameScore, ex.GetBaseException().Message));
 
             return scoreTrack;
         }
