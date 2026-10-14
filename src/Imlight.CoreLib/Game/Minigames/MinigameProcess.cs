@@ -166,8 +166,8 @@ internal sealed class MinigameProcess : Process {
 
         // The cap is a multiple of the top threshold. Left unset, scores far above it are only logged.
         var topThreshold = thresholds[^1];
-        var capMultiplier = ConfigurationManager.GetValue("Minigames.ScoreCapMultiplier", 0);
-        if (capMultiplier > 0 && score > capMultiplier * (long) topThreshold) {
+        var capMultiplier = ConfigurationManager.GetValue("Minigames.ScoreCapMultiplier", 0.0);
+        if (capMultiplier > 0 && score > capMultiplier * topThreshold) {
             Logger.Warning("{Process} rejected the score {Score} of {Wizard}, above {Multiplier} times {Threshold}",
                 Logger.Args(ProcessName, score, wizard.PlayerNameBehavior.GetWizardName(), capMultiplier, topThreshold));
 
