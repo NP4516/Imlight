@@ -606,7 +606,8 @@ public class CombatDuelSubCircle {
             m_pipRoundRates = new(),
             m_playerHealth = creatureStats.GameStats.m_currentHitpoints,
             m_maxPlayerHealth = creatureStats.GameStats.m_baseHitpoints,
-            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (int) OccupiedTeam,
+            // todo: a PvE minion has always been told it acts with the creatures, is that right?
+            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (int) (_duelActor.Duel.m_bPVP ? OccupiedTeam : CombatTeam.Monster),
             m_pGameStats = creatureStats.GameStats.GetCombatGameStats(),
             m_mobLevel = creatureStats.CombatLevel,
 
