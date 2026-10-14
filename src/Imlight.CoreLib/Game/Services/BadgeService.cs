@@ -20,10 +20,10 @@
  * ========================================================================
  *
  * PURPOSE:
- * Sends a character's badges to the client and keeps them current as the character earns them.
+ * Sends a character's badges to the client, keeps them current as the character earns them, and handles choosing and inspecting the displayed badge title.
  *
  * USAGE EXAMPLE:
- * Attached to every game session by GameServiceFactory; MSG_PRELOGIN makes it send the full badge list.
+ * Attached to every game session by GameServiceFactory; MSG_PRELOGIN makes it send the full badge list, MSG_COMBATWIN advances the kill counters.
  *
  * NOTE:
  * The list is sent before AttachService answers its own MSG_PRELOGIN with MSG_LOGINCOMPLETE, as the live server does.
@@ -40,6 +40,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
@@ -58,6 +59,11 @@ using Imlight.CoreLib.WizardData.Models.World;
 namespace Imlight.CoreLib.Game.Services;
 
 internal class BadgeService(SessionActor sessionActor) : MessageService(sessionActor) {
+
+    // The client compares the Error of a refused MSG_SELECT_BADGE with these hashes.
+    private static readonly uint s_selectBadgeError = StringHash.Compute("SelectBadgeError");
+    private static readonly uint s_badgeDoesNotExist = StringHash.Compute("BadgeDoesNotExist");
+    private static readonly uint s_badgeNotComplete = StringHash.Compute("BadgeNotComplete");
 
     private readonly HashSet<uint> _warnedUnknownBadges = [];
 
@@ -143,6 +149,84 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
         FinishChanges(wizard, changes, sendBatches: true);
     }
 
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_SELECT_BADGE))]
+    private void ReceiveSelectBadge(GAME_5_PROTOCOL.MSG_SELECT_BADGE message) {
+        var catalog = BadgeCatalog.Current;
+        if (!catalog.IsReady) {
+            return;
+        }
+
+        var wizard = GetActiveWizard();
+        var state = wizard.BadgeBehavior;
+        var requestedId = message.BadgeNameID == BadgeCatalog.NoTitleId ? 0 : message.BadgeNameID;
+
+        // The client re-sends its current badge when a PvP duel starts, so the current selection is a no-op.
+        if (requestedId == state.SelectedBadgeId) {
+            SendToSocket(new GAME_5_PROTOCOL.MSG_SELECT_BADGE { BadgeNameID = GetClientBadgeId(requestedId), Error = 0 });
+
+            return;
+        }
+
+        BadgeDefinition chosen = null;
+        if (requestedId != 0) {
+            var error = GetSelectionError(state, catalog, requestedId, out chosen);
+            if (error != 0) {
+                Logger.Warning("{0} could not select badge {1}, error {2}.",
+                    Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), requestedId, error));
+                SendToSocket(new GAME_5_PROTOCOL.MSG_SELECT_BADGE { BadgeNameID = message.BadgeNameID, Error = error });
+
+                return;
+            }
+        }
+
+        state.SelectedBadgeId = requestedId;
+        Persist(wizard);
+        wizard.SetBadgeOverride(chosen?.Title ?? string.Empty);
+
+        SendToSocket(new GAME_5_PROTOCOL.MSG_SELECT_BADGE { BadgeNameID = GetClientBadgeId(requestedId), Error = 0 });
+
+        // The client rebuilds a name tag only on MSG_NEWTITLE or a new object, so the sender is included.
+        ZoneBroadcast(new WIZARD_12_PROTOCOL.MSG_NEWTITLE {
+            GlobalID = wizard.GameObjectID,
+            PvPIconID = wizard.PlayerNameBehavior.PvpIconId,
+            Title = wizard.PlayerNameBehavior.BadgeTitle
+        }, isSelfless: false);
+    }
+
+    [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_REQUESTPLAYERBADGE))]
+    private void ReceiveRequestPlayerBadge(WIZARD3_56_PROTOCOL.MSG_REQUESTPLAYERBADGE message) {
+        var catalog = BadgeCatalog.Current;
+        if (!catalog.IsReady) {
+            return;
+        }
+
+        var wizard = GetActiveWizard();
+        if (message.GlobalID != wizard.CharId) {
+            Logger.Warning("{0} asked for a badge on behalf of character {1}.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), message.GlobalID));
+
+            return;
+        }
+
+        var target = message.RequestedID == wizard.CharId ? wizard : WizardCollection.GetCharacterUnloaded(message.RequestedID);
+
+        // Nothing selected (or an unknown character) shows the "Display no badge title" description.
+        catalog.TryGet(BadgeCatalog.NoTitleId, out var noTitle);
+        var title = noTitle?.Title ?? string.Empty;
+        var info = noTitle?.Info ?? string.Empty;
+        if (target?.BadgeBehavior is not null && catalog.TryGet(target.BadgeBehavior.SelectedBadgeId, out var selected)) {
+            title = selected.Title;
+            info = selected.Info;
+        }
+
+        SendToSocket(new WIZARD3_56_PROTOCOL.MSG_REQUESTPLAYERBADGE {
+            GlobalID = 0,
+            RequestedID = message.RequestedID,
+            BadgeName = title,
+            BadgeDescription = info
+        });
+    }
+
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_REQUESTNEWBADGE))]
     private void ReceiveRequestNewBadge(WIZARD3_56_PROTOCOL.MSG_REQUESTNEWBADGE message) {
         var catalog = BadgeCatalog.Current;
@@ -189,6 +273,21 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
                 playerObj: GetActiveGameObject(),
                 zoneActor: SessionActor.GetZoneActor());
         }
+    }
+
+    private static uint GetClientBadgeId(uint selectedBadgeId) => selectedBadgeId != 0 ? selectedBadgeId : BadgeCatalog.NoTitleId;
+
+    private static uint GetSelectionError(ServerBadgeBehavior state, BadgeCatalog catalog, uint badgeId, out BadgeDefinition definition) {
+        // A badge the character never started is as unknown to them as one that is not in the catalog.
+        if (!catalog.TryGet(badgeId, out definition) || !BadgeView.GetHeld(state, catalog).Contains(definition)) {
+            return s_badgeDoesNotExist;
+        }
+
+        if (!BadgeView.IsComplete(state, definition)) {
+            return s_badgeNotComplete;
+        }
+
+        return definition.ShowTitle ? 0 : s_selectBadgeError;
     }
 
     private static void Persist(Wizard wizard) {
