@@ -36,7 +36,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -49,6 +49,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Minigames;
 using Imlight.CoreLib.Game.Processes;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -87,7 +88,6 @@ internal sealed class MinigameProcess : Process {
         Versionable: false,
         Behaviors: SerializerFlags.None
     );
-    private readonly byte[] _allowedProtocolIds = [25, 40, 41, 42, 43, 44, 45, 46, 47, 54];
 
     // ctor
     public MinigameProcess(string processName, uint processId, byte minigameIndex) : base(processName, processId) {
@@ -103,18 +103,13 @@ internal sealed class MinigameProcess : Process {
     internal void ReceiveElse(IMessage message) {
         HadActivity = true;
 
-        if (!_allowedProtocolIds.Contains(message.ServiceId)) {
+        if (!MinigameProtocol.IsKnownService(message.ServiceId)) {
             return;
         }
 
-        // Ignore any message ID of 2. This is a movement message that's not used by the client.
-        if (message.MessageOrder == 1) {
-            // This is a connect message.
+        if (MinigameProtocol.IsRoundStart(message)) {
             HandleConnect();
-        }
-        else if (message.MessageOrder == 3) {
-            // This is a rewards message. 
-            var score = GetScoreFromGenericIMessage(message);
+        } else if (MinigameProtocol.TryGetScore(message, out var score)) {
             HandleRewards(score);
         }
     }
@@ -264,24 +259,6 @@ internal sealed class MinigameProcess : Process {
         }
 
         return scoreTrackingList;
-    }
-
-    private int GetScoreFromGenericIMessage(IMessage message) {
-        try {
-            var scoreField = message.GetType().GetField("score",
-                System.Reflection.BindingFlags.Public |
-                System.Reflection.BindingFlags.NonPublic |
-                System.Reflection.BindingFlags.Instance);
-
-            return scoreField != null
-                ? (int) scoreField.GetValue(message)
-                : -1;
-        }
-        catch (Exception ex) {
-            Logger.Error("{0} {1} failed to get score: {2}",
-                Logger.Args(nameof(MinigameProcess), ProcessName, ex.Message));
-            return -1;
-        }
     }
 
     private static int FindThresholdIndex(int score, List<int> scoreThresholds) {
