@@ -443,6 +443,8 @@ public class Wizard {
     }
 
     public bool AddPetToInventory(WizClientObjectItem pet) {
+        // Completing the pet first lets the first save store its genes and stats.
+        PetProgression.EnsureInitialized(pet);
         if (!InventoryBehavior.AddItem(pet)) {
             Logger.Warning("Could not add pet {0} to player {1}'s inventory.",
                 Logger.Args(pet.m_globalID, PlayerNameBehavior.GetWizardName()));
@@ -1438,6 +1440,8 @@ public class Wizard {
                 Logger.Args(_defaultPetTemplateId, CharId));
         }
         else {
+            PetProgression.EnsureInitialized(defaultPet);
+
             // Add pet to inventory.
             itemsToAdd.Add(defaultPet);
             InventoryBehavior.InventoryItemIds.Add(defaultPet.m_globalID);
