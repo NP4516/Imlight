@@ -192,8 +192,7 @@ public static class WizardObjectLoader {
         if (CoreObjectFactory.FindBehaviorInstance<BadgeBehavior>(clientObject, out var badgeBehavior)) {
             var idx = clientObject.m_inactiveBehaviors.IndexOf(badgeBehavior);
             clientObject.m_inactiveBehaviors[idx] = character.BadgeBehavior.GetClientBehaviorInstance();
-        }
-        else {
+        } else {
             throw new Exception("Behavior BadgeBehavior not found!");
         }
     }
