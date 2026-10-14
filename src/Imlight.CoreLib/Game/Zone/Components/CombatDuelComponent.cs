@@ -373,8 +373,12 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         // Determine the power pip gain for each participant.
         DoPipGain();
 
-        // Echo the new round message to all actors.
-        EnactActionOnSubCircles(circle => circle.ParticipantActor.Tell(message));
+        if (IsPvPDuel) {
+            BeginPvPHalfTurn();
+        } else {
+            // Echo the new round message to all actors.
+            EnactActionOnSubCircles(circle => circle.ParticipantActor.Tell(message));
+        }
 
         // Pre-planning phase just wants to send who is up first.
         Duel.m_duelPhase = kDuelPhase.kPhase_PrePlanning;
@@ -477,6 +481,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        if (IsPvPDuel && !IsPvPMoveAllowed(caster)) {
+            return;
+        }
+
         var moveType = (CombatMoveType) message.MoveType;
 
         switch (moveType) {
@@ -517,6 +525,11 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER))]
     private void ReceivePlanningPhaseOver(COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER message) {
         if (!_isActive) {
+            return;
+        }
+
+        // A repeated timer must not execute a half turn twice.
+        if (IsPvPDuel && Duel.m_duelPhase != kDuelPhase.kPhase_Planning) {
             return;
         }
 
@@ -570,10 +583,15 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         Duel.m_duelPhase = kDuelPhase.kPhase_Resolution;
         SendCombatPhase((byte) Duel.m_duelPhase);
 
-        var duelIsDecided = IsPvPDuel
-            ? IsPvPSideWiped()
-            : AliveCreatureCount <= 0 || AlivePlayerCount <= 0;
-        if (!duelIsDecided) {
+        if (IsPvPDuel) {
+            ContinuePvPDuel();
+
+            return;
+        }
+
+        var playersWin = AliveCreatureCount <= 0;
+        var creaturesWin = AlivePlayerCount <= 0;
+        if (!playersWin && !creaturesWin) {
             // Continue. Start a new round.
             Self.Tell(new COMBAT_106_PROTOCOL.MSG_NEWROUND());
 
@@ -581,6 +599,71 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         }
 
         EndDuel();
+    }
+
+    private void ContinuePvPDuel() {
+        if (IsPvPSideWiped()) {
+            EndDuel();
+
+            return;
+        }
+
+        if (_pvp.TryBeginSecondHalfTurn()) {
+            // The other team acts next in the same round: no new round, no new pips.
+            BeginPvPHalfTurn();
+            SendUpFirst(Duel.m_roundNum);
+
+            var delay = TimeSpan.FromSeconds(DUEL_NEW_ROUND_DELAY);
+            Timers.StartSingleTimer(PREPLANNING_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEBEGIN(), delay);
+
+            return;
+        }
+
+        Self.Tell(new COMBAT_106_PROTOCOL.MSG_NEWROUND());
+    }
+
+    // Prepares the half turn of the acting team: only its members may queue moves, and its minions plan now.
+    private void BeginPvPHalfTurn() {
+        var acting = _pvp.ActingTeam;
+        CombatResolver.Reset();
+        CombatResolver.ActingTeam = acting;
+        _awaitingCombatMoves = true;
+
+        if (acting is { } actingTeam) {
+            Duel.m_firstTeamToAct = (int) actingTeam;
+            Duel.m_altTurnCounter = _pvp.HalfTurn;
+            Duel.m_originalFirstTeamToAct = (int) _pvp.OriginalFirstTeam;
+        }
+
+        EnactActionOnSubCircles(circle => {
+            if (acting is { } team) {
+                circle.CombatParticipant.m_myTeamTurn = circle.OccupiedTeam == team;
+            }
+
+            // The AI of a minion plans when its team may act.
+            if (circle.IsSummonedMinion && (acting is null || circle.OccupiedTeam == acting)) {
+                circle.ParticipantActor.Tell(new COMBAT_106_PROTOCOL.MSG_NEWROUND());
+            }
+        });
+    }
+
+    private bool IsPvPMoveAllowed(CombatDuelSubCircle caster) {
+        if (_pvp.ActingTeam is { } acting && caster.OccupiedTeam != acting) {
+            Logger.Debug("Duel {0} | Slot {1} | Move dropped, the other team is acting.",
+                Logger.Args(Duel.m_duelID.Full, caster.SlotIndex));
+
+            return false;
+        }
+
+        // The AI of a minion plans ahead; a wizard may only move once the planning phase has begun.
+        if (caster.IsHumanPlayer && Duel.m_duelPhase != kDuelPhase.kPhase_Planning) {
+            Logger.Debug("Duel {0} | Slot {1} | Move dropped, the duel is not in its planning phase.",
+                Logger.Args(Duel.m_duelID.Full, caster.SlotIndex));
+
+            return false;
+        }
+
+        return true;
     }
 
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_ENDDUEL))]
@@ -1106,8 +1189,12 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void SendCombatUI(byte planningPhaseTimer) {
+        // When the teams take turns, every client is told whose turn it is and only that team gets the countdown.
+        var acting = IsPvPDuel ? _pvp.ActingTeam : null;
         var combatUiMsg = new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SHOWCOMBATUI {
-            DuelID = SigilId
+            DuelID = SigilId,
+            AltTurn = acting is null ? 0 : 1,
+            AltTurnTeam = (int?) acting ?? 0,
         };
         var planningMsg = new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SETPLANNINGPHASETIMER {
             DuelID = SigilId,
@@ -1115,7 +1202,11 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         };
 
         HumanBroadcast(combatUiMsg);
-        HumanBroadcast(planningMsg);
+        if (acting is { } actingTeam) {
+            TeamBroadcast(actingTeam, planningMsg);
+        } else {
+            HumanBroadcast(planningMsg);
+        }
     }
 
     private void SendCombatStats() => EnactActionOnSubCircles(circle => {
@@ -1771,6 +1862,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private void ResendMinionMoveSelections() {
         EnactActionOnSubCircles(circle => {
             if (!circle.IsSummonedMinion || !circle.IsAlive || circle.ParticipantObject is null) {
+                return;
+            }
+
+            if (IsPvPDuel && _pvp.ActingTeam is { } acting && circle.OccupiedTeam != acting) {
                 return;
             }
 

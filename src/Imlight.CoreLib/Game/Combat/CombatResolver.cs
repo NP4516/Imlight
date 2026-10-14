@@ -99,6 +99,12 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     private CombatDuelSubCircle[] ActiveSubCircles => [.. _subCircles.Where(x => x.Occupied)];
     private List<QueuedCombatAction> _queuedCombatActions;
 
+    /// <summary>
+    /// The team that plans and acts now. When set, the other team queues no moves and is not made to pass. When
+    /// <c>null</c>, every team acts in the same round.
+    /// </summary>
+    internal CombatTeam? ActingTeam { get; set; }
+
     public void Reset() =>
         _queuedCombatActions = [];
 
@@ -133,6 +139,13 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                               CombatDuelSubCircle caster,
                               CombatDuelSubCircle target,
                               Spell spell) {
+        if (!IsActing(caster)) {
+            Logger.Debug("Duel {0} | Slot {1} | Move dropped, the other team is acting.",
+                Logger.Args(_duel.m_duelID.Full, caster.SlotIndex));
+
+            return;
+        }
+
         // If this spell is already queued by the same caster, remove all of their queued actions.
         _queuedCombatActions.RemoveAll(x => x.SpellCaster == caster);
 
@@ -169,7 +182,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     /// </summary>
     /// <returns>True if all participants have enqueued actions, false otherwise.</returns>
     public bool HaveAllParticipantsEnqueuedActions() {
-        var enqueuedPlayers = _subCircles.Where(circle => circle.AddedToDuel && circle.IsAlive);
+        var enqueuedPlayers = _subCircles.Where(circle => circle.AddedToDuel && circle.IsAlive && IsActing(circle));
 
         return enqueuedPlayers.Count() == _queuedCombatActions.Count;
     }
@@ -179,9 +192,12 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     public QueuedCombatAction GetQueuedAction(CombatDuelSubCircle caster)
         => _queuedCombatActions.FirstOrDefault(a => a.SpellCaster == caster);
 
+    private bool IsActing(CombatDuelSubCircle circle)
+        => ActingTeam is null || circle.OccupiedTeam == ActingTeam;
+
     private void AddCasterPassActionIfNeeded() {
         var castersWithoutActions = ActiveSubCircles
-            .Where(subCircle => subCircle.AddedToDuel && subCircle.IsAlive)
+            .Where(subCircle => subCircle.AddedToDuel && subCircle.IsAlive && IsActing(subCircle))
             .Except(_queuedCombatActions.Select(action => action.SpellCaster))
             .ToList();
 
