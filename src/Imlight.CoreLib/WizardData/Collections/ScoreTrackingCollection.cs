@@ -81,7 +81,9 @@ public static class ScoreTrackingCollection {
     public static ScoreTracking[] GetLeaderboard(string minigameName) {
         using var session = s_store.OpenSession();
 
+        // Waits for the index, so the score stored by the last finished game is on the board.
         var highscores = session.Query<ScoreTracking>(collectionName: CollectionName)
+            .Customize(query => query.WaitForNonStaleResults())
             .Where(x => x.MinigameName == minigameName)
             .OrderByDescending(x => x.GameScore)
             .Take(LeaderboardSize)
