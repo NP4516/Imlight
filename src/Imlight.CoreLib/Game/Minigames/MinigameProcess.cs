@@ -235,6 +235,10 @@ internal sealed class MinigameProcess : Process {
             return;
         }
 
+        // A reply always carries a gold info (even for 0 gold) and the empty rarity list the loot path sends.
+        reward.Loot.m_goldInfo ??= new GoldLootInfo { m_lootType = LOOT_TYPE.LOOT_TYPE_GOLD, m_goldAmount = 0 };
+        reward.Loot.m_lootRarityList ??= new LootRarityList { m_loot = [] };
+
         // Serialize the loot.
         if (!_serializer.Serialize(reward.Loot, 5, out var lootData)) {
             Logger.Error("{0} {1} failed to serialize loot data.",
