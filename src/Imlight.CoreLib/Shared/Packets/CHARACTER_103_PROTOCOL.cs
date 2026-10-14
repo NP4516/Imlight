@@ -441,4 +441,29 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Sent by the badge commands: the badge service runs the action through its normal award, counter and title paths and replies to the player with a server message.
+    /// </summary>
+    public sealed class MSG_BADGECOMMAND : IServerMessage {
+
+        public byte MessageOrder { get; } = 41;
+        public byte ServiceID { get; } = 103;
+
+        /// <summary>
+        /// One of: grant, progress, list, reset, title.
+        /// </summary>
+        public string Action;
+
+        /// <summary>
+        /// The badge id or name for grant, the counter key for progress, the title key for title.
+        /// </summary>
+        public string Argument;
+
+        /// <summary>
+        /// The amount added to the counter; only used by progress.
+        /// </summary>
+        public ulong Amount;
+
+    }
+
 }

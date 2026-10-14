@@ -50,4 +50,14 @@ public class ServerBadgeBehavior {
     public List<uint> ClaimedRewards { get; set; } = [];
     public List<uint> PendingOvercount { get; set; } = [];
 
+    public void Reset() {
+        Counters.Clear();
+        Earned.Clear();
+        SelectedBadgeId = 0;
+        NextAwardSequence = 0;
+        NewBadges.Clear();
+        ClaimedRewards.Clear();
+        PendingOvercount.Clear();
+    }
+
 }

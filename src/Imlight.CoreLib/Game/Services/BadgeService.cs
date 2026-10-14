@@ -38,6 +38,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.Cryptography;
@@ -65,6 +66,8 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
     private static readonly uint s_badgeDoesNotExist = StringHash.Compute("BadgeDoesNotExist");
     private static readonly uint s_badgeNotComplete = StringHash.Compute("BadgeNotComplete");
 
+    private const int MaxListedBadges = 25;
+
     private readonly HashSet<uint> _warnedUnknownBadges = [];
 
     protected static Props Props(SessionActor parentActor)
@@ -82,9 +85,7 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
         var changes = new BadgeEngine(wizard, catalog).Execute(engine => engine.Recheck(definition => MeetsRequirements(wizard, definition)));
         FinishChanges(wizard, changes, sendBatches: false);
 
-        foreach (var badgeMessage in BadgeWire.Build(wizard, catalog, BadgeView.GetHeld(wizard.BadgeBehavior, catalog), full: true)) {
-            SendToSocket(badgeMessage);
-        }
+        SendFullList(wizard, catalog);
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_BADGEEVENT))]
@@ -185,12 +186,7 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
 
         SendToSocket(new GAME_5_PROTOCOL.MSG_SELECT_BADGE { BadgeNameID = GetClientBadgeId(requestedId), Error = 0 });
 
-        // The client rebuilds a name tag only on MSG_NEWTITLE or a new object, so the sender is included.
-        ZoneBroadcast(new WIZARD_12_PROTOCOL.MSG_NEWTITLE {
-            GlobalID = wizard.GameObjectID,
-            PvPIconID = wizard.PlayerNameBehavior.PvpIconId,
-            Title = wizard.PlayerNameBehavior.BadgeTitle
-        }, isSelfless: false);
+        BroadcastTitle(wizard);
     }
 
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_REQUESTPLAYERBADGE))]
@@ -225,6 +221,44 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
             BadgeName = title,
             BadgeDescription = info
         });
+    }
+
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_BADGECOMMAND))]
+    private void ReceiveBadgeCommand(CHARACTER_103_PROTOCOL.MSG_BADGECOMMAND message) {
+        var wizard = GetActiveWizard();
+        var argument = message.Argument?.Trim() ?? string.Empty;
+        if (message.Action == "title") {
+            wizard.SetBadgeOverride(argument);
+            BroadcastTitle(wizard);
+            CommandReply($"Set the badge title to {argument}.");
+
+            return;
+        }
+
+        var catalog = BadgeCatalog.Current;
+        if (!catalog.IsReady) {
+            CommandReply("The badge catalog is not loaded.");
+
+            return;
+        }
+
+        switch (message.Action) {
+            case "grant":
+                CommandGrant(wizard, catalog, argument);
+                break;
+            case "progress":
+                CommandProgress(wizard, catalog, argument, message.Amount);
+                break;
+            case "list":
+                CommandList(wizard, catalog);
+                break;
+            case "reset":
+                CommandReset(wizard, catalog);
+                break;
+            default:
+                CommandReply($"Unknown badge action '{message.Action}'.");
+                break;
+        }
     }
 
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_REQUESTNEWBADGE))]
@@ -274,6 +308,89 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
                 zoneActor: SessionActor.GetZoneActor());
         }
     }
+
+    private void SendFullList(Wizard wizard, BadgeCatalog catalog) {
+        foreach (var badgeMessage in BadgeWire.Build(wizard, catalog, BadgeView.GetHeld(wizard.BadgeBehavior, catalog), full: true)) {
+            SendToSocket(badgeMessage);
+        }
+    }
+
+    private void BroadcastTitle(Wizard wizard) {
+        // The client rebuilds a name tag only on MSG_NEWTITLE or a new object, so the sender is included.
+        ZoneBroadcast(new WIZARD_12_PROTOCOL.MSG_NEWTITLE {
+            GlobalID = wizard.GameObjectID,
+            PvPIconID = wizard.PlayerNameBehavior.PvpIconId,
+            Title = wizard.PlayerNameBehavior.BadgeTitle
+        }, isSelfless: false);
+    }
+
+    private void CommandReply(string text)
+        => SendToSocket(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE { Message = text, Modal = 0 });
+
+    private void CommandGrant(Wizard wizard, BadgeCatalog catalog, string idOrName) {
+        BadgeDefinition definition;
+        var found = uint.TryParse(idOrName, NumberStyles.None, CultureInfo.InvariantCulture, out var id)
+            ? catalog.TryGet(id, out definition)
+            : catalog.TryGetByName(idOrName, out definition);
+        if (!found) {
+            CommandReply($"No badge matches '{idOrName}'.");
+
+            return;
+        }
+
+        var changes = new BadgeEngine(wizard, catalog).Execute(engine => engine.Award(definition.Id));
+        FinishChanges(wizard, changes, sendBatches: true);
+        CommandReply(changes.Completed.Count > 0
+            ? $"Granted {DescribeBadge(definition)}."
+            : $"{DescribeBadge(definition)} was not granted: it is already earned or retired.");
+    }
+
+    private void CommandProgress(Wizard wizard, BadgeCatalog catalog, string counterKey, ulong amount) {
+        if (catalog.GetFamily(counterKey).Count == 0) {
+            CommandReply($"'{counterKey}' is not a badge counter key.");
+
+            return;
+        }
+
+        var changes = new BadgeEngine(wizard, catalog).Execute(engine => engine.Increment(counterKey, amount));
+        FinishChanges(wizard, changes, sendBatches: true);
+        CommandReply($"Counter {counterKey} is now {wizard.BadgeBehavior.Counters.GetValueOrDefault(counterKey)}.");
+    }
+
+    private void CommandList(Wizard wizard, BadgeCatalog catalog) {
+        var state = wizard.BadgeBehavior;
+        var held = BadgeView.GetHeld(state, catalog).Where(d => d.Id != BadgeCatalog.NoTitleId).ToList();
+        if (held.Count == 0) {
+            CommandReply("You hold no badges.");
+
+            return;
+        }
+
+        foreach (var definition in held.Take(MaxListedBadges)) {
+            var progress = BadgeView.IsComplete(state, definition) ? "complete" : $"{BadgeView.GetProgress(state, definition)}/{definition.Max}";
+            CommandReply($"{DescribeBadge(definition)}: {definition.Description} [{progress}]");
+        }
+
+        if (held.Count > MaxListedBadges) {
+            CommandReply($"... and {held.Count - MaxListedBadges} more.");
+        }
+    }
+
+    private void CommandReset(Wizard wizard, BadgeCatalog catalog) {
+        var hadTitle = wizard.BadgeBehavior.SelectedBadgeId != 0 || !wizard.PlayerNameBehavior.BadgeTitle.IsEmpty;
+        wizard.BadgeBehavior.Reset();
+        Persist(wizard);
+        if (hadTitle) {
+            wizard.SetBadgeOverride(string.Empty);
+            BroadcastTitle(wizard);
+        }
+
+        SendFullList(wizard, catalog);
+        CommandReply("Your badges were reset.");
+    }
+
+    private static string DescribeBadge(BadgeDefinition definition)
+        => string.IsNullOrEmpty(definition.DisplayName) ? definition.Id.ToString(CultureInfo.InvariantCulture) : $"{definition.DisplayName} ({definition.Id})";
 
     private static uint GetClientBadgeId(uint selectedBadgeId) => selectedBadgeId != 0 ? selectedBadgeId : BadgeCatalog.NoTitleId;
 
