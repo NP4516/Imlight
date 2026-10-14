@@ -302,8 +302,8 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
         var item = wizEquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount);
 
-        SendEquipItem(item, "Mount");
         SendAddEffects(addedEffects);
+        BroadcastEquipItem(item);
         _cachedMountId = 0;
     }
 
@@ -315,9 +315,16 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
 
         var wizard = GetActiveWizard();
-        if (!wizard.InventoryToEquipmentTransfer(_cachedMountId, out var _, out var _)) {
+        if (!wizard.InventoryToEquipmentTransfer(_cachedMountId, out var addedEffects, out var _)) {
             Logger.Warning("Equip failed on item {0}", Logger.Args(_cachedMountId));
             return;
+        }
+
+        var item = wizard.EquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount);
+
+        SendAddEffects(addedEffects);
+        if (item != null) {
+            BroadcastEquipItem(item);
         }
 
         _cachedMountId = 0;
@@ -345,18 +352,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             return;
         }
 
-        SendUnequipItem("Mount", slot, _cachedMountId);
         SendRemoveEffects(removedEffects);
+        BroadcastUnequipItem(slot);
     }
 
-    private void SendEquipItem(WizClientObjectItem item, string slotName) {
-        // Confirm to the player that we've equipped their item server side.
-        SendToSocket(new GAME_5_PROTOCOL.MSG_EQUIPITEM() {
-            ItemID = item.m_globalID,
-            SlotName = slotName,
-            IsEquip = 1
-        });
-
+    private void BroadcastEquipItem(WizClientObjectItem item) {
         // Serialize item and broadcast equip action to other players.
         var pubItem = ItemHelper.GetPublicItem(item);
 
@@ -372,14 +372,16 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     }
 
     private void SendUnequipItem(ByteString slotName, byte slot, ulong itemId) {
-        // This one goes to the client.
         SendToSocket(new GAME_5_PROTOCOL.MSG_EQUIPITEM() {
             ItemID = itemId,
             SlotName = slotName,
             IsEquip = 0
         });
 
-        // This one goes to the zone.
+        BroadcastUnequipItem(slot);
+    }
+
+    private void BroadcastUnequipItem(byte slot) {
         ZoneBroadcast(new GAME_5_PROTOCOL.MSG_EQUIPMENTBEHAVIOR_PUBLICUNEQUIPITEM() {
             GlobalID = GetActiveGameObject().m_globalID,
             IndexToRemove = slot
