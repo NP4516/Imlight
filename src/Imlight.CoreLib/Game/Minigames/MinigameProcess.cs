@@ -253,8 +253,7 @@ internal sealed class MinigameProcess : Process {
     private Imlight.CoreLib.WizardData.Models.Misc.ScoreTracking StoreScore(Imlight.CoreLib.WizardData.Models.Misc.ScoreTracking scoreTrack) {
         try {
             return ScoreTrackingCollection.AddScoreTracking(scoreTrack);
-        }
-        catch (Exception ex) {
+        } catch (Exception ex) {
             // The rewards were granted already, so the window still opens with this score on the board.
             Logger.Error("{0} {1} failed to store the score {2}: {3}",
                 Logger.Args(nameof(MinigameProcess), ProcessName, scoreTrack.GameScore, ex.GetBaseException().Message));
@@ -275,8 +274,7 @@ internal sealed class MinigameProcess : Process {
             if (response?.Wizard is not null) {
                 return response;
             }
-        }
-        catch (Exception ex) {
+        } catch (Exception ex) {
             reason = ex.GetBaseException().Message;
         }
 
