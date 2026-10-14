@@ -485,9 +485,7 @@ public class Wizard {
         }
 
         // Persistent save.
-        SavePet(pet);
-
-        return true;
+        return SavePet(pet);
     }
 
     /// <summary>
@@ -495,8 +493,15 @@ public class Wizard {
     /// </summary>
     /// <param name="pet">The pet item.</param>
     /// <returns>True if the stored pet was found and saved.</returns>
-    public bool SavePet(WizClientObjectItem pet)
-        => WizardItemCollection.SavePetBehavior(pet);
+    public bool SavePet(WizClientObjectItem pet) {
+        if (WizardItemCollection.SavePetBehavior(pet)) {
+            return true;
+        }
+
+        Logger.Warning("Pet {PetId} of {CharId} is not stored, so its state was not saved.", Logger.Args(pet?.m_globalID.Full, CharId));
+
+        return false;
+    }
 
     public bool RemoveItemFromInventory(ulong itemId) {
         var success = InventoryBehavior.RemoveItem(itemId, out var item);
