@@ -26,7 +26,7 @@
  * wizard.BadgeBehavior.Earned[badgeId] = new EarnedBadge { AwardSequence = 1, CompletedAtUnix = now };
  *
  * NOTE:
- * 
+ *
  *
  * TODO:
  *
