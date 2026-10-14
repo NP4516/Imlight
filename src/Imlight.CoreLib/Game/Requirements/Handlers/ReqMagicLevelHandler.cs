@@ -23,21 +23,20 @@
  * Evaluates ReqMagicLevel: the level of the player against a number.
  * 
  * USAGE EXAMPLE:
- * Evaluated by RequirementDispatcher; the PvP leagues list it as their entry level.
- * 
+ * Evaluated by RequirementDispatcher; quests and the PvP leagues list it as their entry level.
+ *
  * NOTE:
- * Handlers are discovered by reflection. Only the requirement without a school is known: the level of the player.
- * 
+ * Handlers are discovered by reflection. The client compares the level of the player's school behavior and never
+ * reads the school the requirement names (ReqMagicLevel::GetCurrentValue 0x14213ab50), so the school is ignored here too.
+ *
  * TODO:
- * Is a ReqMagicLevel naming a school the level in that school?
- * 
+ *
  * Created by: Jay
  * Version: KALI 1.0
  * Last Updated: 10/14/2026
  */
 
 using Imcodec.ObjectProperty.TypeCache;
-using Imlight.Common;
 
 namespace Imlight.CoreLib.Game.Requirements.Handlers;
 
@@ -46,13 +45,6 @@ internal sealed class ReqMagicLevelHandler : BaseRequirementHandler<ReqMagicLeve
     public override bool Evaluate(IRequirementContext context) {
         var magicSchool = context.GetWizard()?.MagicSchoolBehavior;
         if (magicSchool is null) {
-            return false;
-        }
-
-        if (!Requirement.m_magicSchool.IsEmpty) {
-            Logger.Warning("ReqMagicLevel for the school {School} is not supported; it answers false.",
-                Logger.Args(Requirement.m_magicSchool.ToString()));
-
             return false;
         }
 
