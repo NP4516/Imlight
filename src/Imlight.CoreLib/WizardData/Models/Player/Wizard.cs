@@ -1594,13 +1594,29 @@ public class Wizard {
     }
 
     private void AfterDatabaseLoadPets() {
-        // Pets hatched before genes existed get theirs on this first load.
+        // Pets hatched before genes existed get theirs on this first load, saved together.
+        List<WizClientObjectItem> completedPets = [];
         foreach (var pet in (InventoryBehavior?.Items ?? []).Concat(EquipmentBehavior?.EquippedItems ?? [])) {
             try {
-                InitializePet(pet);
+                if (PetProgression.EnsureInitialized(pet)) {
+                    completedPets.Add(pet);
+                }
             } catch (Exception ex) {
                 Logger.Error("Could not complete pet {PetId} of {CharId}: {Message}", Logger.Args(pet.m_globalID.Full, CharId, ex.Message));
             }
+        }
+
+        if (completedPets.Count == 0) {
+            return;
+        }
+
+        try {
+            var saved = WizardItemCollection.SavePetBehaviors(CharId, completedPets);
+            if (saved != completedPets.Count) {
+                Logger.Warning("Completed {Count} pets of {CharId}, but only {Saved} are stored.", Logger.Args(completedPets.Count, CharId, saved));
+            }
+        } catch (Exception ex) {
+            Logger.Error("Could not save the completed pets of {CharId}: {Message}", Logger.Args(CharId, ex.Message));
         }
     }
 
