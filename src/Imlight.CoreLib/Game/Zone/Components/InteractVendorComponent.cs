@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 10/14/2026
  */
 
 using System.Collections.Generic;
@@ -65,7 +65,10 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
     public string InteractWizBang => "Registrar";
     public string DisplayKey      => "GUI_ShopOptionEquipment";
 
+    private const string DefaultShopTitle = "KrocNPC_00000013";
+
     private List<GID> _inventory;
+    private string _shopTitle;
 
     public static bool ShouldAttachToEntity(CoreTemplate template)
         // Attach if the template is an NPC and has an inventory in Dragon database,
@@ -84,6 +87,7 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
         }
 
         _inventory = inventory.Inventory;
+        _shopTitle = inventory.ShopTitle;
     }
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard _)
@@ -107,7 +111,7 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
     private void SendShopOfferings(IActorRef playerActor) {
         var shopOffering = new WizShopOffering() {
             m_sellModifier = 0.05f,
-            m_shopTitle = "KrocNPC_00000013",
+            m_shopTitle = string.IsNullOrWhiteSpace(_shopTitle) ? DefaultShopTitle : _shopTitle,
             m_shopList = _inventory,
 
             // Changes the type of currency that is used
