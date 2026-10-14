@@ -358,8 +358,7 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
 
     private static TradeError CheckHold(Wizard wizard, Guid tradeId) {
         // Checked in memory before anything is written, so a player who cannot hold the swap is refused cleanly.
-        var escrow = TradeEscrowCollection.Peek(tradeId);
-        if (escrow is null || (escrow.CharIdA != wizard.CharId && escrow.CharIdB != wizard.CharId)) {
+        if (!TryPeek(tradeId, out var escrow) || (escrow.CharIdA != wizard.CharId && escrow.CharIdB != wizard.CharId)) {
             return TradeError.Failed;
         }
 
@@ -414,11 +413,24 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
         return true;
     }
 
+    private static bool TryPeek(Guid tradeId, out TradeEscrow escrow) {
+        try {
+            escrow = TradeEscrowCollection.Peek(tradeId);
+
+            return escrow is not null;
+        } catch (Exception ex) {
+            // An unreadable document answers the step as failed, so the directory decides at once.
+            Logger.Error("Trade {TradeId}: the escrow document could not be read. {Exception}", Logger.Args(tradeId, ex));
+            escrow = null;
+
+            return false;
+        }
+    }
+
     private static bool LandedAnyway(Guid tradeId, ulong charId, TradeStep step, out List<uint> cards, out List<uint> given) {
         cards = [];
         given = [];
-        var escrow = TradeEscrowCollection.Peek(tradeId);
-        if (escrow is null) {
+        if (!TryPeek(tradeId, out var escrow)) {
             return false;
         }
 
