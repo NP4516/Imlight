@@ -70,9 +70,11 @@ internal static class HousingZones {
     private const string StructuresDirectory = "ObjectData/Housing/Structures/";
     private const string DormLayoutFile = "DormObjects.xml";
     private const string ItemLimitOverrideKey = "Housing.ItemLimitOverride";
+    private const string MaxBlobSlotsKey = "Housing.MaxBlobSlots";
 
     private static Catalog s_catalog;
     private static int s_privateZoneTestRegistered;
+    private static int s_slotClampWarned;
 
     /// <summary>
     /// The Dorm Room every character owns.
@@ -80,11 +82,32 @@ internal static class HousingZones {
     internal static HousingZoneInfo DormInfo => GetCatalog().Dorm;
 
     /// <summary>
+    /// The most blob entries a house may hold, removed slots included: <c>Housing.MaxBlobSlots</c>,
+    /// held to what fits in one blob.
+    /// </summary>
+    internal static int MaxBlobSlots {
+        get {
+            var configured = ConfigurationManager.Settings[MaxBlobSlotsKey].AsInt();
+            if (configured > 0 && configured <= HouseBlobCodec.MaxSlotsThatFit) {
+                return configured;
+            }
+
+            if (configured > HouseBlobCodec.MaxSlotsThatFit && Interlocked.Exchange(ref s_slotClampWarned, 1) == 0) {
+                Logger.Warning("{Key} is {Configured}, but a blob holds at most {Max} entries. Using the maximum.",
+                    Logger.Args(MaxBlobSlotsKey, configured, HouseBlobCodec.MaxSlotsThatFit));
+            }
+
+            return HouseBlobCodec.MaxSlotsThatFit;
+        }
+    }
+
+    /// <summary>
     /// Builds the zone index and registers house zones as always-private attach targets.
     /// Throws when the Dorm Room template is missing from the game data.
     /// </summary>
     internal static void Preload() {
         GetCatalog();
+        _ = MaxBlobSlots;
 
         if (Interlocked.Exchange(ref s_privateZoneTestRegistered, 1) == 0) {
             ZoneInstanceOwners.RegisterPrivateZoneTest(IsHousingZone);
