@@ -268,27 +268,24 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        // A crash between the two writes loses the item instead of duplicating it.
-        if (!house.TryRemove(slot, out var removed, out var version)) {
+        var item = HousingRules.CreateItem(wizard, templateId);
+        if (item is null || !wizard.InventoryBehavior.AddItem(item)) {
             RefusePickUp(house);
 
             return;
         }
 
-        if (!wizard.AddItemToInventory(templateId, out var item)) {
-            house.TryRestore(slot, removed, out _);
+        // The new item and the emptied slot are written in one transaction, so a crash between them cannot lose the item.
+        if (!house.TryRemove(slot, out _, out var version, stored => HouseCollection.SaveWithBackpack(stored, wizard, item))) {
+            wizard.InventoryBehavior.RemoveItem(item);
             RefusePickUp(house);
 
             return;
         }
 
         if (!ItemSync.SendAdded(SessionActor.ActorRef, wizard, item)) {
-            wizard.RemoveItemFromInventory(item.m_globalID);
-            WizardItemCollection.RemoveItem(wizard.CharId, item.m_globalID);
-            house.TryRestore(slot, removed, out _);
-            RefusePickUp(house);
-
-            return;
+            Logger.Error("Could not tell the client about picked up item {ItemId} of character {CharId}.",
+                Logger.Args(item.m_globalID, wizard.CharId));
         }
 
         ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEHOUSINGOBJECT {

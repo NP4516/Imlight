@@ -48,7 +48,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.Types;
 using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Housing;
 
@@ -106,6 +108,23 @@ internal static class HousingRules {
     /// <returns><c>true</c> when the template has a limit and <paramref name="copies"/> reaches it.</returns>
     internal static bool TemplateCopyLimitReached(WizItemTemplate template, int copies)
         => template.m_itemLimit > 0 && copies >= template.m_itemLimit;
+
+    /// <summary>
+    /// Creates the backpack item for an object that is picked up. The item is not added to the backpack.
+    /// </summary>
+    /// <param name="wizard">The character who picks the object up.</param>
+    /// <param name="templateId">The object's template id.</param>
+    /// <returns>The new item, or <c>null</c> when the template is not an item.</returns>
+    internal static WizClientObjectItem CreateItem(Wizard wizard, uint templateId) {
+        if (CoreObjectFactory.FinalizeCoreObject(templateId) is not WizClientObjectItem item) {
+            return null;
+        }
+
+        item.m_characterId = (GID) wizard.CharId;
+        CoreObjectFactory.InitializeCoreObjectBehaviors(item, item.m_templateID);
+
+        return item;
+    }
 
     /// <summary>
     /// Counts the placed objects of a template.
