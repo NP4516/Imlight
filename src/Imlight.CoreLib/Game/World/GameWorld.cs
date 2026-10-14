@@ -355,7 +355,7 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
     private IActorRef CreateInstanceContainer(ulong ownerId) {
         var zoneActorName = $"{nameof(InstanceContainer)}_{ownerId}"; // Append the owner ID to the zone name.
 
-        var instanceContainer = Context.ActorOf(InstanceContainer.Props(ownerId), zoneActorName);
+        var instanceContainer = Context.ActorOf(InstanceContainer.Props(ownerId, PvP.PvPRegistry.IsMatchInstanceOwner(ownerId)), zoneActorName);
         _instanceContainers.Add(ownerId, instanceContainer);
 
         // Log the new instance container creation.

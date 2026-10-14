@@ -369,6 +369,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         Timers.Cancel(ConfirmTimerKey(match.Id));
         match.ArenaZone = arenaZone;
         match.State = PvPMatchState.Travelling;
+        PvPRegistry.SetMatchInstanceOwner(match.InstanceOwnerId, true);
 
         Timers.StartSingleTimer(
             ArrivalTimerKey(match.Id),
@@ -538,6 +539,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         Timers.Cancel(ConfirmTimerKey(match.Id));
         Timers.Cancel(ArrivalTimerKey(match.Id));
         _matches.Remove(match.Id);
+        PvPRegistry.SetMatchInstanceOwner(match.InstanceOwnerId, false);
 
         foreach (var entry in match.Entries) {
             _matchIdByPlayer.Remove(entry.CharId);

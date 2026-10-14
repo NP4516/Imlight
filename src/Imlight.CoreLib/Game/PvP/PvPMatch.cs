@@ -28,8 +28,8 @@
  * 
  * NOTE:
  * The queue entries carry the zone, display name and location each player queued from, which is where a
- * finished match sends them back. The instance owner id has the top bit set, so it never equals a character id.
- * The lobby session of a player is the one that was sent to the arena; a presence from another session in the
+ * finished match sends them back. The instance owner id has the top bit set, which a character id can have too,
+ * so only PvPRegistry says which owner ids belong to a match. The lobby session of a player is the one that was sent to the arena; a presence from another session in the
  * arena zone is the arrival.
  * 
  * TODO:
@@ -68,9 +68,6 @@ internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
     public Dictionary<ulong, IActorRef> LobbySessions { get; } = [];
 
     public bool AllArrived => _arrived.Count == Entries.Count;
-
-    public static bool IsInstanceOwnerId(ulong ownerId)
-        => (ownerId & InstanceOwnerFlag) != 0;
 
     public bool AllAccepted => _accepted.Count == Entries.Count;
 

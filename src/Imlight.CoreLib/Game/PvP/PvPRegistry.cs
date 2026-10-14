@@ -46,12 +46,16 @@ internal static class PvPRegistry {
 
     private static readonly ConcurrentDictionary<ulong, byte> s_queued = new();
     private static readonly ConcurrentDictionary<ulong, byte> s_inMatch = new();
+    private static readonly ConcurrentDictionary<ulong, byte> s_matchInstanceOwners = new();
 
     public static bool IsQueued(ulong charId)
         => s_queued.ContainsKey(charId);
 
     public static bool IsInMatch(ulong charId)
         => s_inMatch.ContainsKey(charId);
+
+    public static bool IsMatchInstanceOwner(ulong ownerId)
+        => s_matchInstanceOwners.ContainsKey(ownerId);
 
     internal static void SetQueued(ulong charId, bool isQueued) {
         if (isQueued) {
@@ -66,6 +70,14 @@ internal static class PvPRegistry {
             s_inMatch[charId] = 0;
         } else {
             s_inMatch.TryRemove(charId, out _);
+        }
+    }
+
+    internal static void SetMatchInstanceOwner(ulong ownerId, bool isOwner) {
+        if (isOwner) {
+            s_matchInstanceOwners[ownerId] = 0;
+        } else {
+            s_matchInstanceOwners.TryRemove(ownerId, out _);
         }
     }
 
