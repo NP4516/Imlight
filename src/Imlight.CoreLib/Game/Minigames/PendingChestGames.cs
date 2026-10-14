@@ -30,7 +30,8 @@
  * NOTE:
  * A zone transfer ends the session and the client attaches with a new one, so the services of the
  * clicking session are gone when the minigame zone is entered. The entries are runtime state and are lost
- * with the server; a character's next attach takes its entry out.
+ * with the server; a character's next attach takes its entry out. An entry whose player never arrived is
+ * dropped by the next TryAdd once it is older than the arrival window.
  *
  * TODO:
  *
@@ -39,6 +40,7 @@
  * Last Updated: 10/14/2026
  */
 
+using System;
 using System.Collections.Concurrent;
 
 namespace Imlight.CoreLib.Game.Minigames;
@@ -48,12 +50,29 @@ namespace Imlight.CoreLib.Game.Minigames;
 /// </summary>
 internal static class PendingChestGames {
 
-    private static readonly ConcurrentDictionary<ulong, ChestGameContext> s_pending = new();
+    // The chest holds its reservation for the same time before it lets another player in.
+    internal static readonly TimeSpan ArrivalWindow = TimeSpan.FromMinutes(2);
 
-    internal static bool TryAdd(ChestGameContext context)
-        => s_pending.TryAdd(context.CharId, context);
+    private static readonly ConcurrentDictionary<ulong, Entry> s_pending = new();
 
-    internal static bool TryTake(ulong charId, out ChestGameContext context)
-        => s_pending.TryRemove(charId, out context);
+    internal static bool TryAdd(ChestGameContext context) {
+        var now = DateTime.UtcNow;
+        foreach (var entry in s_pending) {
+            if (now - entry.Value.AddedAt > ArrivalWindow) {
+                s_pending.TryRemove(entry);
+            }
+        }
+
+        return s_pending.TryAdd(context.CharId, new Entry(context, now));
+    }
+
+    internal static bool TryTake(ulong charId, out ChestGameContext context) {
+        var taken = s_pending.TryRemove(charId, out var entry);
+        context = entry.Context;
+
+        return taken;
+    }
+
+    private readonly record struct Entry(ChestGameContext Context, DateTime AddedAt);
 
 }

@@ -65,7 +65,7 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
     private const string LeaseTimerKey = "chest-lease";
 
     // How long a chest waits for the game to start after its player was sent.
-    private static readonly TimeSpan ReservationLease = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ReservationLease = PendingChestGames.ArrivalWindow;
     private static readonly string[] s_minigameNames = ["Shockalock", "CatchAKey"];
 
     private enum ChestState {
