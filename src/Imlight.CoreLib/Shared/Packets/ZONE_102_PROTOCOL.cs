@@ -1234,7 +1234,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// </summary>
     public sealed class MSG_CHEST_GAME_STARTED : IServerMessage {
 
-        public byte MessageOrder { get; } = 79;
+        public byte MessageOrder { get; } = 85;
         public byte ServiceID { get; } = 102;
 
         public ulong CharId;
@@ -1247,7 +1247,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// </summary>
     public sealed class MSG_CHEST_GAME_RESULT : IServerMessage {
 
-        public byte MessageOrder { get; } = 80;
+        public byte MessageOrder { get; } = 86;
         public byte ServiceID { get; } = 102;
 
         public ulong CharId;
@@ -1261,7 +1261,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// </summary>
     public sealed class MSG_CHEST_GAME_ABORTED : IServerMessage {
 
-        public byte MessageOrder { get; } = 81;
+        public byte MessageOrder { get; } = 87;
         public byte ServiceID { get; } = 102;
 
         public ulong CharId;
@@ -1273,7 +1273,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// </summary>
     public sealed class MSG_CHEST_LEASE_EXPIRED : IServerMessage {
 
-        public byte MessageOrder { get; } = 82;
+        public byte MessageOrder { get; } = 88;
         public byte ServiceID { get; } = 102;
 
     }
