@@ -228,7 +228,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         // The egg and the pet item share a global id.
         var pet = wizard.FindPetItem(egg.m_globalID);
         ClientPetItemBehavior petBehavior = null;
-        if (pet is not null && PetProgression.Hatch(pet, (uint) egg.m_timeFinished)) {
+        if (pet is not null && PetProgression.Hatch(pet, (uint) Math.Min(egg.m_timeFinished, DateTimeOffset.UtcNow.ToUnixTimeSeconds()))) {
             wizard.SavePet(pet);
             CoreObjectFactory.FindBehaviorInstance(pet, out petBehavior);
         } else {
