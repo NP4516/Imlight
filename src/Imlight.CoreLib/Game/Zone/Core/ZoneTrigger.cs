@@ -38,13 +38,14 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 08/21/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
@@ -63,6 +64,8 @@ namespace Imlight.CoreLib.Game.Zone.Core;
 /// <param name="zone">The zone that this trigger is a part of.</param>
 public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger) 
     : ZoneEntity(null, null, null, zoneRef, zone) {
+
+    private const double MinPacedWaitSeconds = 1;
 
     public Trigger TriggerData { get; init; } = trigger;
     private readonly Dictionary<IActorRef, DateTime> _cooldowns = [];
@@ -121,13 +124,9 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
             };
         }
 
-        // A result that posts one of this trigger's own fire events would fire it again without end,
-        // and the event that fired it has already reached every trigger and quest goal.
-        if (results?.m_results is { Count: > 0 } && results.m_results.Any(IsSelfPost)) {
-            results = new ResultList {
-                m_results = results.m_results.Where(result => !IsSelfPost(result)).ToList()
-            };
-        }
+        // A result that posts one of this trigger's own fire events would fire it again without end unless a
+        // wait comes first, and the event that fired it has already reached every trigger and quest goal.
+        results = WithoutUnpacedSelfPosts(results, TriggerData.m_fireEvents);
 
         ResultDispatcher.ExecuteResults(Context, results, message.PlayerActor, message.PlayerGameObject,
                                        Sender, ZoneRef, triggerName: TriggerData.m_triggerName,
@@ -142,8 +141,30 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
         => requirements?.m_requirements is { } list
         && list.Any(r => r is null || r is RequirementList nested && HasUndecodableRequirement(nested));
 
-    private bool IsSelfPost(Result result)
-        => result is ResPostEvent post && TriggerData.m_fireEvents.Any(x => x == post.m_eventName);
+    internal static ResultList WithoutUnpacedSelfPosts(ResultList results, IEnumerable<ByteString> fireEvents) {
+        if (results?.m_results is not { Count: > 0 } || fireEvents is null) {
+            return results;
+        }
+
+        // A self-post after a wait is a loop, one without is a spin. A wait with requirements of its own can be
+        // skipped, which leaves the post unpaced.
+        var paced = false;
+        var kept = new List<Result>(results.m_results.Count);
+        foreach (var result in results.m_results) {
+            if (result is ResWait wait && wait.m_secondsToWait >= MinPacedWaitSeconds
+                && wait.m_requirements?.m_requirements is not { Count: > 0 }) {
+                paced = true;
+            }
+
+            if (!paced && result is ResPostEvent post && fireEvents.Any(x => x == post.m_eventName)) {
+                continue;
+            }
+
+            kept.Add(result);
+        }
+
+        return kept.Count == results.m_results.Count ? results : new ResultList { m_results = kept };
+    }
 
     private bool CooldownCheck(IActorRef playerRef) {
         if (_cooldowns.TryGetValue(playerRef, out var lastTriggered)) {
