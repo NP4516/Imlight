@@ -17,6 +17,7 @@
  */
 
 using Akka.Actor;
+using Imlight.CoreLib.Game.Minigames;
 using Imlight.CoreLib.Shared.Networking;
 
 namespace Imlight.CoreLib.Shared.Packets;
@@ -36,6 +37,7 @@ internal sealed class PROCESS_107_PROTOCOL : IServerProtocol {
         public byte MinigameIndex;
         public string MinigameName;
         public IActorRef Owner;
+        public ChestGameContext ChestGame;
 
     }
 

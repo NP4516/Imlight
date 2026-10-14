@@ -1229,4 +1229,53 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Sent to a silver chest by the minigame process when the player it reserved the chest for is in the chest game.
+    /// </summary>
+    public sealed class MSG_CHEST_GAME_STARTED : IServerMessage {
+
+        public byte MessageOrder { get; } = 79;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharId;
+
+    }
+
+    /// <summary>
+    /// Sent to a silver chest by the minigame process when the chest game was played to the end. The chest is
+    /// used up, won or lost.
+    /// </summary>
+    public sealed class MSG_CHEST_GAME_RESULT : IServerMessage {
+
+        public byte MessageOrder { get; } = 80;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharId;
+        public bool Won;
+
+    }
+
+    /// <summary>
+    /// Sent to a silver chest when its chest game did not start or ended without a result, so the player's
+    /// reservation of the chest ends.
+    /// </summary>
+    public sealed class MSG_CHEST_GAME_ABORTED : IServerMessage {
+
+        public byte MessageOrder { get; } = 81;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharId;
+
+    }
+
+    /// <summary>
+    /// Timer-fired message to a silver chest: the player it reserved the chest for never reached the game.
+    /// </summary>
+    public sealed class MSG_CHEST_LEASE_EXPIRED : IServerMessage {
+
+        public byte MessageOrder { get; } = 82;
+        public byte ServiceID { get; } = 102;
+
+    }
+
 }
