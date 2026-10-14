@@ -297,7 +297,7 @@ internal static class HouseBlobCodec {
     /// <param name="yawRadians">The yaw in radians.</param>
     /// <returns>The object, or <c>null</c> when the template id is 0 or too large, or a value is not finite or does not fit.</returns>
     internal static HousingBlobObject FromPlacement(uint templateId, float x, float y, float z, float yawRadians) {
-        if (templateId == 0 || templateId > TemplateIdMask || !float.IsFinite(z) || !float.IsFinite(yawRadians)
+        if (templateId == 0 || templateId > TemplateIdMask || !IsValidHeight(z) || !float.IsFinite(yawRadians)
             || !PackLocation(x, y, out var packedLocation)) {
             return null;
         }
@@ -335,7 +335,7 @@ internal static class HouseBlobCodec {
                                                   bool useExtendedYaw,
                                                   float scale,
                                                   int brightness) {
-        if (!float.IsFinite(z) || !float.IsFinite(yawRadians) || !float.IsFinite(scale)
+        if (!IsValidHeight(z) || !float.IsFinite(yawRadians) || !float.IsFinite(scale)
             || scale < MinScale || scale > MaxScale || brightness < 0 || brightness > MaxBrightness
             || !PackLocation(x, y, out var packedLocation)) {
             return null;
@@ -567,6 +567,9 @@ internal static class HouseBlobCodec {
 
         return true;
     }
+
+    private static bool IsValidHeight(float z)
+        => float.IsFinite(z) && MathF.Abs(z) <= MaxCoordinateMagnitude;
 
     private static float UnpackCoordinate(uint packed)
         => packed < 0x8000 ? packed : -(int) (packed - 0x8000);
