@@ -69,6 +69,7 @@ public class Wizard {
     public string MarkedZoneDisplayName { get; set; }
     public uint LastLoginTime { get; set; }
     public long TimeHomeLastClicked { get; set; }
+    public ulong DormLotGid { get; set; }
     public byte World { get; set; }
     public Vector3 Location {
         get => GameObject.m_location;
@@ -129,6 +130,8 @@ public class Wizard {
     [JsonIgnore] public ushort GameServerPort;
     [JsonIgnore] public string QueuedZoneName;
     [JsonIgnore] public string QueuedZoneLocation;
+    [JsonIgnore] public ulong AttachedLotGid;
+    [JsonIgnore] public ulong QueuedLotGid;
     [JsonIgnore] internal DynamodSet DynamodSet { get; set; }
     [JsonIgnore] internal bool IsInCombatGrace { get; set; }
     [JsonIgnore] internal bool IsInDuel { get; set; }

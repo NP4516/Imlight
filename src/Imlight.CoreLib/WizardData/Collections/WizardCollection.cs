@@ -286,6 +286,15 @@ public static class WizardCollection {
     }
 
     /// <summary>
+    /// Stores the lot of a character's dorm room.
+    /// </summary>
+    /// <param name="character">The character to update.</param>
+    /// <param name="dormLotGid">The lot of the character's dorm room.</param>
+    /// <returns><c>false</c> when the character could not be updated.</returns>
+    public static bool UpdateCharacterDormLot(Wizard character, ulong dormLotGid)
+        => UpdateCharacter(character.CharId, existingCharacter => existingCharacter.DormLotGid = dormLotGid);
+
+    /// <summary>
     /// Updates the location and orientation of a character.
     /// </summary>
     /// <param name="character">The character to update.</param>
