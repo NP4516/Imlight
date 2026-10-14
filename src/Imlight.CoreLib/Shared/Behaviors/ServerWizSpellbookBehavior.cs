@@ -76,17 +76,26 @@ public class ServerWizSpellbookBehavior : ServerSpellbookBehavior {
     public bool AddSpellToDeck(uint spellTemplateId) {
         base.SpellList ??= new List<SpellData>();
 
-        if (TotalSpellCount() >= MaxSpells) {
-            Logger.Debug("The deck already has the maximum amount of allowed spells.");
-            
-            return false;
-        }
-
         // Get the spells template; we'll need it for the magic school ID.
         var spellTemplate = SpellFactory.GetSpell(spellTemplateId);
         if (spellTemplate is null) {
             Logger.Debug("Failed to create spell from template {0}.", Logger.Args(spellTemplateId));
             
+            return false;
+        }
+
+        // Treasure cards have their own slot limit and skip the per-spell copy cap.
+        var isTreasure = spellTemplate.m_treasureCard;
+        if (isTreasure) {
+            if (CountDeckCards(true) >= MaxTreasureCards) {
+                Logger.Debug("The deck already has the maximum amount of allowed treasure cards.");
+
+                return false;
+            }
+        }
+        else if (CountDeckCards(false) >= MaxSpells) {
+            Logger.Debug("The deck already has the maximum amount of allowed spells.");
+
             return false;
         }
 
@@ -102,12 +111,14 @@ public class ServerWizSpellbookBehavior : ServerSpellbookBehavior {
         }
         else {
             // Otherwise, we'll want to increase the quantity so long as the number of max instances hasn't been reached.
-            var spellSchool = (MagicSchool) spellTemplate.m_magicSchoolID;
-            var maxInstances = spellSchool == PrimarySchool ? SchoolMaxInstances : GenericMaxInstances;
-            if (spellData.m_quantity >= maxInstances) {
-                Logger.Debug("The deck already has the maximum amount of allowed instances of spell {0}.", Logger.Args(spellTemplateId));
-                
-                return false;
+            if (!isTreasure) {
+                var spellSchool = (MagicSchool) spellTemplate.m_magicSchoolID;
+                var maxInstances = spellSchool == PrimarySchool ? SchoolMaxInstances : GenericMaxInstances;
+                if (spellData.m_quantity >= maxInstances) {
+                    Logger.Debug("The deck already has the maximum amount of allowed instances of spell {0}.", Logger.Args(spellTemplateId));
+                    
+                    return false;
+                }
             }
 
             spellData.m_quantity++;
@@ -181,6 +192,18 @@ public class ServerWizSpellbookBehavior : ServerSpellbookBehavior {
         return new ClientSpellbookBehavior {
             m_spellIDList = spellIdList
         };
+    }
+
+    private int CountDeckCards(bool treasure) {
+        var count = 0;
+        foreach (var spellData in SpellList) {
+            var spell = SpellFactory.GetSpell(spellData.m_templateID);
+            if (spell is not null && spell.m_treasureCard == treasure) {
+                count += (int) spellData.m_quantity;
+            }
+        }
+
+        return count;
     }
 
     private void SetPropertiesFromDeckTemplate(DeckBehaviorTemplate template) {
