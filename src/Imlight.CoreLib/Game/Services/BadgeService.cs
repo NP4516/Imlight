@@ -162,7 +162,7 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
         var requestedId = message.BadgeNameID == BadgeCatalog.NoTitleId ? 0 : message.BadgeNameID;
 
         // The client re-sends its current badge when a PvP duel starts, so the current selection is a no-op.
-        if (requestedId == state.SelectedBadgeId) {
+        if (requestedId == state.SelectedBadgeId && TitleMatchesSelection(wizard, catalog)) {
             SendToSocket(new GAME_5_PROTOCOL.MSG_SELECT_BADGE { BadgeNameID = GetClientBadgeId(requestedId), Error = 0 });
 
             return;
@@ -394,6 +394,14 @@ internal class BadgeService(SessionActor sessionActor) : MessageService(sessionA
         => string.IsNullOrEmpty(definition.DisplayName) ? definition.Id.ToString(CultureInfo.InvariantCulture) : $"{definition.DisplayName} ({definition.Id})";
 
     private static uint GetClientBadgeId(uint selectedBadgeId) => selectedBadgeId != 0 ? selectedBadgeId : BadgeCatalog.NoTitleId;
+
+    private static bool TitleMatchesSelection(Wizard wizard, BadgeCatalog catalog) {
+        // A title set by the mod badge command is not a selection, so choosing no title still clears it.
+        var selectedId = wizard.BadgeBehavior.SelectedBadgeId;
+        var expected = selectedId != 0 && catalog.TryGet(selectedId, out var selected) ? selected.Title : string.Empty;
+
+        return string.Equals((string) wizard.PlayerNameBehavior.BadgeTitle, expected, StringComparison.Ordinal);
+    }
 
     private static uint GetSelectionError(ServerBadgeBehavior state, BadgeCatalog catalog, uint badgeId, out BadgeDefinition definition) {
         // A badge the character never started is as unknown to them as one that is not in the catalog.
