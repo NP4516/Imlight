@@ -117,6 +117,12 @@ internal sealed class MinigameConfig : RootSingleResourceSingleton<MinigameConfi
         return minigames[index];
     }
 
+    public static bool TryGetMinigameByName(string name, out Imcodec.ObjectProperty.TypeCache.MinigameInfo info) {
+        info = s_minigameConfig?.m_minigames?.FirstOrDefault(x => x.m_name == name);
+
+        return info is not null;
+    }
+
     public static string GetMinigameScript(string zoneName) {
         var minigameInfo = s_minigameConfig.m_minigames.FirstOrDefault(x => x.m_zone == zoneName);
         if (minigameInfo == null) {
