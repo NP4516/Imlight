@@ -1,0 +1,58 @@
+/*
+ * Imlight
+ * Copyright (C) 2025 Revive101
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * ========================================================================
+ * PVP
+ * ========================================================================
+ * 
+ * PURPOSE:
+ * The refusal texts of the arena. MSG_ARENA_ERROR carries the string table id of a key; the client looks the
+ * text up in its locale and shows "Unknown Arena Error" for an id with no text.
+ * 
+ * USAGE EXAMPLE:
+ * SendToSocket(PvPArenaErrors.Message(PvPArenaErrors.AlreadyQueued));
+ * 
+ * NOTE:
+ * Every key is <table>_<key> of an entry in Locale/en-US/Error.lang.
+ * 
+ * TODO:
+ * 
+ * 
+ * Created by: Jay
+ * Version: KALI 1.0
+ * Last Updated: 10/14/2026
+ */
+
+using Imcodec.Cryptography;
+using Imcodec.MessageLayer.Generated;
+
+namespace Imlight.CoreLib.Game.PvP;
+
+internal static class PvPArenaErrors {
+
+    public const string AlreadyQueued = "Error_AlreadyQueued";
+    public const string AlreadyInMatch = "Error_ErrorAlreadyInMatch";
+    public const string NotInLevelRange = "Error_NotInLevelRange";
+    public const string PlayerIneligible = "Error_PlayerIneligible";
+    public const string InvalidTournamentType = "Error_InvalidTournamentType";
+    public const string InvalidMatchNameId = "Error_InvalidMatchNameID";
+    public const string MatchNotAllowed = "Error_ErrorMatchNotAllowed";
+
+    public static WIZARD_12_PROTOCOL.MSG_ARENA_ERROR Message(string key)
+        => new() { Error = StringHash.Compute(key) };
+
+}

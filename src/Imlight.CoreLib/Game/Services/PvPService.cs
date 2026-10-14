@@ -39,7 +39,9 @@
  */
 
 using System;
+using System.Collections.Generic;
 using Akka.Actor;
+using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
 using Imlight.CoreLib.Game.PvP;
@@ -54,6 +56,7 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
     private bool _isPresent;
     private bool _isLoggingOut;
     private string _realmName;
+    private readonly PvPWindowState _window = new();
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new PvPService(parentActor));
@@ -82,6 +85,35 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
         });
     }
 
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_KIOSKUSED))]
+    private void ReceiveKioskUsed(PVP_111_PROTOCOL.MSG_KIOSKUSED message)
+        => _window.KioskUsed(message.LeagueId);
+
+    [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_PVP5THAGEOPENPVPWINDOW))]
+    private void ReceiveOpenPvPWindow(WIZARD3_56_PROTOCOL.MSG_PVP5THAGEOPENPVPWINDOW message)
+        => SendAll(_window.OpenWindow(message, SessionActor.ActorRef, GetActiveGameObject(), GetActiveWizard(), DateTime.UtcNow));
+
+    [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_PVP5THAGECANJOINMATCH))]
+    private void ReceiveCanJoinMatch(WIZARD3_56_PROTOCOL.MSG_PVP5THAGECANJOINMATCH message)
+        => SendAll(_window.CanJoin(message, SessionActor.ActorRef, GetActiveGameObject(), GetActiveWizard(), DateTime.UtcNow));
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK))]
+    private void ReceivePrePvPKiosk(WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK message)
+        => SendAll(_window.PrePvPKioskEcho(message, GetActiveWizard()));
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PVPUPDATEREQUEST))]
+    private void ReceivePvPUpdateRequest(WIZARD_12_PROTOCOL.MSG_PVPUPDATEREQUEST message)
+        => SendAll(_window.UpdateRequest(message, GetActiveWizard()));
+
+    [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData))]
+    private void ReceiveAdvPvPEloData(WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData message)
+        => SendToSocket(new WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData {
+            GlobalID = message.GlobalID,
+            EntryList = PvPBlobs.EmptyEloEntryList(),
+            CheckCompletion = 0,
+            RecordCacheID = 0
+        });
+
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_QUERY_LOGOUT))]
     private void ReceiveQueryLogout(GAME_5_PROTOCOL.MSG_QUERY_LOGOUT message)
         => AnnounceDeparture(isLogout: true);
@@ -109,6 +141,12 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
             Session = SessionActor.ActorRef,
             IsLogout = isLogout
         });
+    }
+
+    private void SendAll(IReadOnlyList<IMessage> messages) {
+        foreach (var message in messages) {
+            SendToSocket(message);
+        }
     }
 
     private string GetRealmName() {

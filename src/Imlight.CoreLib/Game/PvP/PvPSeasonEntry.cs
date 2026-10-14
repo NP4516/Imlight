@@ -20,14 +20,14 @@
  * ========================================================================
  * 
  * PURPOSE:
- * A season template together with the year of the directory it was loaded from.
+ * A season template together with the year the season starts in.
  * 
  * USAGE EXAMPLE:
  * PvPLeagueFactory.TryGetSeason(seasonId, out var season); var year = season.Year;
  * 
  * NOTE:
- * The template stores month, day, hour and minute only. Seasons outside a Seasons<year> directory
- * (the beta, gamma and test seasons) have no year.
+ * The template stores month, day, hour and minute only. The year comes from the Seasons<year> directory the
+ * template was loaded from. Seasons outside such a directory (the beta, gamma and test seasons) have no year.
  * 
  * TODO:
  * 

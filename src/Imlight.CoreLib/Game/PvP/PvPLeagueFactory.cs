@@ -62,6 +62,9 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
     [GeneratedRegex(@"/Seasons(?<year>\d{4})/", RegexOptions.CultureInvariant)]
     private static partial Regex SeasonYearPattern();
 
+    [GeneratedRegex(@"_(?<month>\d{2})$", RegexOptions.CultureInvariant)]
+    private static partial Regex SeasonNameMonthPattern();
+
     protected override void AfterLoad() {
         var leaguesByName = new Dictionary<string, PvPLeagueTemplate>(StringComparer.Ordinal);
         var leaguesById = new Dictionary<uint, PvPLeagueTemplate>();
@@ -85,9 +88,7 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
                 }
                 case PvPSeasonTemplate season: {
                     string name = season.m_seasonName;
-                    var yearMatch = SeasonYearPattern().Match(file.Key.FileName ?? string.Empty);
-                    int? year = yearMatch.Success ? int.Parse(yearMatch.Groups["year"].Value, CultureInfo.InvariantCulture) : null;
-                    var entry = new PvPSeasonEntry(season, year);
+                    var entry = new PvPSeasonEntry(season, GetStartYear(season, file.Key.FileName));
                     if (!seasonsByName.TryAdd(name, entry) || !seasonsById.TryAdd(StringHash.Compute(name), entry)) {
                         Logger.Error("Season {Name} in {File} is defined twice.", Logger.Args(name, file.Key.FileName));
                     }
@@ -122,6 +123,23 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
         if (eloConfig is null) {
             Logger.Error("The PvP Elo config is missing from the Root.wad.");
         }
+    }
+
+    private static int? GetStartYear(PvPSeasonTemplate season, string fileName) {
+        var yearMatch = SeasonYearPattern().Match(fileName ?? string.Empty);
+        if (!yearMatch.Success) {
+            return null;
+        }
+
+        var directoryYear = int.Parse(yearMatch.Groups["year"].Value, CultureInfo.InvariantCulture);
+
+        // The name carries the month the season starts in, so PvP_2026_01 starts in late December of 2025.
+        var monthMatch = SeasonNameMonthPattern().Match(season.m_seasonName.ToString());
+        if (monthMatch.Success && season.m_startMonth - int.Parse(monthMatch.Groups["month"].Value, CultureInfo.InvariantCulture) > 6) {
+            return directoryYear - 1;
+        }
+
+        return directoryYear;
     }
 
     internal static bool TryGetLeague(string name, out PvPLeagueTemplate league) {

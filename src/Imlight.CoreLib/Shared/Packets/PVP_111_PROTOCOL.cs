@@ -192,6 +192,19 @@ public sealed class PVP_111_PROTOCOL : IServerProtocol {
     }
 
     /// <summary>
+    /// Sent by a kiosk to the session of the player who used it: the next window the session may open is the one
+    /// of this league.
+    /// </summary>
+    public sealed class MSG_KIOSKUSED : IServerMessage {
+
+        public byte MessageOrder { get; } = 12;
+        public byte ServiceID { get; } = 111;
+
+        public uint LeagueId;
+
+    }
+
+    /// <summary>
     /// A timer message of the director: a player departed without logging out and did not return in time.
     /// </summary>
     public sealed class MSG_DEPARTUREGRACEEXPIRED : IServerMessage {
