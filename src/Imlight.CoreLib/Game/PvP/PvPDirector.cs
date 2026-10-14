@@ -476,7 +476,11 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         var roster = match.Entries
             .Select((entry, teamIndex) => new PvPRosterEntry(entry.CharId, _sessions[entry.CharId], _playerObjects[entry.CharId], teamIndex))
             .ToList();
-        zoneActors[0].Tell(new ZONE_102_PROTOCOL.MSG_STARTPVPMATCH { MatchId = match.Id, Roster = roster });
+        zoneActors[0].Tell(new ZONE_102_PROTOCOL.MSG_STARTPVPMATCH {
+            MatchId = match.Id,
+            TournamentNameId = match.Entries[0].TournamentNameId,
+            Roster = roster
+        });
 
         Logger.Debug("PvP match {MatchId} starts in {ArenaZone}.", Logger.Args(match.Id, match.ArenaZone));
     }

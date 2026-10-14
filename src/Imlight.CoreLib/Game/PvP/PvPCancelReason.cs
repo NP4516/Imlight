@@ -44,6 +44,7 @@ internal enum PvPCancelReason {
     ConfirmTimeout,
     OpponentLeft,
     ArrivalTimeout,
-    NoArena
+    NoArena,
+    UnsupportedRules
 
 }

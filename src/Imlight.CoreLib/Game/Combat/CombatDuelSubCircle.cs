@@ -93,6 +93,8 @@ public class CombatDuelSubCircle {
     internal CombatParticipant CombatParticipant { get; private set; }
     internal bool AddedToDuel { get; set;}
     internal bool IsSummonedMinion { get; private set; }
+    // A sandboxed wizard fights with a copy of their stats, so nothing of the duel reaches the saved wizard.
+    internal bool IsSandboxed { get; private set; }
     internal List<SpellEffect> _hangingEffects { get {
         if (CombatParticipant is null) {
             return null;
@@ -337,7 +339,7 @@ public class CombatDuelSubCircle {
 
     internal void DamageParticipant(int damage) {
         // If the participant is a player, update their health.
-        if (_wizard is not null) {
+        if (_wizard is not null && !IsSandboxed) {
             var currentHealth = ParticipantGameStats.m_currentHitpoints;
             var newHealth = currentHealth - damage;
 
@@ -362,7 +364,7 @@ public class CombatDuelSubCircle {
 
     internal void HealParticipant(int heal) {
         // If the participant is a player, update their health.
-        if (_wizard is not null) {
+        if (_wizard is not null && !IsSandboxed) {
             var currentHealth = ParticipantGameStats.m_currentHitpoints;
             var newHealth = currentHealth + heal;
 
@@ -388,7 +390,10 @@ public class CombatDuelSubCircle {
     internal void DeductMana(int mana) {
         // If the participant is a player, update their mana.
         // Creature's don't have mana.
-        if (_wizard is not null) {
+        if (_wizard is not null && IsSandboxed) {
+            ParticipantGameStats.m_currentMana = Math.Max(0, ParticipantGameStats.m_currentMana - mana);
+        }
+        else if (_wizard is not null) {
             var currentMana = ParticipantGameStats.m_currentMana;
             var newMana = currentMana - mana;
 
@@ -464,10 +469,8 @@ public class CombatDuelSubCircle {
             .Result
             .Wizard;
 
-        // Dyanmic symbols start at 9 for players.
-        var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 9);
-
-        ParticipantGameStats = _wizard.GameStats;
+        IsSandboxed = _duelActor.Duel.m_bPVP;
+        ParticipantGameStats = IsSandboxed ? _wizard.GameStats.CopyForDuel() : _wizard.GameStats;
         var combatStats = ParticipantGameStats.GetCombatGameStats();
 
         // Collage spells the player has learned and temporary spells (perhaps from equipment)
@@ -540,23 +543,24 @@ public class CombatDuelSubCircle {
             m_isPlayer = true,
             m_zoneID = _duelActor.SigilId,
             m_isMonster = 0,
-            m_teamID = 0,
+            m_teamID = (int) OccupiedTeam,
             m_primaryMagicSchoolID = (int) _wizard.MagicSchoolBehavior.MagicSchool,
             m_pipCount = DetermineStartingPips(),
             m_pipRoundRates = new(),
-            m_originalTeam = 0,
+            m_originalTeam = (int) OccupiedTeam,
             m_maxHandSize = PLAYER_HAND_SIZE,
             m_playerHealth = ParticipantGameStats.m_currentHitpoints,
             m_maxPlayerHealth = ParticipantGameStats.m_baseHitpoints,
             // The client's crit sim reads the participant level from m_mobLevel (it zeroes its
             // crit chance below the level threshold when this is missing).
             m_mobLevel = ParticipantGameStats.Level,
-            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == 0,
+            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (int) OccupiedTeam,
             m_pGameStats = combatStats,
             m_pPlayDeck = new PlayDeck(),
             m_subcircle = SlotIndex,
-            m_dynamicSymbol = dynamicSymbol,
+            m_dynamicSymbol = DynamicSymbol,
             m_PipsSuspended = false,
+            m_pvp = IsSandboxed,
 
             m_color = _color,
             m_rotation = _rotation,
@@ -569,9 +573,6 @@ public class CombatDuelSubCircle {
         var creatureStats = ParticipantActor
             .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(queryGameStatsMsg)
             .Result;
-
-        // Dynamic symbols start 1-4 for creatures.
-        var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 1);
 
         // Convert the creature stats to a combat deck.
         var spellData = new List<CombatDeckSpellData>();
@@ -596,8 +597,8 @@ public class CombatDuelSubCircle {
             m_zoneID = _duelActor.SigilId,
             m_isMonster = 0, // Live server sends 0
             // Minions are creatures on the player team; m_isPlayer stays false.
-            m_teamID = asMinion ? 0 : 1,
-            m_originalTeam = 0,
+            m_teamID = (int) OccupiedTeam,
+            m_originalTeam = asMinion ? (int) OccupiedTeam : 0,
             m_isMinion = asMinion,
             m_maxHandSize = PLAYER_HAND_SIZE,
             m_primaryMagicSchoolID = (int) creatureStats.MagicSchool,
@@ -605,7 +606,7 @@ public class CombatDuelSubCircle {
             m_pipRoundRates = new(),
             m_playerHealth = creatureStats.GameStats.m_currentHitpoints,
             m_maxPlayerHealth = creatureStats.GameStats.m_baseHitpoints,
-            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == 1,
+            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (int) OccupiedTeam,
             m_pGameStats = creatureStats.GameStats.GetCombatGameStats(),
             m_mobLevel = creatureStats.CombatLevel,
 
@@ -615,7 +616,8 @@ public class CombatDuelSubCircle {
             m_minionSubCircle = asMinion ? minionOwnerSubCircle : 0,
 
             m_subcircle = SlotIndex,
-            m_dynamicSymbol = dynamicSymbol,
+            m_dynamicSymbol = DynamicSymbol,
+            m_pvp = _duelActor.Duel.m_bPVP,
 
             m_color = _color,
             m_rotation = _rotation,
@@ -655,6 +657,10 @@ public class CombatDuelSubCircle {
             State = StringHash.Compute("Stationary")
         });
     }
+
+    // The circles of the creature side show the symbols 1 to 4 and the others 13 to 16, whoever stands on them.
+    private DynamicSigilSymbol DynamicSymbol
+        => (DynamicSigilSymbol) (SlotType == CombatSlotType.Creature ? SlotIndex + 1 : SlotIndex + 9);
 
     private PipCount DetermineStartingPips() {
         var pipCount = new PipCount() {

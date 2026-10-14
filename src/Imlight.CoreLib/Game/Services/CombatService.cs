@@ -126,6 +126,14 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         TellOtherServices(hubMsg);
     }
 
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_PVPDUELENDED))]
+    private void ReceivePvPDuelEnded(COMBAT_106_PROTOCOL.MSG_PVPDUELENDED message) {
+        // A PvP duel grants no experience or loot and sends nobody to a hub; the director sends the players back.
+        GetActiveWizard().IsInDuel = false;
+        _currentDuelActor = null;
+        EquipMount();
+    }
+
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
     private void ReceiveCombatVictory(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) {
         GetActiveWizard().IsInDuel = false;

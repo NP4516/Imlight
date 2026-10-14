@@ -482,7 +482,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         // Regular spells are discarded and return to the deck on reshuffle.
         if (action.m_spell.m_treasureCard) {
             var consumedTemplateId = caster.ConsumeFromVault(action.m_spell);
-            if (consumedTemplateId != 0 && caster._wizard != null) {
+            if (consumedTemplateId != 0 && caster._wizard != null && !caster.IsSandboxed) {
                 // Persist the removal from the player's treasure card book.
                 caster._wizard.SpellbookBehavior.RemoveTreasureCard(consumedTemplateId);
                 WizardCollection.RemoveTreasureCard(caster._wizard, consumedTemplateId);

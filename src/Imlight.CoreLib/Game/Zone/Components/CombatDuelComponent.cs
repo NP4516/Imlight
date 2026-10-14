@@ -48,6 +48,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.Cryptography;
 using Imcodec.Math;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
@@ -56,6 +57,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Game.PvP;
 using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -119,10 +121,12 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     public byte AliveAndInDuelCreatureCount
         => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && x.IsAlive && x.AddedToDuel);
     public ulong SigilId => Entity.ActiveGameObject.m_globalID;
+    internal bool IsPvPDuel => _pvp is not null;
+    private byte PlanningSeconds => IsPvPDuel ? PvPSettings.PracticePlanningSeconds : PLANNING_TIME;
 
     // Wizards of one side that fight on, whichever side that is.
     public byte AliveHumanCount(CombatTeam team)
-        => (byte) SubCircles.Count(x => x.Occupied && x.IsHumanPlayer && x.OccupiedTeam == team && x.IsAlive && x.AddedToDuel);
+        => (byte) SubCircles.Count(x => x.Occupied && x.IsHumanPlayer && x.OccupiedTeam == team && x.IsAlive);
 
     // Keyed by the actor: a CoreObject is a record whose hash follows its location.
     private readonly HashSet<IActorRef> _entitiesInRange = [];
@@ -141,6 +145,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private CombatSigilObjectInfo _combatSigilObjectInfo;
     private RenderComponent _renderComponent;
     private CombatSigilTemplate _sigilTemplate;
+    private PvPDuelState _pvp;
     private bool _isActive;
     private bool _awaitingCombatMoves;
     private TutorialDuelDirector _tutorialDirector;
@@ -163,7 +168,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     public WizardClientDuelBehavior GetClientBehaviorInstance() => new() {
         m_pDuel = Duel,
         // todo: this is the sigil template itself, not for the game object
-        m_sigilTemplateID = 1901671683,
+        m_sigilTemplateID = IsPvPDuel ? StringHash.Compute(_sigilTemplate.m_sigilName) : 1901671683,
     };
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
@@ -182,7 +187,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     }
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
-        if (!_isActive) {
+        // The roster of a PvP duel is fixed; nobody joins by walking in.
+        if (!_isActive || IsPvPDuel) {
             return;
         }
 
@@ -201,7 +207,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     }
 
     public override void OnCreatureMove(CoreObject creature, IActorRef suspect, ZoneEntity entity) {
-        if (!_isActive) {
+        if (!_isActive || IsPvPDuel) {
             return;
         }
 
@@ -288,8 +294,47 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        // Activate the sigil.
         InitializeDuel(message.StartingParticipants);
+        ActivateSigil();
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH))]
+    private void ReceiveStartPvPMatch(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH message) {
+        if (_isActive) {
+            Logger.Warning("Match {MatchId} cannot start on sigil {SigilId}: a duel is already running.",
+                Logger.Args(message.MatchId, SigilId));
+
+            return;
+        }
+
+        if (_sigilTemplate is not PvPCombatSigilTemplate || _renderComponent is null) {
+            Logger.Error("Sigil {SigilId} cannot host PvP match {MatchId}.", Logger.Args(SigilId, message.MatchId));
+            CancelPvPMatch(message.MatchId, PvPCancelReason.NoArena);
+
+            return;
+        }
+
+        if (!PvPTournamentFactory.TryGetTournament(message.TournamentNameId, out var tournament)
+            || !PvPGameTypes.TryResolve(tournament.m_pvpDuelModifiers.Select(name => (string) name), out var rules)) {
+            Logger.Error("Match {MatchId} has rules the duel does not support.", Logger.Args(message.MatchId));
+            CancelPvPMatch(message.MatchId, PvPCancelReason.UnsupportedRules);
+
+            return;
+        }
+
+        try {
+            InitializePvPDuel(message, rules);
+        } catch (Exception ex) {
+            Logger.Error("Match {MatchId} could not seat its players: {Exception}", Logger.Args(message.MatchId, ex));
+            AbortPvPDuel(message.MatchId, PvPCancelReason.NoArena);
+
+            return;
+        }
+
+        ActivateSigil();
+    }
+
+    private void ActivateSigil() {
         _renderComponent.Enable();
 
         // Broadcast MSG_DUEL to inform all clients a duel is now active.
@@ -313,6 +358,11 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         _groupReservations.DropStale(ZoneActor, SubCircles);
         if (Duel.m_roundNum == 0) {
             ApplyFullGroupInitiative();
+        }
+
+        if (IsPvPDuel) {
+            _pvp.BeginRound(Duel.m_roundNum + 1);
+            Duel.m_firstTeamToAct = (int) _pvp.RoundStarter;
         }
 
         // Add the circles to combat if they are not already.
@@ -348,7 +398,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         SendCombatHand();
         SendCombatPips();
         SendCombatHealth();
-        SendCombatUI(PLANNING_TIME);
+        SendCombatUI(PlanningSeconds);
 
         // Re-telegraph minion AI moves now that the planning HUD exists.
         ResendMinionMoveSelections();
@@ -359,7 +409,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         // Tutorial fights have no planning countdown (m_disableTimer): the client drives pacing. Planning still
         // ends normally once every participant has enqueued a move (ReceiveCombatMove).
         if (!_tutorialDirector.IsActive) {
-            var delay = TimeSpan.FromSeconds(PLANNING_TIME);
+            var delay = TimeSpan.FromSeconds(PlanningSeconds);
             Timers.StartSingleTimer(PLANNING_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER(), delay);
         }
     }
@@ -520,9 +570,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         Duel.m_duelPhase = kDuelPhase.kPhase_Resolution;
         SendCombatPhase((byte) Duel.m_duelPhase);
 
-        var playersWin = AliveCreatureCount <= 0;
-        var creaturesWin = AlivePlayerCount <= 0;
-        if (!playersWin && !creaturesWin) {
+        var duelIsDecided = IsPvPDuel
+            ? IsPvPSideWiped()
+            : AliveCreatureCount <= 0 || AlivePlayerCount <= 0;
+        if (!duelIsDecided) {
             // Continue. Start a new round.
             Self.Tell(new COMBAT_106_PROTOCOL.MSG_NEWROUND());
 
@@ -562,6 +613,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        _pvp?.MarkDisconnected(Sender);
+
         // Handle this as if it were the flee action.
         HandleFleeAction(subCircle);
     }
@@ -577,6 +630,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         if (subCircle is null) {
             return;
         }
+
+        _pvp?.MarkDisconnected(Sender);
 
         // Handle this as if it were the flee action.
         HandleFleeAction(subCircle);
@@ -651,6 +706,83 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             m_gameEffects = [],
         }
     };
+
+    private Duel CreateDuelWithPvPDefaults(PvPDuelRules rules) => new() {
+        m_duelID = SigilId,
+        m_bPVP = true,
+        m_planningTimer = PvPSettings.PracticePlanningSeconds,
+
+        m_scalarDamage = _sigilTemplate.m_scalarDamagePvP,
+        m_scalarResist = _sigilTemplate.m_scalarResistPvP,
+        m_scalarPierce = _sigilTemplate.m_scalarPiercePvP,
+        m_damageLimit = _sigilTemplate.m_damageLimitPvP,
+        m_dK0 = _sigilTemplate.m_dK0PvP,
+        m_dN0 = _sigilTemplate.m_dN0PvP,
+        m_resistLimit = _sigilTemplate.m_resistLimitPvP,
+        m_rK0 = _sigilTemplate.m_rK0PvP,
+        m_rN0 = _sigilTemplate.m_rN0PvP,
+        m_shadowThresholdFactor = _sigilTemplate.m_shadowThresholdFactor,
+        m_shadowPipRatingFactor = _sigilTemplate.m_shadowPipRatingFactor,
+        m_alternateTurnCombatRule = PvPGameTypes.ToCombatRule(rules),
+        m_combatRules = [PvPGameTypes.ToCombatRule(rules)],
+        m_flatParticipantList = [],
+        m_duelModifier = new DuelModifier() {
+            m_battlefieldEffects = [],
+            m_combatTriggers = [],
+            m_gameEffects = [],
+        }
+    };
+
+    private void InitializePvPDuel(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH message, PvPDuelRules rules) {
+        Duel = CreateDuelWithPvPDefaults(rules);
+        SubCircles = CreateDuelActorSubCircles(_sigilTemplate);
+        CombatResolver = new Combat.CombatResolver(Duel, SubCircles);
+
+        var firstTeam = DetermineFirstTeam();
+        Duel.m_firstTeamToAct = (int) firstTeam;
+        Duel.m_originalFirstTeamToAct = (int) firstTeam;
+        _pvp = new PvPDuelState(message.MatchId, message.TournamentNameId, message.Roster, rules, firstTeam,
+            PvPSettings.SwapFirstTeamEachRound);
+
+        // The roster is fixed: each player sits on a circle of their side and is moved onto it first, because
+        // they stand wherever they arrived in the zone.
+        foreach (var entry in message.Roster) {
+            var subCircle = GetAvailableSubCircle((CombatTeam) entry.TeamIndex)
+                ?? throw new InvalidOperationException($"No free circle on side {entry.TeamIndex}.");
+
+            ZoneBroadcast(new GAME_5_PROTOCOL.MSG_SERVERTELEPORT {
+                LocationX = CompressTeleportCoordinate(subCircle.WorldPosition.X),
+                LocationY = CompressTeleportCoordinate(subCircle.WorldPosition.Y),
+                LocationZ = CompressTeleportCoordinate(subCircle.WorldPosition.Z),
+                Direction = (byte) Math.Round(subCircle.WorldRotation / (2 * Math.PI) * 250),
+                MobileID = entry.PlayerObject.m_nMobileID,
+            });
+
+            AssignParticipantToSubCircle(subCircle, entry.Session, entry.PlayerObject);
+        }
+
+        _isActive = true;
+
+        Logger.Debug("Duel {0} | PvP match {1} created with {2} players. Grace period over in {3}",
+            Logger.Args(Duel.m_duelID.Full, message.MatchId, message.Roster.Count, DUEL_GRACE_PERIOD_IN_SECONDS));
+    }
+
+    private void CancelPvPMatch(ulong matchId, PvPCancelReason reason)
+        => PvPDirector.Instance?.Tell(new PVP_111_PROTOCOL.MSG_MATCHCANCELLED { MatchId = matchId, Reason = reason });
+
+    // Seating failed halfway: let the seated players go, then ask the director to send everyone back.
+    private void AbortPvPDuel(ulong matchId, PvPCancelReason reason) {
+        _isActive = false;
+        if (_pvp is not null) {
+            foreach (var entry in _pvp.Roster) {
+                entry.Session.Tell(new COMBAT_106_PROTOCOL.MSG_PVPDUELENDED { MatchId = matchId, WinningTeam = -1 });
+            }
+
+            _pvp = null;
+        }
+
+        CancelPvPMatch(matchId, reason);
+    }
 
     private CombatDuelSubCircle[] CreateDuelActorSubCircles(CombatSigilTemplate template) {
         var subCircles = template.m_subCircles;
@@ -884,7 +1016,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void ReserveCirclesForGroupOf(CoreObject playerObject) {
-        if (IsScriptedDuel() || !Wizard.TryGetCharacterId(playerObject.m_globalID, out var charId)) {
+        if (IsScriptedDuel() || IsPvPDuel || !Wizard.TryGetCharacterId(playerObject.m_globalID, out var charId)) {
             return;
         }
 
@@ -903,7 +1035,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void ApplyFullGroupInitiative() {
-        if (IsScriptedDuel() || !CombatGroupReservations.IsFullGroup(SubCircles)) {
+        if (IsScriptedDuel() || IsPvPDuel || !CombatGroupReservations.IsFullGroup(SubCircles)) {
             return;
         }
 
@@ -1237,6 +1369,12 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        if (IsPvPDuel) {
+            ForfeitPvPDuel(caster);
+
+            return;
+        }
+
         var actor = caster.ParticipantActor;
         var participantObjId = caster.ParticipantObject.m_globalID;
 
@@ -1358,6 +1496,12 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void EndDuel() {
+        if (IsPvPDuel) {
+            EndPvPDuel();
+
+            return;
+        }
+
         // The duel has ended. Inform the clients of the result.
         var playersWin = AliveAndInDuelCreatureCount <= 0;
         var creaturesWin = AliveAndInDuelPlayerCount <= 0;
@@ -1393,6 +1537,96 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
         // Nobody is in this duel any more; a later disconnect or logout must not find a circle.
         EnactActionOnSubCircles(circle => circle.RemoveParticipant());
+    }
+
+    private bool IsPvPSideWiped()
+        => AliveHumanCount(CombatTeam.Player) <= 0 || AliveHumanCount(CombatTeam.Monster) <= 0;
+
+    // The side with a wizard still standing wins; with none standing on either side it is a draw (-1).
+    private int GetPvPWinningTeam() {
+        var blueStands = AliveHumanCount(CombatTeam.Player) > 0;
+        var redStands = AliveHumanCount(CombatTeam.Monster) > 0;
+
+        return blueStands == redStands ? -1 : blueStands ? (int) CombatTeam.Player : (int) CombatTeam.Monster;
+    }
+
+    private void ForfeitPvPDuel(CombatDuelSubCircle caster) {
+        var participantObjId = caster.ParticipantObject.m_globalID;
+        if (caster._wizard is not null) {
+            _pvp.MarkForfeited(caster._wizard.CharId);
+        }
+
+        // A forfeit costs the wizard nothing outside of the duel: no mana is drained and nobody is sent to a hub.
+        caster.RemoveParticipant();
+
+        Logger.Debug("Duel {0} | Slot {1} | Participant forfeited",
+            Logger.Args(Duel.m_duelID.Full, caster.SlotIndex));
+
+        ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATREMOVE {
+            DuelID = SigilId,
+            ParticipantID = participantObjId,
+        });
+
+        if (IsPvPSideWiped()) {
+            EndDuel();
+        }
+    }
+
+    private void EndPvPDuel() {
+        var winningTeam = GetPvPWinningTeam();
+
+        Logger.Debug("Duel {0} | PvP match ended. Winning team {1}.", Logger.Args(Duel.m_duelID.Full, winningTeam));
+
+        Timers.CancelAll();
+
+        // The wizards can move again. Nobody gains experience or loot, or is sent to a hub.
+        EnactActionOnSubCircles(circle => {
+            if (circle.IsHumanPlayer) {
+                circle.ParticipantActor.Tell(new GAME_5_PROTOCOL.MSG_ENTERSTATE {
+                    GameObjectID = circle.ParticipantObject.m_globalID,
+                    State = (uint) NPCStates.Idle
+                });
+            }
+        });
+
+        ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMATCHRESULT {
+            DuelID = SigilId,
+            WinningTeam = winningTeam,
+        });
+
+        Duel.m_duelPhase = kDuelPhase.kPhase_Victory;
+        SendCombatPhase((byte) Duel.m_duelPhase);
+        Duel.m_duelPhase = kDuelPhase.kPhase_Ended;
+        SendCombatPhase((byte) Duel.m_duelPhase);
+
+        ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_ENDDUEL { DuelID = SigilId });
+
+        ReportPvPDuelEnded(winningTeam);
+
+        DespawnDuel();
+        _isActive = false;
+        EnactActionOnSubCircles(circle => circle.RemoveParticipant());
+    }
+
+    // Each player's session lets go of the duel; the director sends everyone back and closes the match.
+    private void ReportPvPDuelEnded(int winningTeam) {
+        foreach (var entry in _pvp.Roster) {
+            if (_pvp.IsDisconnected(entry.Session)) {
+                continue;
+            }
+
+            entry.Session.Tell(new COMBAT_106_PROTOCOL.MSG_PVPDUELENDED {
+                MatchId = _pvp.MatchId,
+                WinningTeam = winningTeam,
+                Forfeited = _pvp.HasForfeited(entry.CharId)
+            });
+        }
+
+        PvPDirector.Instance?.Tell(new PVP_111_PROTOCOL.MSG_MATCHENDED {
+            MatchId = _pvp.MatchId,
+            WinningTeam = winningTeam,
+            ForfeitedCharIds = _pvp.ForfeitedCharIds
+        });
     }
 
     private void PlayerWin() {
@@ -1549,7 +1783,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             SendCombatMoveSelection(circle.OccupiedTeam, circle.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack,
                 action.Spell, (byte) action.SelectedTarget.SlotIndex);
         });
-        var delay = TimeSpan.FromSeconds(PLANNING_TIME);
+        var delay = TimeSpan.FromSeconds(PlanningSeconds);
         Timers.StartSingleTimer(PLANNING_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER(), delay);
     }
 

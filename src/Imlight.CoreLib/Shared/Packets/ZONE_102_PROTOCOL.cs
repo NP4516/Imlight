@@ -529,6 +529,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public ulong MatchId;
+        public uint TournamentNameId;
         internal IReadOnlyList<PvPRosterEntry> Roster;
 
     }
