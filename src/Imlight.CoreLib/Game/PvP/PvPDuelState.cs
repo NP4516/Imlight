@@ -53,6 +53,7 @@ internal sealed class PvPDuelState(
 
     private readonly HashSet<ulong> _forfeitedCharIds = [];
     private readonly HashSet<IActorRef> _disconnectedSessions = [];
+    private readonly HashSet<IActorRef> _sessionsToWaitFor = [];
 
     public ulong MatchId { get; } = matchId;
 
@@ -96,7 +97,56 @@ internal sealed class PvPDuelState(
         return true;
     }
 
+    public bool IsEnding { get; private set; }
+
+    public bool IsFinished { get; private set; }
+
+    public int WinningTeam { get; private set; } = -1;
+
+    public bool HasSessionsToWaitFor => _sessionsToWaitFor.Count > 0;
+
     public IReadOnlyCollection<ulong> ForfeitedCharIds => _forfeitedCharIds;
+
+    /// <summary>
+    /// Marks the duel as decided. The clients of <paramref name="sessions"/> are given time to finish the victory
+    /// scene.
+    /// </summary>
+    /// <returns><c>false</c> when the duel was decided before.</returns>
+    public bool BeginEnding(int winningTeam, IEnumerable<IActorRef> sessions) {
+        if (IsEnding) {
+            return false;
+        }
+
+        IsEnding = true;
+        WinningTeam = winningTeam;
+        _sessionsToWaitFor.UnionWith(sessions);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Stops waiting for a session: its client finished the scene or is gone.
+    /// </summary>
+    /// <returns><c>true</c> when no session is left to wait for.</returns>
+    public bool StopWaitingFor(IActorRef session) {
+        _sessionsToWaitFor.Remove(session);
+
+        return IsEnding && _sessionsToWaitFor.Count == 0;
+    }
+
+    /// <summary>
+    /// Marks the duel as over for good.
+    /// </summary>
+    /// <returns><c>false</c> when it was over before.</returns>
+    public bool TryFinish() {
+        if (IsFinished) {
+            return false;
+        }
+
+        IsFinished = true;
+
+        return true;
+    }
 
     public bool HasForfeited(ulong charId)
         => _forfeitedCharIds.Contains(charId);

@@ -94,6 +94,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private const string RESOUTION_TIME_KEY = "ResolutionPhase";
     private const double MINION_SUMMON_ANIMATION_DELAY = 5.5;
     private const string GroupJoinPromptKey = "GUI_GotoFriendQuestion";
+    private const string PVP_RETURN_GRACE_KEY = "PvPReturnGrace";
 
     public bool NoTransfer { get; set; } = false;
     public ITimerScheduler Timers { get; set; }
@@ -1557,7 +1558,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATINSTAWIN))]
     private void ReceiveCheatInstaWin(COMBAT_106_PROTOCOL.MSG_CHEATINSTAWIN message) {
-        if (!_isActive) {
+        // The cheat kills the creatures; the red side of a PvP duel is made of wizards.
+        if (!_isActive || IsPvPDuel) {
             return;
         }
 
@@ -1643,20 +1645,31 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
     private void ForfeitPvPDuel(CombatDuelSubCircle caster) {
         var participantObjId = caster.ParticipantObject.m_globalID;
-        if (caster._wizard is not null) {
+        var session = caster.ParticipantActor;
+        var matchWasDecided = _pvp.IsEnding;
+        if (caster._wizard is not null && !matchWasDecided) {
             _pvp.MarkForfeited(caster._wizard.CharId);
         }
 
         // A forfeit costs the wizard nothing outside of the duel: no mana is drained and nobody is sent to a hub.
         caster.RemoveParticipant();
 
-        Logger.Debug("Duel {0} | Slot {1} | Participant forfeited",
-            Logger.Args(Duel.m_duelID.Full, caster.SlotIndex));
+        Logger.Debug("Duel {0} | Slot {1} | Participant left{2}",
+            Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, matchWasDecided ? " after the match was decided" : " and forfeits"));
 
         ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATREMOVE {
             DuelID = SigilId,
             ParticipantID = participantObjId,
         });
+
+        if (matchWasDecided) {
+            // Somebody who leaves during the victory scene is not waited for.
+            if (_pvp.StopWaitingFor(session)) {
+                FinishPvPDuel();
+            }
+
+            return;
+        }
 
         if (IsPvPSideWiped()) {
             EndDuel();
@@ -1665,6 +1678,14 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
     private void EndPvPDuel() {
         var winningTeam = GetPvPWinningTeam();
+
+        // Two forfeits, or a forfeit and a knockout, can both reach for the end; the match ends once.
+        var waitingFor = SubCircles.Where(circle => circle.Occupied && circle.IsHumanPlayer && !_pvp.IsDisconnected(circle.ParticipantActor))
+            .Select(circle => circle.ParticipantActor)
+            .ToList();
+        if (!_pvp.BeginEnding(winningTeam, waitingFor)) {
+            return;
+        }
 
         Logger.Debug("Duel {0} | PvP match ended. Winning team {1}.", Logger.Args(Duel.m_duelID.Full, winningTeam));
 
@@ -1684,15 +1705,50 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             DuelID = SigilId,
             WinningTeam = winningTeam,
         });
+        HumanBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_ALLOWLEAVEPVP());
 
         Duel.m_duelPhase = kDuelPhase.kPhase_Victory;
         SendCombatPhase((byte) Duel.m_duelPhase);
+
+        // Each client reports when its victory scene is over; a draw plays none and reports nothing, so the wait is
+        // bounded by the grace period either way.
+        var grace = PvPSettings.ReturnGrace;
+        if (grace > TimeSpan.Zero && _pvp.HasSessionsToWaitFor) {
+            Timers.StartSingleTimer(PVP_RETURN_GRACE_KEY, new COMBAT_106_PROTOCOL.MSG_PVPENDGRACEOVER(), grace);
+
+            return;
+        }
+
+        FinishPvPDuel();
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_PVPVICTORYSEEN))]
+    private void ReceivePvPVictorySeen(COMBAT_106_PROTOCOL.MSG_PVPVICTORYSEEN message) {
+        if (IsPvPDuel && _isActive && _pvp.IsEnding && _pvp.StopWaitingFor(message.Actor)) {
+            FinishPvPDuel();
+        }
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_PVPENDGRACEOVER))]
+    private void ReceivePvPEndGraceOver(COMBAT_106_PROTOCOL.MSG_PVPENDGRACEOVER message) {
+        if (IsPvPDuel && _isActive) {
+            FinishPvPDuel();
+        }
+    }
+
+    private void FinishPvPDuel() {
+        if (!_pvp.TryFinish()) {
+            return;
+        }
+
+        Timers.Cancel(PVP_RETURN_GRACE_KEY);
+
         Duel.m_duelPhase = kDuelPhase.kPhase_Ended;
         SendCombatPhase((byte) Duel.m_duelPhase);
 
         ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_ENDDUEL { DuelID = SigilId });
 
-        ReportPvPDuelEnded(winningTeam);
+        ReportPvPDuelEnded(_pvp.WinningTeam);
 
         DespawnDuel();
         _isActive = false;
