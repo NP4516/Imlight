@@ -257,6 +257,7 @@ internal sealed class MinigameProcess : Process {
 
     private CHARACTER_103_PROTOCOL.MSG_CHARACTER QuerySenderCharacter() {
         var queryMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
+        var reason = "the reply holds no wizard";
         try {
             var timeout = TimeSpan.FromMilliseconds(QUERY_WIZARD_TIMEOUT_IN_MS);
             var response = Sender
@@ -267,12 +268,12 @@ internal sealed class MinigameProcess : Process {
                 return response;
             }
         }
-        catch {
-            // The failure is logged below.
+        catch (Exception ex) {
+            reason = ex.GetBaseException().Message;
         }
 
-        Logger.Error("{0} {1} failed to query character data in {2} ms.",
-            Logger.Args(nameof(MinigameProcess), ProcessName, QUERY_WIZARD_TIMEOUT_IN_MS));
+        Logger.Error("{0} {1} failed to query character data in {2} ms: {3}",
+            Logger.Args(nameof(MinigameProcess), ProcessName, QUERY_WIZARD_TIMEOUT_IN_MS, reason));
 
         return null;
     }
