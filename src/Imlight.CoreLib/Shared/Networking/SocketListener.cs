@@ -270,6 +270,9 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
             or GAME_5_PROTOCOL.MSG_ATTACH
             or GAME_5_PROTOCOL.MSG_QUERY_LOGOUT
             or GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT
+            or GAME_5_PROTOCOL.MSG_ZONETRANSFERACK
+            or GAME_5_PROTOCOL.MSG_ZONETRANSFERNACK
+            or GAME_5_PROTOCOL.MSG_RETRYTELEPORT
             or LOGIN_7_PROTOCOL.MSG_USER_VALIDATE
             or LOGIN_7_PROTOCOL.MSG_USER_AUTHEN_V3;
 

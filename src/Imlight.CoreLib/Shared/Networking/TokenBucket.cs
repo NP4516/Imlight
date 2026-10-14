@@ -43,6 +43,7 @@ public class TokenBucket {
 
             if (_tokens > 0) {
                 _tokens--;
+                _failedAcquisitionCount = 0;
 
                 return true;
             }
