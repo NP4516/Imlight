@@ -32,6 +32,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imcodec.Types;
 using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Game.Rentals;
 
 namespace Imlight.CoreLib.WizardData.Models.Player;
 
@@ -1291,6 +1292,7 @@ public class Wizard {
         AfterDatabaseLoadPetOwnerBehavior();
         AfterDatabaseLoadAlchemyBehavior();
         AfterDatabaseLoadQuestBehavior();
+        AfterDatabaseLoadRentals();
 
         ObjectStateBehavior ??= new ServerObjectStateBehavior("PlayerMobileStates");
         FriendsBehavior ??= new ServerFriendBehavior();
@@ -1445,6 +1447,15 @@ public class Wizard {
 
     private void InitializeSpellbookBehavior() {
         SpellbookBehavior = new ServerWizSpellbookBehavior();
+    }
+
+    private void AfterDatabaseLoadRentals() {
+        // A stored 0 predates the not-started default, and the client would show it as a started timer.
+        foreach (var (_, behavior) in RentalItems.Enumerate(this)) {
+            if (behavior.m_expireTime == 0) {
+                behavior.m_expireTime = RentalItems.Unset;
+            }
+        }
     }
 
     private void InitializeDefaultPetSnackBehavior() {
