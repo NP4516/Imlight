@@ -341,6 +341,29 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Gave the pet the talent {talent.Name}.");
     }
 
+    private bool TryGetEquippedPet(out WizClientObjectItem pet) {
+        pet = Context.Character.GetEquippedPetItem();
+        if (pet is null) {
+            InformSenderClient("Equip a pet first.");
+
+            return false;
+        }
+
+        // Pets that were hatched before genes existed get theirs here.
+        Context.Character.InitializePet(pet);
+
+        return true;
+    }
+
+    private void SendPetBehavior(WizClientObjectItem pet) {
+        // Persistent save.
+        Context.Character.SavePet(pet);
+
+        if (PetBehaviorUpdate.TryCreate(pet, out var update)) {
+            Context.SessionActor.Tell(update, null);
+        }
+    }
+
     [Command("addreagent")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddReagentCommand(string templateId) {
@@ -829,29 +852,6 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(msg, null);
 
         InformSenderClient($"Added {xpInt} XP.");
-    }
-
-    private bool TryGetEquippedPet(out WizClientObjectItem pet) {
-        pet = Context.Character.GetEquippedPetItem();
-        if (pet is null) {
-            InformSenderClient("Equip a pet first.");
-
-            return false;
-        }
-
-        // Pets that were hatched before genes existed get theirs here.
-        Context.Character.InitializePet(pet);
-
-        return true;
-    }
-
-    private void SendPetBehavior(WizClientObjectItem pet) {
-        // Persistent save.
-        Context.Character.SavePet(pet);
-
-        if (PetBehaviorUpdate.TryCreate(pet, out var update)) {
-            Context.SessionActor.Tell(update, null);
-        }
     }
 
 }
