@@ -33,17 +33,18 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 10/14/2026
  */
 
 using System;
-using System.Text;
+using System.Collections.Generic;
 using Akka.Actor;
 using Imcodec.IO;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Minigames;
+using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 
@@ -52,6 +53,8 @@ namespace Imlight.CoreLib.Game.Services;
 internal class MinigameService(SessionActor sessionActor) : MessageService(sessionActor) {
 
     private const ushort MAGIC_HEADER = (ushort) 0xF00Du;
+    private const int FrameLengthOverhead = 5;
+    private const int MaxProcessPayloadLength = ushort.MaxValue - FrameLengthOverhead;
 
     private IActorRef _minigameJob;
     private uint _minigameProcessId;
@@ -96,11 +99,28 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
     private void ReceiveMinigameSelect(WIZARD_12_PROTOCOL.MSG_MINIGAMESELECT message) {
         var minigameIndex = message.Index;
         var minigameInfo = MinigameConfig.GetMinigameInfo(minigameIndex);
-        var wizardName = GetActiveWizard().PlayerNameBehavior.GetWizardName();
+        var wizard = GetActiveWizard();
+        var wizardName = wizard.PlayerNameBehavior.GetWizardName();
 
         if (minigameInfo == null) {
             Logger.Error("{0} tried to start up minigame at non-existing index {1}", 
                 Logger.Args(wizardName, minigameIndex));
+
+            return;
+        }
+
+        // Ensure that the player picked the minigame at a kiosk in the zone.
+        var kiosk = GetZoneObject(message.npcGlobalID);
+        if (kiosk?.GetComponentOfType<InteractMinigameComponent>() is null) {
+            Logger.Warning("{Wizard} tried to start minigame {Index} from {Object}, which is not a kiosk in the zone",
+                Logger.Args(wizardName, minigameIndex, message.npcGlobalID));
+
+            return;
+        }
+
+        if (MinigameConfig.IsMinigameZone(wizard.Zone)) {
+            Logger.Warning("{Wizard} tried to start minigame {Index} while already in minigame zone {Zone}",
+                Logger.Args(wizardName, minigameIndex, wizard.Zone));
 
             return;
         }
@@ -124,31 +144,37 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
         // However, it does not include the magic header or body.
         // It immediately begins with the DML header, detailing the service ID, message ID, length, and finally the payload.
         // Find more @ https://revive101.github.io/Imlight-docs/internals/systems/dml/serialization.html#dml-header.
+        if (_minigameJob is null || message.JobID != _minigameProcessId) {
+            Logger.Warning("Dropped a minigame message for process {JobId}, the active process is {ProcessId}",
+                Logger.Args(message.JobID, _minigameProcessId));
 
-        // Our message serializer doesn't quite support that yet, so we'll be using a shortcut:
-        // Add the magic header and body manually, then send it to the message serializer.
-        var messageRaw = message.Message;
-        var messageRawBytes = Encoding.UTF8.GetBytes(messageRaw);
-        var writer = new BitWriter();
+            return;
+        }
 
-        // Write the magic header and the length of the message. +8 is the size of the header.
-        writer.WriteUInt16(MAGIC_HEADER);
-        writer.WriteUInt16((ushort) (messageRaw.Length + 8));
+        byte[] messageRawBytes = message.Message;
+        if (messageRawBytes is null || messageRawBytes.Length == 0 || messageRawBytes.Length > MaxProcessPayloadLength) {
+            Logger.Warning("Dropped a minigame message of {Length} bytes for process {ProcessId}",
+                Logger.Args(messageRawBytes?.Length ?? 0, _minigameProcessId));
 
-        // Write the body.
-        writer.WriteUInt8(0);  // IsControl
-        writer.WriteUInt8(0);  // OpCode
-        writer.WriteUInt16(0); // Padding
+            return;
+        }
 
-        // Write payload.
-        writer.WriteBytes(messageRawBytes);
+        var frame = BuildProcessFrame(messageRawBytes);
 
         // Deserialize using the MessageSerializer.
-        var deserializedMsg = MessageEncoder.Decode(writer.GetData());
+        IReadOnlyCollection<IMessage> deserializedMsg;
+        try {
+            deserializedMsg = MessageEncoder.Decode(frame);
+        } catch (Exception ex) {
+            Logger.Warning("Failed to decode a minigame message of {Length} bytes: {Reason}",
+                Logger.Args(messageRawBytes.Length, ex.Message));
+
+            return;
+        }
 
         if (deserializedMsg == null || deserializedMsg.Count <= 0) {
             var hexStringRaw = BitConverter.ToString(messageRawBytes).Replace("-", " ");
-            var hexStringAdditions = BitConverter.ToString(writer.GetData()).Replace("-", " ");
+            var hexStringAdditions = BitConverter.ToString(frame).Replace("-", " ");
             Logger.Error("Failed to deserialize message process {0} (manually set as {1})", 
                 Logger.Args(hexStringRaw, hexStringAdditions));
 
@@ -161,10 +187,31 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
         }
     }
 
+    private static byte[] BuildProcessFrame(byte[] messageRawBytes) {
+        // Our message serializer doesn't quite support the bare DML header yet, so we'll be using a shortcut:
+        // Add the magic header and body manually, then send it to the message serializer.
+        var writer = new BitWriter();
+
+        // The length counts everything after the magic header and the length itself, trailing null included.
+        writer.WriteUInt16(MAGIC_HEADER);
+        writer.WriteUInt16((ushort) (messageRawBytes.Length + FrameLengthOverhead));
+
+        // Write the body.
+        writer.WriteUInt8(0);  // IsControl
+        writer.WriteUInt8(0);  // OpCode
+        writer.WriteUInt16(0); // Padding
+
+        // Write payload.
+        writer.WriteBytes(messageRawBytes);
+        writer.WriteUInt8(0);  // Trailing null
+
+        return writer.GetData();
+    }
+
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENT_PROCESS_TERMINATED))]
     private void ReceiveClientKilledProcess(GAME_5_PROTOCOL.MSG_CLIENT_PROCESS_TERMINATED message) {
         // The client has terminated the minigame process.
-        if (message.JobID == _minigameProcessId) {
+        if (_minigameJob is not null && message.JobID == _minigameProcessId) {
             _minigameJob.Tell(message, SessionActor.ActorRef);
         }
     }
