@@ -27,7 +27,6 @@
  * if (SeamstressConfig.TryGetPrices(out var stitchCrowns, out var unstitchCrowns)) { ... }
  *
  * NOTE:
- * The prices have no default. While either one is unset or negative the seamstress options are not offered.
  *
  * TODO:
  *
@@ -89,7 +88,8 @@ internal static class SeamstressConfig {
         }
 
         if (Interlocked.Exchange(ref s_warnedUnsetPrices, 1) == 0) {
-            Logger.Warning("[Seamstress] StitchCrowns and UnstitchCrowns must both be set to 0 or more, so the seamstress options are not offered. StitchCrowns={Stitch}, UnstitchCrowns={Unstitch}.",
+            Logger.Warning("[Seamstress] StitchCrowns and UnstitchCrowns must both be set to 0 or more, " +
+            "so the seamstress options are not offered. StitchCrowns={Stitch}, UnstitchCrowns={Unstitch}.",
                 Logger.Args(stitchCrowns, unstitchCrowns));
         }
 
