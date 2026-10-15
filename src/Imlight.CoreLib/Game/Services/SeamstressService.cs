@@ -46,7 +46,6 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.Seamstress;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Networking;
-using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
 
@@ -170,10 +169,6 @@ internal class SeamstressService(SessionActor sessionActor) : MessageService(ses
 
         return true;
     }
-
-    private bool UnequipItem(ulong itemId)
-        => AskOtherService<CHARACTER_103_PROTOCOL.MSG_UNEQUIPITEMRSP>(
-            new CHARACTER_103_PROTOCOL.MSG_UNEQUIPITEM { ItemId = itemId }).Success;
 
     private static void ReportTampering(Wizard wizard, string infractionText) {
         wizard.Account.AddInfraction(InfractionType.SuspiciousBehavior, infractionText);

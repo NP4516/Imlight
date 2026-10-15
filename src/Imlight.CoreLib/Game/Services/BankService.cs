@@ -126,8 +126,4 @@ internal class BankService(SessionActor sessionActor) : MessageService(sessionAc
         return bank is not null && bank.IsInServiceRange(GetActiveGameObject());
     }
 
-    private bool UnequipItem(ulong itemId)
-        => AskOtherService<CHARACTER_103_PROTOCOL.MSG_UNEQUIPITEMRSP>(
-            new CHARACTER_103_PROTOCOL.MSG_UNEQUIPITEM { ItemId = itemId }).Success;
-
 }
