@@ -63,11 +63,8 @@ using Imlight.CoreLib.WizardData.Models.Player;
 internal sealed class MinigameProcess : Process {
 
     private const uint QUERY_WIZARD_TIMEOUT_IN_MS = 5000;
-
-    private const long LoggedScoreCapMultiplier = 100;
-
-    // MG_Shockalock.dll and MG_CatchAKey.dll end a game with EndGame(win ? 1 : 0), the in-game Exit button with EndGame(0).
-    private const int ChestGameWinScore = 1;
+    private const long LOGGED_SCORE_CAP_MULTIPLIER = 100;
+    private const int CHEST_GAME_WIN_SCORE = 1;
 
     private bool IsMinigameActive { get; set; }
     private bool _roundOpen;
@@ -184,7 +181,7 @@ internal sealed class MinigameProcess : Process {
     }
 
     internal static bool IsChestGameWon(int score)
-        => score >= ChestGameWinScore;
+        => score >= CHEST_GAME_WIN_SCORE;
 
     private void SettleChestRound(int score, CHARACTER_103_PROTOCOL.MSG_CHARACTER character, ScoreTrackingList leaderboard) {
         var won = !_chestRefused && IsChestGameWon(score);
@@ -236,7 +233,7 @@ internal sealed class MinigameProcess : Process {
             return true;
         }
 
-        if (capMultiplier <= 0 && score > LoggedScoreCapMultiplier * topThreshold) {
+        if (capMultiplier <= 0 && score > LOGGED_SCORE_CAP_MULTIPLIER * topThreshold) {
             Logger.Warning("{Process} accepted the unusually high score {Score} of {Wizard}, top threshold {Threshold}",
                 Logger.Args(ProcessName, score, wizard.PlayerNameBehavior.GetWizardName(), topThreshold));
         }

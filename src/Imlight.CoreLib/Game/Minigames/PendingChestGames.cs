@@ -45,20 +45,17 @@ using System.Collections.Concurrent;
 
 namespace Imlight.CoreLib.Game.Minigames;
 
-/// <summary>
-/// The silver chest games that were started and whose minigame zone has not been attached yet.
-/// </summary>
 internal static class PendingChestGames {
 
-    // The chest holds its reservation for the same time before it lets another player in.
-    internal static readonly TimeSpan ArrivalWindow = TimeSpan.FromMinutes(2);
-
+    internal static readonly TimeSpan s_arrivalWindow = TimeSpan.FromMinutes(2);
     private static readonly ConcurrentDictionary<ulong, Entry> s_pending = new();
+
+    private readonly record struct Entry(ChestGameContext Context, DateTime AddedAt);
 
     internal static bool TryAdd(ChestGameContext context) {
         var now = DateTime.UtcNow;
         foreach (var entry in s_pending) {
-            if (now - entry.Value.AddedAt > ArrivalWindow) {
+            if (now - entry.Value.AddedAt > s_arrivalWindow) {
                 s_pending.TryRemove(entry);
             }
         }
@@ -72,7 +69,5 @@ internal static class PendingChestGames {
 
         return taken;
     }
-
-    private readonly record struct Entry(ChestGameContext Context, DateTime AddedAt);
 
 }

@@ -34,7 +34,6 @@
  * a STARTED for a chest that another player holds is answered with a refusal and that process pays nothing.
  *
  * TODO:
- * - How long does a chest transfer take on the live server? ReservationLease is a guess.
  *
  * Created by: Jay
  * Version: KALI 1.0
@@ -60,13 +59,11 @@ namespace Imlight.CoreLib.Game.Zone.Components;
 internal sealed class SilverChestComponent(ZoneEntity entity)
     : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory, IWithTimers {
 
-    // Locale WizardGameObjects_00000055 is "Silver Chest", on the chest template of every world.
-    private const string SilverChestNameKey = "WizardGameObjects_00000055";
-    private const string ChestTextKey = "GUI_ChestInteract";
-    private const string LeaseTimerKey = "chest-lease";
+    private const string SILVER_CHEST_NAME_KEY = "WizardGameObjects_00000055";
+    private const string CHEST_TEXT_KEY = "GUI_ChestInteract";
+    private const string LEASE_TIMER_KEY = "chest-lease";
 
-    // How long a chest waits for the game to start after its player was sent.
-    private static readonly TimeSpan ReservationLease = PendingChestGames.ArrivalWindow;
+    private static readonly TimeSpan ReservationLease = PendingChestGames.s_arrivalWindow;
     private static readonly string[] s_minigameNames = ["Shockalock", "CatchAKey"];
 
     private enum ChestState {
@@ -82,7 +79,7 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
     public string ServiceName => "Interact";
     public string NpcIcon => (Entity.Template as GameObjectTemplate)?.m_sIcon;
     public string NpcNameKey => (Entity.Template as GameObjectTemplate)?.m_displayName;
-    public string NpcTextKey => ChestTextKey;
+    public string NpcTextKey => CHEST_TEXT_KEY;
     public WizBangs WizBang => WizBangs.None;
     public string StateName => "";
     public string InteractWizBang => "";
@@ -92,7 +89,7 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
 
     public static bool ShouldAttachToEntity(CoreTemplate template)
         => template is GameObjectTemplate go
-            && go.m_displayName == SilverChestNameKey
+            && go.m_displayName == SILVER_CHEST_NAME_KEY
             && ChestLootRoller.HasLootTable(go.m_templateID);
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard _)
@@ -137,7 +134,7 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
 
         _state = ChestState.Pending;
         _playerCharId = playerCharacter.CharId;
-        Timers.StartSingleTimer(LeaseTimerKey, new ZONE_102_PROTOCOL.MSG_CHEST_LEASE_EXPIRED(), ReservationLease);
+        Timers.StartSingleTimer(LEASE_TIMER_KEY, new ZONE_102_PROTOCOL.MSG_CHEST_LEASE_EXPIRED(), ReservationLease);
 
         var context = new ChestGameContext(
             ChestRef: Self,
@@ -164,7 +161,7 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
 
         _state = ChestState.InGame;
         _playerCharId = message.CharId;
-        Timers.Cancel(LeaseTimerKey);
+        Timers.Cancel(LEASE_TIMER_KEY);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_CHEST_GAME_RESULT))]
@@ -197,7 +194,7 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
     private void Release() {
         _state = ChestState.Idle;
         _playerCharId = 0;
-        Timers.Cancel(LeaseTimerKey);
+        Timers.Cancel(LEASE_TIMER_KEY);
     }
 
 }

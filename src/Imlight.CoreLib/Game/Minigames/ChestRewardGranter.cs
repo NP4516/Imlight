@@ -50,17 +50,16 @@ using Imlight.CoreLib.WizardData.Models.World;
 
 namespace Imlight.CoreLib.Game.Minigames;
 
-/// <summary>
-/// Rolls and grants the rewards of a won silver chest game.
-/// </summary>
 internal static class ChestRewardGranter {
 
-    private const int WindowSlots = 4;
+    private const int WINDOW_SLOTS = 4;
 
     internal static MinigameRewardResult NoReward()
         => new(DropTableConverter.CreateEmpty(), 0, false);
 
-    internal static MinigameRewardResult Grant(IActorRef playerActor, CHARACTER_103_PROTOCOL.MSG_CHARACTER character, ulong chestTemplateId) {
+    internal static MinigameRewardResult Grant(IActorRef playerActor,
+                                               CHARACTER_103_PROTOCOL.MSG_CHARACTER character,
+                                               ulong chestTemplateId) {
         var wizard = character.Wizard;
         var rolled = ChestLootRoller.Roll(chestTemplateId, playerActor, character.WizardGameObject, wizard);
         FitGoldToPouch(rolled, wizard);
@@ -78,12 +77,12 @@ internal static class ChestRewardGranter {
         lootList.m_loot = drawn;
 
         var slots = drawn.Count + (lootList.m_goldInfo is { m_goldAmount: > 0 } ? 1 : 0);
-        if (slots > WindowSlots) {
+        if (slots > WINDOW_SLOTS) {
             Logger.Warning("Chest {Template} granted {Slots} rewards, the rewards window shows {WindowSlots}",
-                Logger.Args(chestTemplateId, slots, WindowSlots));
+                Logger.Args(chestTemplateId, slots, WINDOW_SLOTS));
         }
 
-        var finalPhase = MinigameRewardTiers.FinalPhaseForSlots(Math.Min(slots, WindowSlots));
+        var finalPhase = MinigameRewardTiers.FinalPhaseForSlots(Math.Min(slots, WINDOW_SLOTS));
 
         return new MinigameRewardResult(lootList, finalPhase, slots > 0);
     }
