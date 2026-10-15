@@ -20,8 +20,7 @@
  * ========================================================================
  *
  * PURPOSE:
- * Reads the [Seamstress] section of Imlight.ini: the Crowns prices, the NPC names that offer the
- * seamstress and the shop title key.
+ * Reads the [Seamstress] section of Imlight.ini: the Crowns prices and the shop title key.
  *
  * USAGE EXAMPLE:
  * if (SeamstressConfig.TryGetPrices(out var stitchCrowns, out var unstitchCrowns)) { ... }
@@ -32,11 +31,9 @@
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
-using System;
-using System.Collections.Generic;
 using System.Threading;
 using Imlight.Common;
 
@@ -49,25 +46,9 @@ internal static class SeamstressConfig {
 
     private const string StitchCrownsKey = "Seamstress.StitchCrowns";
     private const string UnstitchCrownsKey = "Seamstress.UnstitchCrowns";
-    private const string NpcNamesKey = "Seamstress.NpcNames";
     private const string ShopTitleKeyKey = "Seamstress.ShopTitleKey";
 
     private static int s_warnedUnsetPrices;
-
-    /// <summary>
-    /// The English display names of the NPCs that offer stitching and unstitching.
-    /// </summary>
-    internal static IReadOnlySet<string> NpcNames {
-        get {
-            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var configured = ConfigurationManager.GetValue(NpcNamesKey, string.Empty);
-            foreach (var name in configured.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
-                names.Add(name);
-            }
-
-            return names;
-        }
-    }
 
     /// <summary>
     /// The locale key shown as the title of the stitch and unstitch windows.

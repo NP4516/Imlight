@@ -20,25 +20,26 @@
  * ========================================================================
  *
  * PURPOSE:
- * Makes the seamstress NPCs (Eloise Merryweather and her counterparts in the other worlds) offer
- * stitching and unstitching. Picking an option opens the client's stitch or unstitch window.
+ * Makes the NPCs that SpiralDB marks as seamstresses offer stitching and unstitching. Picking an option
+ * opens the client's stitch or unstitch window.
  *
  * USAGE EXAMPLE:
  * Same IServiceComponent + IComponentFactory shape as InteractDyeShopComponent, found by reflection.
  * The requests themselves are handled by SeamstressService.
  *
  * NOTE:
- * Attaches only to vendor NPCs whose English display name is in [Seamstress] NpcNames, and only while
- * both Crowns prices are configured. Both options are always offered together.
+ * Attaches only to NPC templates that have an NpcSeamstress record in SpiralDB, and only while both Crowns
+ * prices are configured. Both options are always offered together.
  *
  * TODO:
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
@@ -47,7 +48,7 @@ using Imlight.CoreLib.Game.Seamstress;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Packets;
-using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Zone.Components;
@@ -65,19 +66,11 @@ internal sealed class InteractSeamstressComponent(ZoneEntity entity) : ZoneEntit
     public string InteractWizBang => "Registrar";
     public string DisplayKey      => "GUI_SeamstressCrowns";
 
-    public static bool ShouldAttachToEntity(CoreTemplate template) {
-        if (template is not GameObjectTemplate goTemplate || !InteractVendorComponent.ShouldAttachToEntity(template)) {
-            return false;
-        }
-
-        // Some templates carry a null display name.
-        string displayName = goTemplate.m_displayName;
-        if (string.IsNullOrEmpty(displayName) || !SeamstressConfig.NpcNames.Contains(Locale.GetEnglishName(displayName))) {
-            return false;
-        }
-
-        return SeamstressConfig.TryGetPrices(out _, out _);
-    }
+    public static bool ShouldAttachToEntity(CoreTemplate template)
+        => template is GameObjectTemplate goTemplate
+        && goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate)
+        && NpcSeamstressCollection.TryGetSeamstress(goTemplate.m_templateID, out _)
+        && SeamstressConfig.TryGetPrices(out _, out _);
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard _)
         => [
