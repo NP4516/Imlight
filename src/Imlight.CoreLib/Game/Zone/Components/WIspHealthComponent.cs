@@ -51,8 +51,8 @@ internal sealed class WispHealthComponent : ZoneEntityComponent, IComponentFacto
     private readonly uint RESET_STATE_ID = StringHash.Compute("Unremarkable");
     private readonly uint WISP_STATE_ID = StringHash.Compute("ActionEmoting");
 
-    private readonly string ParticleAsset = "Character/FX_WispRed_Dsppr.nif";
-    private readonly string SoundAsset = "Sound/GUI/ui_health_powerup_01.wav";
+    private readonly string PARTICLE_ASSET = "Character/FX_WispRed_Dsppr.nif";
+    private readonly string SOUND_ASSET = "Sound/GUI/ui_health_powerup_01.wav";
 
     private const float INTERACTION_RADIUS = 100.0f;
     private const float STARTING_WORLD_WISP_HEALTH = 0.40f;
@@ -139,10 +139,10 @@ internal sealed class WispHealthComponent : ZoneEntityComponent, IComponentFacto
         var stateHealth = new EmoteStateOverrideInfo {
             m_stateNameID = WISP_STATE_ID,
             m_emoteName = "",
-            m_particleAsset = ParticleAsset,
+            m_particleAsset = PARTICLE_ASSET,
             m_loop = false,
             m_particleNode = "",
-            m_soundAsset = SoundAsset,
+            m_soundAsset = SOUND_ASSET,
             m_wizBangID = 0
         };
 
