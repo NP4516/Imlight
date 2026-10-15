@@ -51,8 +51,6 @@ namespace Imlight.CoreLib.Game.CrownShop;
 public static class CrownShopHandler {
     private static readonly bool s_enabled
         = ConfigurationManager.Settings["CrownShop.Enabled"].AsBool();
-    private static readonly string s_crownShopConfigPath
-        = ConfigurationManager.Settings["CrownShop.Path"];
     private static readonly uint s_wishlishMaxSize
         = ConfigurationManager.Settings["CrownShop.WishlistMaxSize"].AsUInt();
     private static readonly uint s_wishlistSBExpansionSize
@@ -61,6 +59,8 @@ public static class CrownShopHandler {
         = ConfigurationManager.Settings["CrownShop.AutoReloadOnChanges"].AsBool();
     public static readonly uint s_maxBuyCount
         = ConfigurationManager.Settings["CrownShop.MaxBuyCount"].AsUInt();
+    private static readonly string s_crownShopConfigPath
+        = ConfigurationManager.Settings["Database.SpiralDBLocalPath"] + "/CrownShop";
 
 
     private static readonly JsonSerializerOptions _jsonSerializerOptions = new() {
