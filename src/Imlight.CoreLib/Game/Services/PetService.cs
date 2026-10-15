@@ -149,6 +149,34 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         HatchEgg(wizard, egg);
     }
 
+    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_PETFEEDHAPPINESS))]
+    private void ReceivePetFeedHappiness(WIZARD2_53_PROTOCOL.MSG_PETFEEDHAPPINESS message) {
+        var wizard = GetActiveWizard();
+        var pet = wizard.GetEquippedPetItem();
+        if (!PetProgression.TryGetPet(pet, out var behavior, out _) || behavior.m_level == 0) {
+            Logger.Debug("MSG_PETFEEDHAPPINESS without a hatched pet equipped.");
+
+            return;
+        }
+
+        var result = PetFeeding.Feed(wizard, pet, message.SnackTemplateID, message.FeedStack != 0);
+        if (result.Fed && result.Snack.m_quantity > 0) {
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKUPDATE {
+                GlobalID = wizard.GameObjectID,
+                ItemID = result.Snack.m_globalID,
+                Quantity = result.Snack.m_quantity
+            });
+        } else if (result.Fed) {
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKREMOVE {
+                GlobalID = wizard.GameObjectID,
+                ItemID = result.Snack.m_globalID
+            });
+        }
+
+        // The client takes this as the pet's happiness, so a refused feed answers with it unchanged.
+        SendToSocket(new WIZARD2_53_PROTOCOL.MSG_PETFEEDHAPPINESS { Happiness = behavior.m_happiness });
+    }
+
     private void InitializeEggs(Wizard wizard) {
         var morphingSlots = wizard.PetOwnerBehavior.MorphingSlots;
         if (morphingSlots == null || morphingSlots.Count == 0) {

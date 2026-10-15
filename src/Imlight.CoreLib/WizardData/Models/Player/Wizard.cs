@@ -669,8 +669,18 @@ public class Wizard {
         return true;
     }
 
-    public bool RemoveSnack(ulong globalId, out ClientPetSnackItem snack) {
-        if (!PetSnackBehavior.RemoveSnack(globalId, out snack)) {
+    public bool RemoveSnack(ulong globalId, out ClientPetSnackItem snack)
+        => RemoveSnack(globalId, 1, out snack);
+
+    /// <summary>
+    /// Takes several snacks out of a stack in the snack bag and saves the bag.
+    /// </summary>
+    /// <param name="globalId">The global id of the snack stack.</param>
+    /// <param name="count">How many snacks to take, at least 1 and at most the stack's quantity.</param>
+    /// <param name="snack">The stack after the snacks were taken.</param>
+    /// <returns>True if the snacks were taken.</returns>
+    public bool RemoveSnack(ulong globalId, int count, out ClientPetSnackItem snack) {
+        if (!PetSnackBehavior.RemoveSnack(globalId, count, out snack)) {
             Logger.Warning("Could not remove snack with global ID {0} from player {1}'s snackbag.",
                 Logger.Args(globalId, PlayerNameBehavior.GetWizardName()));
 
