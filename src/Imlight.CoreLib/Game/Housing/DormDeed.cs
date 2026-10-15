@@ -125,7 +125,7 @@ internal static class DormDeed {
             return false;
         }
 
-        var house = HouseRegistry.GetOrCreateDorm(wizard, out var houseCreated);
+        var house = HouseRegistry.GetOrCreate(wizard, templateId, out var houseCreated);
         if (house is null) {
             Logger.Error("Character {CharId} has no dorm and none could be stored.", Logger.Args(wizard.CharId));
             failure = DormFailure.Unavailable;

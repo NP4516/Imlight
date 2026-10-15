@@ -126,15 +126,6 @@ internal static class HousingRules {
         return item;
     }
 
-    /// <summary>
-    /// Counts the placed objects of a template.
-    /// </summary>
-    /// <param name="slots">The slots of a house; a removed slot is <c>null</c>.</param>
-    /// <param name="templateId">The template id.</param>
-    /// <returns>The number of placed copies.</returns>
-    internal static int CountPlaced(IEnumerable<PlacedItem> slots, uint templateId)
-        => slots.Count(item => item?.TemplateId == templateId);
-
     private static HashSet<uint> HousingTemplateIds
         => LazyInitializer.EnsureInitialized(ref s_housingTemplateIds, BuildHousingTemplateIds);
 

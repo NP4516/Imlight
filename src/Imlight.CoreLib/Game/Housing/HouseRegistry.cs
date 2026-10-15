@@ -24,12 +24,15 @@
  * the same HouseState.
  * 
  * USAGE EXAMPLE:
- * var state = HouseRegistry.GetOrCreateDorm(wizard, out var created);
- * var entered = HouseRegistry.TryEnter(wizard.CharId, lotGid, out var house);
+ * var state = HouseRegistry.GetOrCreate(wizard, templateId, out var created);
+ * if (HouseRegistry.TryEnter(lotGid, out var house)) { ... HouseRegistry.Release(house); }
  * 
  * NOTE:
  * - Zone loads never create houses; only an owner's Home click does.
+ * - A house is stored under its lot. The character's lot for a template is in Wizard.HouseLots, and a new
+ *   house is stored together with that pointer in one transaction.
  * - A state leaves the registry when its last viewer leaves. It is already persisted by then.
+ * - Whether a character may enter a house is decided by the caller, not here.
  * 
  * TODO:
  * 
@@ -61,22 +64,32 @@ internal static class HouseRegistry {
     private static readonly Lock[] s_creationLocks = [.. Enumerable.Range(0, CreationLockCount).Select(_ => new Lock())];
 
     /// <summary>
-    /// Finds a character's Dorm Room, creating and storing it when the character has none. However many
-    /// logins race, one document and one lot exist per character.
+    /// Finds a house by its lot, loading it from the database when it is not live.
+    /// </summary>
+    /// <param name="lotGid">The lot to find.</param>
+    /// <returns>The live house, or <c>null</c> when no house is stored under the lot or it cannot be loaded.</returns>
+    internal static HouseState Get(ulong lotGid) => Publish(lotGid);
+
+    /// <summary>
+    /// Finds a character's house of a template, creating and storing it when the character has none. However many
+    /// logins race, one document and one lot exist per character and template.
     /// </summary>
     /// <param name="owner">The owning character.</param>
+    /// <param name="templateId">The deed or structure template of the house.</param>
     /// <param name="created">Whether this call created the house.</param>
-    /// <returns>The live house, or <c>null</c> when it cannot be loaded or stored.</returns>
-    internal static HouseState GetOrCreateDorm(Wizard owner, out bool created) {
+    /// <returns>The live house, or <c>null</c> when the template is not a house or the house cannot be loaded or stored.</returns>
+    internal static HouseState GetOrCreate(Wizard owner, uint templateId, out bool created) {
         created = false;
-        if (!DormDeed.TryGetStarter(out var dorm)) {
+        if (!HouseTemplates.TryGet(templateId, out var template)) {
+            Logger.Error("Template {TemplateId} is not a house.", Logger.Args(templateId));
+
             return null;
         }
 
-        var lotGid = owner.HouseLots.GetValueOrDefault(dorm.TemplateId);
+        var lotGid = owner.HouseLots.GetValueOrDefault(templateId);
         var house = lotGid == 0 ? null : HouseCollection.Load(lotGid);
         if (house is null) {
-            var layout = HouseLayouts.Resolve(dorm, dorm.LotZone);
+            var layout = HouseLayouts.Resolve(template, template.LotZone);
             if (layout is null) {
                 return null;
             }
@@ -89,7 +102,7 @@ internal static class HouseRegistry {
                 Id = House.GetDocumentId(lotGid),
                 LotGid = lotGid,
                 OwnerCharId = owner.CharId,
-                TemplateId = dorm.TemplateId,
+                TemplateId = templateId,
                 Revision = 1,
                 BonusSlots = 0,
                 NextItemId = (uint) items.Count + 1,
@@ -102,51 +115,31 @@ internal static class HouseRegistry {
             }
 
             if (created) {
-                Logger.Information("Created the dorm {LotGid} of character {CharId}", Logger.Args(house.LotGid, owner.CharId));
+                Logger.Information("Created house {LotGid} of template {TemplateId} for character {CharId}",
+                    Logger.Args(house.LotGid, templateId, owner.CharId));
             }
         }
 
-        if (house.OwnerCharId != owner.CharId || house.TemplateId != dorm.TemplateId) {
-            Logger.Error("House {LotGid} does not belong to the dorm of character {CharId}.", Logger.Args(house.LotGid, owner.CharId));
+        if (house.OwnerCharId != owner.CharId || house.TemplateId != templateId) {
+            Logger.Error("House {LotGid} is not the house of template {TemplateId} of character {CharId}.",
+                Logger.Args(house.LotGid, templateId, owner.CharId));
 
             return null;
         }
 
-        owner.HouseLots[dorm.TemplateId] = house.LotGid;
+        owner.HouseLots[templateId] = house.LotGid;
 
-        return Publish(house.LotGid, owner.CharId);
+        return Publish(house.LotGid);
     }
 
     /// <summary>
-    /// Finds the house of a character by its lot, loading it from the database after a restart.
+    /// Finds a house by its lot and counts a viewer in.
     /// </summary>
-    /// <param name="ownerCharId">The character who must own the house.</param>
-    /// <param name="lotGid">The lot to find.</param>
-    /// <param name="state">The live house when this returns <c>true</c>.</param>
-    /// <returns><c>false</c> when the character has no house with that lot.</returns>
-    internal static bool TryGetOwned(ulong ownerCharId, ulong lotGid, out HouseState state) {
-        if (!s_houses.TryGetValue(lotGid, out state)) {
-            state = Publish(lotGid, ownerCharId);
-        }
-
-        if (state is null || state.OwnerCharId != ownerCharId) {
-            state = null;
-
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Finds a character's house by its lot and counts the character in as a viewer.
-    /// </summary>
-    /// <param name="ownerCharId">The character who must own the house.</param>
     /// <param name="lotGid">The lot to find.</param>
     /// <param name="state">The live house when this returns <c>true</c>; call <see cref="Release"/> when the viewer is gone.</param>
-    /// <returns><c>false</c> when the character has no house with that lot.</returns>
-    internal static bool TryEnter(ulong ownerCharId, ulong lotGid, out HouseState state) {
-        while (TryGetOwned(ownerCharId, lotGid, out state)) {
+    /// <returns><c>false</c> when no house is stored under the lot.</returns>
+    internal static bool TryEnter(ulong lotGid, out HouseState state) {
+        while ((state = Get(lotGid)) is not null) {
             if (state.Enter()) {
                 return true;
             }
@@ -167,7 +160,14 @@ internal static class HouseRegistry {
         }
     }
 
-    private static HouseState Publish(ulong lotGid, ulong ownerCharId) {
+    /// <summary>
+    /// Drops a state from the registry, unless the registry already holds another state for its lot.
+    /// </summary>
+    /// <param name="state">The state to drop.</param>
+    internal static void Evict(HouseState state)
+        => s_houses.TryRemove(new KeyValuePair<ulong, HouseState>(state.LotGid, state));
+
+    private static HouseState Publish(ulong lotGid) {
         while (true) {
             if (s_houses.TryGetValue(lotGid, out var existing)) {
                 if (!existing.IsRetired) {
@@ -186,8 +186,8 @@ internal static class HouseRegistry {
                 }
 
                 var house = HouseCollection.Load(lotGid);
-                if (house is null || house.OwnerCharId != ownerCharId || !HouseTemplates.TryGet(house.TemplateId, out var info)
-                    || !HouseState.TryCreate(house, info, out var created)) {
+                if (house is null || !HouseTemplates.TryGet(house.TemplateId, out var template)
+                    || !HouseState.TryCreate(house, template, out var created)) {
                     return null;
                 }
 
@@ -197,8 +197,5 @@ internal static class HouseRegistry {
             }
         }
     }
-
-    private static void Evict(HouseState state)
-        => s_houses.TryRemove(new KeyValuePair<ulong, HouseState>(state.LotGid, state));
 
 }

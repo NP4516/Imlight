@@ -28,7 +28,8 @@
  *
  * NOTE:
  * - Furniture is not a zone entity. The client builds every placed object from a blob the server sends, and
- *   later edits arrive as small versioned patches. The blob and the patches are built in Game/Housing.
+ *   later edits arrive as small versioned patches. The blob and the patches are built here, from the stored
+ *   items, with the generated Imcodec types; the house is in Game/Housing.
  * - The service counts the player into the house at MSG_PRELOGIN and out when the session ends.
  *
  * TODO:
@@ -41,7 +42,9 @@
 using System;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Housing;
@@ -56,6 +59,12 @@ using Imlight.CoreLib.WizardData.Models.Player;
 namespace Imlight.CoreLib.Game.Services;
 
 internal class HousingService(SessionActor sessionActor) : MessageService(sessionActor) {
+
+    private const string BlobType = "Housing";
+    private const string ItemSubType = "Item";
+    private const int MaxRequestLength = 4096;
+    private const int MaxSerializedLength = 65535;
+    private const uint SerializeMask = 1;
 
     private HouseState _house;
 
@@ -76,8 +85,8 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        if (!HouseRegistry.TryEnter(wizard.CharId, wizard.AttachedLotGid, out var house)) {
-            Logger.Warning("Character {CharId} attached to lot {LotGid}, which is not their house.",
+        if (!HouseRegistry.TryEnter(wizard.AttachedLotGid, out var house)) {
+            Logger.Warning("Character {CharId} attached to lot {LotGid}, which is not a house.",
                 Logger.Args(wizard.CharId, wizard.AttachedLotGid));
 
             return;
@@ -87,9 +96,20 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
 
         // The client compares this with its cached copy and asks for the blob only when they differ.
         var snapshot = house.Snapshot();
-        SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_REQUEST_BLOBS {
-            Data = HouseBlobCodec.BuildBlobRequest(house.LotGid, snapshot.Revision, house.GidBase, snapshot.LiveCount),
-        });
+        var request = new BlobRequest {
+            m_type = BlobType,
+            m_associatedGID = house.LotGid,
+            m_blobRequestObjectList = [
+                new BlobRequestObject {
+                    m_subType = ItemSubType,
+                    m_versionNumber = snapshot.Revision,
+                    m_packageNumber = 0,
+                    m_userData = snapshot.GidBase,
+                    m_objectCount = (uint) snapshot.LiveCount,
+                }
+            ],
+        };
+        SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_REQUEST_BLOBS { Data = Serialize(request) });
     }
 
     [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_REQUEST_BLOBS))]
@@ -101,7 +121,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        if (!HouseBlobCodec.ParseBlobRequest(message.Data, out var request)) {
+        if (!TryParseRequest(message.Data, out var request)) {
             Logger.Warning("Character {CharId} sent a malformed blob request.", Logger.Args(GetActiveWizard().CharId));
 
             return;
@@ -109,7 +129,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
 
         // The version, count and user data in the request are the client's cache state, or 0 in a resync. Neither
         // decides what is sent.
-        if (HouseBlobCodec.RequestedItemBlobs(request, house.LotGid) == 0) {
+        if (!RequestsItemBlob(request, house.LotGid)) {
             Logger.Warning("Character {CharId} requested blobs that are not the item blob of lot {LotGid}.",
                 Logger.Args(GetActiveWizard().CharId, house.LotGid));
 
@@ -156,7 +176,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         if (house.LiveCount >= house.ItemLimit
-            || HousingRules.TemplateCopyLimitReached(template, HousingRules.CountPlaced(house.Snapshot().Slots, templateId))) {
+            || HousingRules.TemplateCopyLimitReached(template, house.CountTemplate(templateId))) {
             InformGameClient("This house cannot hold any more of that.");
 
             return;
@@ -169,10 +189,15 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        if (!house.TryAdd(placed, out var slot, out var stored, out var version, document => HouseCollection.SaveWithBackpack(document, wizard))) {
+        var change = house.TryAdd(placed, document => HouseCollection.SaveWithBackpack(document, wizard));
+        if (!change.Done) {
             if (!wizard.InventoryBehavior.AddItem(item)) {
                 Logger.Error("Could not return item {ItemId} to the backpack of character {CharId} after it failed to be placed.",
                     Logger.Args(itemId, wizard.CharId));
+            }
+
+            if (change.Result == HouseEdit.NeedsResync) {
+                SendBlob(house);
             }
 
             InformGameClient("The object could not be placed.");
@@ -183,15 +208,15 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         ItemSync.SendRemoved(SessionActor.ActorRef, wizard, itemId);
         ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHADDHOUSINGOBJECT {
             ObjectID = templateId,
-            LocX = stored.X,
-            LocY = stored.Y,
-            LocZ = stored.Z,
-            Yaw = stored.Yaw,
-            SubType = HouseBlobCodec.ItemSubType,
+            LocX = change.Item.X,
+            LocY = change.Item.Y,
+            LocZ = change.Item.Z,
+            Yaw = change.Item.Yaw,
+            SubType = ItemSubType,
             PackageNumber = 0,
-            VersionNumber = version,
-            GIDID = HouseBlobCodec.GidIndex(house.GidBase, slot),
-            ColorBits = (sbyte) stored.Tint,
+            VersionNumber = change.Revision,
+            GIDID = change.GidId,
+            ColorBits = (sbyte) change.Item.Tint,
         }, isSelfless: false, ZoneBroadcastTarget.Players);
 
         DeleteStoredItem(wizard.CharId, itemId);
@@ -204,15 +229,22 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         if (message.SwitchCastleBlock != 0 || message.UseExtendedYaw is not (0 or 1)
-            || !HouseBlobCodec.TrySlotFromGid(house.GidBase, message.ObjectGID, house.SlotCount, out var slot)) {
+            || !house.TryFindByGid(message.ObjectGID, out var current, out _)) {
             HandleForgedRequest($"move object {message.ObjectGID}, which is not an object of this house");
 
             return;
         }
 
+        if (current is null) {
+            // The object is gone. The client moved it already, so give it the real state.
+            SendBlob(house);
+
+            return;
+        }
+
         var invalid = false;
-        var done = house.TryUpdate(slot, current => {
-            var replacement = (current with {
+        var change = house.TryUpdate(current.Id, stored => {
+            var replacement = (stored with {
                 X = message.LocX,
                 Y = message.LocY,
                 Z = message.LocZ,
@@ -224,14 +256,14 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             invalid = replacement is null;
 
             return replacement;
-        }, out var updated, out var version);
+        });
         if (invalid) {
             HandleForgedRequest($"move object {message.ObjectGID} to a position, scale or brightness that is not valid");
 
             return;
         }
 
-        if (!done) {
+        if (!change.Done) {
             // The object is gone or the write failed. The client moved it already, so give it the real state.
             SendBlob(house);
 
@@ -239,19 +271,19 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHUPDATEHOUSINGOBJECT {
-            LocX = updated.X,
-            LocY = updated.Y,
-            LocZ = updated.Z,
-            Yaw = updated.Yaw,
-            SubType = HouseBlobCodec.ItemSubType,
+            LocX = change.Item.X,
+            LocY = change.Item.Y,
+            LocZ = change.Item.Z,
+            Yaw = change.Item.Yaw,
+            SubType = ItemSubType,
             PackageNumber = 0,
-            VersionNumber = version,
-            GIDID = HouseBlobCodec.GidIndex(house.GidBase, slot),
-            ObjectID = updated.TemplateId,
+            VersionNumber = change.Revision,
+            GIDID = change.GidId,
+            ObjectID = change.Item.TemplateId,
             SwitchTemplateID = 0,
-            UseExtendedYaw = (sbyte) (updated.ExactYaw ? 1 : 0),
-            Scale = updated.Scale,
-            Brightness = (sbyte) updated.Brightness,
+            UseExtendedYaw = (sbyte) (change.Item.ExactYaw ? 1 : 0),
+            Scale = change.Item.Scale,
+            Brightness = (sbyte) change.Item.Brightness,
         }, isSelfless: false, ZoneBroadcastTarget.Players);
     }
 
@@ -259,27 +291,21 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
     private void ReceivePickUpObject(GAME_5_PROTOCOL.MSG_PICKUPOBJECT message) {
         // Other features use this message too, so a GID that is not one of this house's objects is not ours.
         var house = _house;
-        if (house is null || !HouseBlobCodec.TrySlotFromGid(house.GidBase, message.GameObjectID, house.SlotCount, out var slot)) {
+        if (house is null || !house.TryFindByGid(message.GameObjectID, out var placedItem, out _)) {
             return;
         }
 
         var wizard = GetActiveWizard();
-        var snapshot = house.Snapshot();
-        if (slot >= snapshot.Slots.Count) {
-            return;
-        }
-
-        var templateId = snapshot.Slots[slot]?.TemplateId ?? 0;
-        if (templateId == 0
-            || CoreObjectFactory.GetCoreTemplate(templateId) is not WizItemTemplate template
+        if (placedItem is null
+            || CoreObjectFactory.GetCoreTemplate(placedItem.TemplateId) is not WizItemTemplate template
             || wizard.InventoryBehavior.FreeSlots <= 0
-            || HousingRules.TemplateCopyLimitReached(template, wizard.InventoryBehavior.Items.Count(i => i.m_templateID == templateId))) {
+            || HousingRules.TemplateCopyLimitReached(template, wizard.InventoryBehavior.Items.Count(i => i.m_templateID == placedItem.TemplateId))) {
             RefusePickUp(house);
 
             return;
         }
 
-        var item = HousingRules.CreateItem(wizard, templateId);
+        var item = HousingRules.CreateItem(wizard, placedItem.TemplateId);
         if (item is null || !wizard.InventoryBehavior.AddItem(item)) {
             RefusePickUp(house);
 
@@ -287,7 +313,8 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         // The new item and the emptied slot are written in one transaction, so a crash between them cannot lose the item.
-        if (!house.TryRemove(slot, out _, out var version, document => HouseCollection.SaveWithBackpack(document, wizard, item))) {
+        var change = house.TryRemove(placedItem.Id, document => HouseCollection.SaveWithBackpack(document, wizard, item));
+        if (!change.Done) {
             wizard.InventoryBehavior.RemoveItem(item);
             RefusePickUp(house);
 
@@ -300,10 +327,10 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEHOUSINGOBJECT {
-            SubType = HouseBlobCodec.ItemSubType,
+            SubType = ItemSubType,
             PackageNumber = 0,
-            VersionNumber = version,
-            GIDID = HouseBlobCodec.GidIndex(house.GidBase, slot),
+            VersionNumber = change.Revision,
+            GIDID = change.GidId,
         }, isSelfless: false, ZoneBroadcastTarget.Players);
     }
 
@@ -357,14 +384,71 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         var snapshot = house.Snapshot();
         try {
             // A removed slot is an empty entry, which the client numbers and does not count.
-            var entries = snapshot.Slots.Select(item => item?.ToBlobObject() ?? new HousingBlobObject()).ToList();
+            var blob = new Blob {
+                m_type = BlobType,
+                m_subType = ItemSubType,
+                m_versionNumber = snapshot.Revision,
+                m_packageNumber = 0,
+                m_associatedGID = house.LotGid,
+                m_epochDays = EpochDaysNow(),
+                m_data = new HousingBlob { m_housingBlobObjectList = [.. snapshot.Slots.Select(item => item?.ToBlobObject() ?? new HousingBlobObject())] },
+            };
             SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_SEND_BLOB {
-                Data = HouseBlobCodec.BuildBlob(house.LotGid, snapshot.Revision, entries, HouseBlobCodec.EpochDaysNow()),
-                UserData = house.GidBase,
+                Data = Serialize(blob),
+                UserData = snapshot.GidBase,
             });
         } catch (InvalidOperationException exception) {
             Logger.Error("Could not build the blob of lot {LotGid}: {Reason}", Logger.Args(house.LotGid, exception.Message));
         }
     }
+
+    private static uint EpochDaysNow()
+        => unchecked((uint) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60 * 1440));
+
+    private static ObjectSerializer NewSerializer()
+        => new(Versionable: false, Behaviors: SerializerFlags.None);
+
+    private static ByteString Serialize(PropertyClass value) {
+        if (!NewSerializer().Serialize(value, SerializeMask, out var serialized)) {
+            throw new InvalidOperationException($"Could not serialize {value.GetType().Name}.");
+        }
+
+        if (serialized.Length > MaxSerializedLength) {
+            throw new InvalidOperationException(
+                $"{value.GetType().Name} is {serialized.Length} bytes, past the {MaxSerializedLength} byte string limit.");
+        }
+
+        return serialized;
+    }
+
+    private static bool TryParseRequest(ByteString data, out BlobRequest request) {
+        // The bytes must be exactly what the serializer writes for the parsed request, so truncated, padded and
+        // malformed payloads are rejected.
+        request = null;
+        byte[] bytes = data;
+        if (bytes is null || bytes.Length == 0 || bytes.Length > MaxRequestLength) {
+            return false;
+        }
+
+        try {
+            var serializer = NewSerializer();
+            if (!serializer.Deserialize<BlobRequest>(bytes, SerializeMask, out var parsed) || parsed is null
+                || !serializer.Serialize(parsed, SerializeMask, out var canonical)
+                || !((byte[]) canonical).AsSpan().SequenceEqual(bytes)) {
+                return false;
+            }
+
+            request = parsed;
+
+            return true;
+        } catch (Exception) {
+            return false;
+        }
+    }
+
+    private static bool RequestsItemBlob(BlobRequest request, ulong lotGid)
+        => request.m_type == BlobType && request.m_associatedGID == lotGid
+            && request.m_blobRequestObjectList?.Any(entry => entry is not null
+                && entry.m_subType == ItemSubType && entry.m_packageNumber == 0) == true;
 
 }

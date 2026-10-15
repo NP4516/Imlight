@@ -24,18 +24,21 @@
  * by every player who is in the house.
  * 
  * USAGE EXAMPLE:
- * if (state.TryAdd(item, out var slot, out var stored, out var revision)) {
- *     var gidId = HouseBlobCodec.GidIndex(state.GidBase, slot);
+ * var change = state.TryAdd(item);
+ * if (change.Done) {
+ *     // patch GID change.GidId, version change.Revision
  * }
  * 
  * NOTE:
  * - Every change is written to the database before it returns. A failed write undoes the change
  *   in memory, so the stored house and the live house never differ.
  * - A change that also moves an item to or from a backpack passes its own save, which writes both in one transaction.
- * - Stored items are never changed in place; an update replaces the item.
- * - The slot table numbers the items the way the client numbers its blob entries. A removed item leaves a null
- *   slot behind, so the numbers in later patches stay valid. The table is built, and the revision moved so every
- *   client fetches the new blob, when the state is created.
+ * - Stored items are never changed in place; an update replaces the item. A change names the item by its id,
+ *   which survives a renumbering; the result carries the slot and the patch GID of the moment.
+ * - The slot table numbers the items the way the client numbers its blob entries: GID id = base + slot.
+ *   A removed item leaves a null slot, so the numbers in later patches stay valid. The table is built, with a
+ *   new base and a revision no client has seen, when the state is created, and again when it is full. Clients
+ *   that still use the old base ask for the blob when a patch does not fit.
  * - Use HouseRegistry.TryEnter and HouseRegistry.Release to count viewers.
  * 
  * TODO:
@@ -56,44 +59,90 @@ using Imlight.CoreLib.WizardData.Models.Player;
 namespace Imlight.CoreLib.Game.Housing;
 
 /// <summary>
+/// How a change to a house ended.
+/// </summary>
+internal enum HouseEdit {
+    Done,
+    LimitReached,
+    NotFound,
+    SaveFailed,
+    NeedsResync,
+}
+
+/// <summary>
+/// The result of one change, with what its patch needs.
+/// </summary>
+/// <param name="Result">How the change ended; the other values are only set for <see cref="HouseEdit.Done"/>.</param>
+/// <param name="Slot">The slot of the changed item.</param>
+/// <param name="GidId">The patch's <c>GIDID</c>: the base plus the slot.</param>
+/// <param name="Revision">The revision the change produced: the patch's version.</param>
+/// <param name="Item">The item as it is stored after the change; for a removal, as it was before.</param>
+internal readonly record struct HouseChange(HouseEdit Result, int Slot = -1, uint GidId = 0, uint Revision = 0, PlacedItem Item = null) {
+
+    internal bool Done => Result == HouseEdit.Done;
+
+}
+
+/// <summary>
 /// A consistent copy of a house for building a blob.
 /// </summary>
 /// <param name="Revision">The blob version.</param>
+/// <param name="GidBase">The base the blob entries are numbered from.</param>
 /// <param name="LiveCount">The number of placed items, not counting removed slots.</param>
 /// <param name="Slots">The items in slot order; a removed slot is <c>null</c>.</param>
-internal readonly record struct HouseSnapshot(uint Revision, int LiveCount, IReadOnlyList<PlacedItem> Slots);
+internal readonly record struct HouseSnapshot(uint Revision, uint GidBase, int LiveCount, IReadOnlyList<PlacedItem> Slots);
 
 /// <summary>
 /// The live, persisted state of one house.
 /// </summary>
 internal sealed class HouseState {
 
+    /// <summary>
+    /// The most blob entries one blob holds: a string field is at most 65,535 bytes, the blob header takes
+    /// 47 and every entry 21.
+    /// </summary>
+    internal const int MaxSlots = (65535 - 47) / 21;
+
+    private const int HousingGidType = 9;
+
     private readonly Lock _lock = new();
     private readonly House _house;
     private readonly HouseTemplateInfo _template;
-    private readonly List<PlacedItem> _slots;
+    private List<PlacedItem> _slots;
+    private uint _gidBase;
     private int _liveCount;
     private int _viewers;
     private bool _retired;
 
-    private HouseState(House house, HouseTemplateInfo template, List<PlacedItem> slots, uint gidBase) {
+    private HouseState(House house, HouseTemplateInfo template, List<PlacedItem> slots) {
         _house = house;
         _template = template;
         _slots = slots;
         _liveCount = slots.Count;
-        GidBase = gidBase;
+        _gidBase = NewGidBase();
     }
-
-    /// <summary>
-    /// The base the client numbers this house's blob entries from. Every viewer shares it.
-    /// </summary>
-    internal uint GidBase { get; }
 
     internal ulong LotGid => _house.LotGid;
 
     internal ulong OwnerCharId => _house.OwnerCharId;
 
     internal string ZoneName => _template.LotZone;
+
+    internal uint GidBase {
+        get {
+            lock (_lock) {
+                return _gidBase;
+            }
+        }
+    }
+
+    internal uint Revision {
+        get {
+            lock (_lock) {
+                return _house.Revision;
+            }
+        }
+    }
 
     internal int LiveCount {
         get {
@@ -111,6 +160,9 @@ internal sealed class HouseState {
         }
     }
 
+    /// <summary>
+    /// The number of items the house may hold: the client's own formula, the template's limit plus the bonus slots.
+    /// </summary>
     internal int ItemLimit {
         get {
             lock (_lock) {
@@ -118,6 +170,8 @@ internal sealed class HouseState {
             }
         }
     }
+
+    internal int CastleBlockLimit => _template.CastleBlockLimit;
 
     internal bool IsRetired {
         get {
@@ -149,39 +203,104 @@ internal sealed class HouseState {
             return false;
         }
 
-        state = new HouseState(house, template, ordered, HouseBlobCodec.NewGidBase());
+        state = new HouseState(house, template, ordered);
 
         return true;
     }
 
     /// <summary>
+    /// Draws the base the client numbers a house's blob entries from. The range leaves room for
+    /// <see cref="MaxSlots"/> entries above any base without wrapping past 2^32.
+    /// </summary>
+    /// <returns>A new GID base.</returns>
+    internal static uint NewGidBase()
+        => (uint) Random.Shared.NextInt64(0x80000000L, 0xFFFF0000L);
+
+    /// <summary>
     /// Copies the house for building a blob.
     /// </summary>
-    /// <returns>The revision, live count and slots, taken together.</returns>
+    /// <returns>The revision, base, live count and slots, taken together.</returns>
     internal HouseSnapshot Snapshot() {
         lock (_lock) {
-            return new HouseSnapshot(_house.Revision, _liveCount, [.. _slots]);
+            return new HouseSnapshot(_house.Revision, _gidBase, _liveCount, [.. _slots]);
         }
     }
 
     /// <summary>
-    /// Places an item in a new slot at the end of the table.
+    /// Gets the <c>GIDID</c> of a slot: the base plus the slot, wrapping like the client's 32-bit sum.
     /// </summary>
-    /// <param name="item">The item to place; its id is replaced by the next free one.</param>
-    /// <param name="slot">The new slot when this returns <c>true</c>.</param>
-    /// <param name="stored">The item as it is stored when this returns <c>true</c>.</param>
-    /// <param name="revision">The new revision when this returns <c>true</c>.</param>
-    /// <param name="save">Writes the house; <c>null</c> writes the house alone.</param>
-    /// <returns><c>false</c> at the item limit, when the blob is full, or when the write failed.</returns>
-    internal bool TryAdd(PlacedItem item, out int slot, out PlacedItem stored, out uint revision, Func<House, bool> save = null) {
-        slot = -1;
-        stored = null;
+    /// <param name="slot">The slot, counting removed slots.</param>
+    /// <returns>The <c>GIDID</c> of the slot's patches.</returns>
+    internal uint GidIdOf(int slot) {
         lock (_lock) {
-            revision = _house.Revision;
-            if (_liveCount >= _template.ItemLimit + _house.BonusSlots || _slots.Count >= HouseBlobCodec.MaxSlotsThatFit) {
+            return unchecked(_gidBase + (uint) slot);
+        }
+    }
+
+    /// <summary>
+    /// Finds the slot a housing object GID names. The client builds the GID as
+    /// <c>(u16 &lt;&lt; 48) | (9 &lt;&lt; 40) | GIDID</c>.
+    /// </summary>
+    /// <param name="gid">The GID the client sent.</param>
+    /// <param name="item">The item in the slot; <c>null</c> when the slot was removed.</param>
+    /// <param name="slot">The slot when this returns <c>true</c>.</param>
+    /// <returns><c>true</c> when the GID is a housing object GID inside this house's numbering.</returns>
+    internal bool TryFindByGid(ulong gid, out PlacedItem item, out int slot) {
+        item = null;
+        slot = -1;
+        if (((gid >> 40) & 0xFF) != HousingGidType || (gid & 0x000000FF00000000UL) != 0) {
+            return false;
+        }
+
+        lock (_lock) {
+            var offset = unchecked((uint) gid - _gidBase);
+            if (offset >= (uint) _slots.Count) {
                 return false;
             }
 
+            slot = (int) offset;
+            item = _slots[slot];
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Counts the placed items of a template.
+    /// </summary>
+    /// <param name="templateId">The item template.</param>
+    /// <returns>The number of placed copies.</returns>
+    internal int CountTemplate(uint templateId) {
+        lock (_lock) {
+            return _slots.Count(item => item?.TemplateId == templateId);
+        }
+    }
+
+    /// <summary>
+    /// Places an item in a new slot at the end of the table. When the table is full of removed slots it is
+    /// numbered again instead and nothing is added.
+    /// </summary>
+    /// <param name="item">The item to place; its id is replaced by the next free one.</param>
+    /// <param name="save">Writes the house; <c>null</c> writes the house alone.</param>
+    /// <returns>
+    /// <see cref="HouseEdit.LimitReached"/> at the item limit, <see cref="HouseEdit.NeedsResync"/> when the table was
+    /// numbered again (every viewer needs the blob), <see cref="HouseEdit.SaveFailed"/> when the write failed.
+    /// </returns>
+    internal HouseChange TryAdd(PlacedItem item, Func<House, bool> save = null) {
+        lock (_lock) {
+            if (_liveCount >= _template.ItemLimit + _house.BonusSlots) {
+                return new HouseChange(HouseEdit.LimitReached);
+            }
+
+            if (_slots.Count >= MaxSlots) {
+                if (_liveCount >= _slots.Count) {
+                    return new HouseChange(HouseEdit.LimitReached);
+                }
+
+                return new HouseChange(Renumber() ? HouseEdit.NeedsResync : HouseEdit.SaveFailed);
+            }
+
+            var revision = _house.Revision;
             var added = item with { Id = _house.NextItemId };
             _house.Items.Add(added);
             _house.NextItemId = added.Id + 1;
@@ -191,132 +310,131 @@ internal sealed class HouseState {
                 _house.NextItemId = added.Id;
                 _house.Revision = revision;
 
-                return false;
+                return new HouseChange(HouseEdit.SaveFailed);
             }
 
             _slots.Add(added);
             _liveCount++;
-            slot = _slots.Count - 1;
-            stored = added;
-            revision = _house.Revision;
+            var slot = _slots.Count - 1;
 
-            return true;
+            return new HouseChange(HouseEdit.Done, slot, unchecked(_gidBase + (uint) slot), _house.Revision, added);
         }
     }
 
     /// <summary>
     /// Removes a placed item. Its slot stays in the table as a null slot.
     /// </summary>
-    /// <param name="slot">The slot to remove.</param>
-    /// <param name="removed">The item that was removed when this returns <c>true</c>.</param>
-    /// <param name="revision">The new revision when this returns <c>true</c>.</param>
+    /// <param name="itemId">The id of the item to remove.</param>
     /// <param name="save">Writes the house; <c>null</c> writes the house alone.</param>
-    /// <returns><c>false</c> when the slot is not a placed item or the write failed.</returns>
-    internal bool TryRemove(int slot, out PlacedItem removed, out uint revision, Func<House, bool> save = null) {
-        removed = null;
+    /// <returns><see cref="HouseEdit.NotFound"/> when the house has no such item, <see cref="HouseEdit.SaveFailed"/> when the write failed.</returns>
+    internal HouseChange TryRemove(uint itemId, Func<House, bool> save = null) {
         lock (_lock) {
-            revision = _house.Revision;
-            if (!IsLiveSlot(slot)) {
-                return false;
+            var slot = _slots.FindIndex(candidate => candidate?.Id == itemId);
+            if (slot < 0) {
+                return new HouseChange(HouseEdit.NotFound);
             }
 
             var previous = _slots[slot];
-            var index = _house.Items.FindIndex(item => item.Id == previous.Id);
+            var index = _house.Items.FindIndex(candidate => candidate.Id == itemId);
+            var revision = _house.Revision;
             _house.Items.RemoveAt(index);
             _house.Revision = revision + 1;
             if (!Persist(save)) {
                 _house.Items.Insert(index, previous);
                 _house.Revision = revision;
 
-                return false;
+                return new HouseChange(HouseEdit.SaveFailed);
             }
 
             _slots[slot] = null;
             _liveCount--;
-            removed = previous;
-            revision = _house.Revision;
 
-            return true;
+            return new HouseChange(HouseEdit.Done, slot, unchecked(_gidBase + (uint) slot), _house.Revision, previous);
         }
     }
 
     /// <summary>
-    /// Removes several placed items in one write. The revision moves by the number of slots, so a
-    /// client can be sent one delete patch per slot with consecutive versions.
+    /// Removes several placed items in one write. The revision moves by the number of items, so a
+    /// client can be sent one delete patch per item with consecutive versions.
     /// </summary>
-    /// <param name="slots">The slots to remove; each must be a placed item, and none may repeat.</param>
-    /// <param name="revision">The new revision when this returns <c>true</c>: the last patch's version.</param>
-    /// <returns><c>false</c> when a slot is not a placed item or the write failed; nothing changes then.</returns>
-    internal bool TryRemoveMany(IReadOnlyCollection<int> slots, out uint revision) {
+    /// <param name="itemIds">The ids of the items to remove; none may repeat.</param>
+    /// <param name="removed">One change per item in the order of <paramref name="itemIds"/>: its slot, GID id, the version of its patch and the item.</param>
+    /// <returns><see cref="HouseEdit.NotFound"/> when an item is not in the house, <see cref="HouseEdit.SaveFailed"/> when the write failed; nothing changes then.</returns>
+    internal HouseEdit TryRemoveMany(IReadOnlyCollection<uint> itemIds, out IReadOnlyList<HouseChange> removed) {
+        removed = [];
         lock (_lock) {
-            revision = _house.Revision;
-            if (slots.Count == 0 || slots.Distinct().Count() != slots.Count || !slots.All(IsLiveSlot)) {
-                return false;
+            if (itemIds.Count == 0 || itemIds.Distinct().Count() != itemIds.Count) {
+                return HouseEdit.NotFound;
+            }
+
+            var slots = itemIds.Select(id => _slots.FindIndex(candidate => candidate?.Id == id)).ToList();
+            if (slots.Any(slot => slot < 0)) {
+                return HouseEdit.NotFound;
             }
 
             var previousItems = _house.Items;
-            var removedIds = slots.Select(slot => _slots[slot].Id).ToHashSet();
-            _house.Items = [.. previousItems.Where(item => !removedIds.Contains(item.Id))];
-            _house.Revision = revision + (uint) slots.Count;
+            var revision = _house.Revision;
+            var removedIds = itemIds.ToHashSet();
+            _house.Items = [.. previousItems.Where(candidate => !removedIds.Contains(candidate.Id))];
+            _house.Revision = revision + (uint) itemIds.Count;
             if (!HouseCollection.Save(_house)) {
                 _house.Items = previousItems;
                 _house.Revision = revision;
 
-                return false;
+                return HouseEdit.SaveFailed;
             }
 
-            foreach (var slot in slots) {
+            var changes = new List<HouseChange>(slots.Count);
+            for (var i = 0; i < slots.Count; i++) {
+                var slot = slots[i];
+                changes.Add(new HouseChange(HouseEdit.Done, slot, unchecked(_gidBase + (uint) slot), revision + (uint) i + 1, _slots[slot]));
                 _slots[slot] = null;
             }
 
             _liveCount -= slots.Count;
-            revision = _house.Revision;
+            removed = changes;
 
-            return true;
+            return HouseEdit.Done;
         }
     }
 
     /// <summary>
     /// Replaces a placed item with an updated copy of itself.
     /// </summary>
-    /// <param name="slot">The slot to update.</param>
+    /// <param name="itemId">The id of the item to update.</param>
     /// <param name="update">Returns the replacement for the stored item; it must keep the id and the template.</param>
-    /// <param name="updated">The item as it is stored when this returns <c>true</c>.</param>
-    /// <param name="revision">The new revision when this returns <c>true</c>.</param>
     /// <returns>
-    /// <c>false</c> when the slot is not a placed item, <paramref name="update"/> returns <c>null</c> or an item
-    /// of another id or template, or the write failed.
+    /// <see cref="HouseEdit.NotFound"/> when the house has no such item or <paramref name="update"/> returns <c>null</c>
+    /// or an item of another id or template, <see cref="HouseEdit.SaveFailed"/> when the write failed.
     /// </returns>
-    internal bool TryUpdate(int slot, Func<PlacedItem, PlacedItem> update, out PlacedItem updated, out uint revision) {
-        updated = null;
+    internal HouseChange TryUpdate(uint itemId, Func<PlacedItem, PlacedItem> update) {
         lock (_lock) {
-            revision = _house.Revision;
-            if (!IsLiveSlot(slot)) {
-                return false;
+            var slot = _slots.FindIndex(candidate => candidate?.Id == itemId);
+            if (slot < 0) {
+                return new HouseChange(HouseEdit.NotFound);
             }
 
             var previous = _slots[slot];
             var replacement = update(previous);
             if (replacement is null || ReferenceEquals(replacement, previous)
                 || replacement.Id != previous.Id || replacement.TemplateId != previous.TemplateId) {
-                return false;
+                return new HouseChange(HouseEdit.NotFound);
             }
 
-            var index = _house.Items.FindIndex(item => item.Id == previous.Id);
+            var index = _house.Items.FindIndex(candidate => candidate.Id == itemId);
+            var revision = _house.Revision;
             _house.Items[index] = replacement;
             _house.Revision = revision + 1;
             if (!HouseCollection.Save(_house)) {
                 _house.Items[index] = previous;
                 _house.Revision = revision;
 
-                return false;
+                return new HouseChange(HouseEdit.SaveFailed);
             }
 
             _slots[slot] = replacement;
-            updated = replacement;
-            revision = _house.Revision;
 
-            return true;
+            return new HouseChange(HouseEdit.Done, slot, unchecked(_gidBase + (uint) slot), _house.Revision, replacement);
         }
     }
 
@@ -356,6 +474,24 @@ internal sealed class HouseState {
         }
     }
 
+    private bool Renumber() {
+        var previousSlots = _slots;
+        var previousBase = _gidBase;
+        var previousRevision = _house.Revision;
+        _slots = [.. _house.Items];
+        _gidBase = NewGidBase();
+        _house.Revision = previousRevision + 1;
+        if (HouseCollection.Save(_house)) {
+            return true;
+        }
+
+        _slots = previousSlots;
+        _gidBase = previousBase;
+        _house.Revision = previousRevision;
+
+        return false;
+    }
+
     private bool Persist(Func<House, bool> save) {
         try {
             return (save ?? HouseCollection.Save)(_house);
@@ -365,8 +501,5 @@ internal sealed class HouseState {
             return false;
         }
     }
-
-    private bool IsLiveSlot(int slot)
-        => slot >= 0 && slot < _slots.Count && _slots[slot] is not null;
 
 }

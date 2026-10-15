@@ -73,7 +73,8 @@ internal static class HouseAttach {
             return false;
         }
 
-        if (!HouseRegistry.TryGetOwned(wizard.CharId, lotGid, out house)
+        house = HouseRegistry.Get(lotGid);
+        if (house is null || house.OwnerCharId != wizard.CharId
             || !string.Equals(house.ZoneName, zoneName, StringComparison.OrdinalIgnoreCase)) {
             Logger.Warning("Character {CharId} has no house with lot {LotGid} in zone {Zone}.",
                 Logger.Args(wizard.CharId, lotGid, zoneName));
