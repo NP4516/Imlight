@@ -273,7 +273,7 @@ internal class CommandModifyProtocol : CommandProtocol {
     [Command("petxp")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddPetXpCommand(string xp) {
-        if (!uint.TryParse(xp, NumberStyles.Integer, CultureInfo.InvariantCulture, out var amount)) {
+        if (!uint.TryParse(xp, NumberStyles.Integer, CultureInfo.InvariantCulture, out var amount) || amount == 0) {
             InformSenderClient("Invalid XP amount.");
 
             return;
@@ -283,16 +283,14 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        var levelsGained = PetProgression.AddXp(pet, amount);
-        if (levelsGained < 0) {
+        var result = PetXpAward.Give(Context.SessionActor, Context.Character, pet, amount, PetXpSource.Command);
+        if (!result.Applied) {
             InformSenderClient("This pet cannot gain XP.");
 
             return;
         }
 
-        SendPetBehavior(pet);
-        Context.SessionActor.Tell(new WIZARD2_53_PROTOCOL.MSG_GAINPETXP { PetGID = pet.m_globalID, XP = amount }, null);
-        InformSenderClient($"Gave the pet {amount} XP and {levelsGained} levels.");
+        InformSenderClient($"Gave the pet {result.Granted} XP and {result.LevelsGained} levels.");
     }
 
     [Command("pethappiness")]

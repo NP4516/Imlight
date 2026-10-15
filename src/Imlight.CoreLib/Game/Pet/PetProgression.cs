@@ -21,7 +21,7 @@
  *
  * PURPOSE:
  * Changes the state a pet keeps in its item behavior: genes, stats, happiness, XP and level,
- * expressed talents and ratings. Nothing here saves or sends; callers do that.
+ * expressed talents and ratings. Nothing here saves or sends; callers do that (see PetXpAward).
  *
  * USAGE EXAMPLE:
  * if (PetProgression.EnsureInitialized(pet)) { wizard.SavePet(pet); }
@@ -128,23 +128,26 @@ internal static class PetProgression {
     /// Adds XP to the pet's current level, carrying any overflow into the next levels.
     /// </summary>
     /// <param name="pet">The pet item.</param>
-    /// <param name="xp">The XP to add.</param>
-    /// <returns>The levels gained, or -1 if the pet cannot gain XP (not hatched, no XP ladder, unknown).</returns>
-    internal static int AddXp(WizClientObjectItem pet, uint xp) {
-        if (!TryGetPet(pet, out var behavior, out var template) || behavior.m_level == 0) {
-            return -1;
+    /// <param name="xp">The XP to add, before any bonus for the source.</param>
+    /// <param name="source">Where the XP comes from, which decides the bonus.</param>
+    /// <returns>What the pet received and how many levels it gained, or <see cref="PetXpResult.None"/> if it cannot gain XP (not hatched, no XP ladder, at the top level, unknown).</returns>
+    internal static PetXpResult AddXp(WizClientObjectItem pet, uint xp, PetXpSource source) {
+        if (xp == 0 || !TryGetPet(pet, out var behavior, out var template) || behavior.m_level == 0) {
+            return PetXpResult.None;
         }
 
         EnsureInitialized(pet);
         var maxLevel = MaxLevel(template);
-        var level = (int) behavior.m_level;
-        if (level >= maxLevel || RequiredXp(template, level) == 0) {
-            return -1;
+        var startLevel = (int) behavior.m_level;
+        if (startLevel >= maxLevel || RequiredXp(template, startLevel) == 0) {
+            return PetXpResult.None;
         }
 
+        var granted = (uint) Math.Min((ulong) xp * (uint) PetRules.GetXpMultiplier(source), uint.MaxValue);
+
         // A zero rung stops the walk, so a pet with an all-zero ladder cannot loop.
-        var total = (ulong) behavior.m_XP + xp;
-        var gained = 0;
+        var total = (ulong) behavior.m_XP + granted;
+        var level = startLevel;
         while (level < maxLevel) {
             var required = RequiredXp(template, level);
             if (required == 0 || total < required) {
@@ -153,14 +156,13 @@ internal static class PetProgression {
 
             total -= required;
             level++;
-            gained++;
         }
 
         behavior.m_level = (byte) level;
         behavior.m_XP = level >= maxLevel ? 0 : (uint) total;
         EnsureInitialized(pet);
 
-        return gained;
+        return new PetXpResult(granted, level - startLevel);
     }
 
     /// <summary>

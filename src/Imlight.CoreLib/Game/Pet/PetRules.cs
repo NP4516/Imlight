@@ -27,9 +27,10 @@
  * pet.m_maximumHappiness = (uint) PetRules.MaximumHappiness;
  *
  * NOTE:
- * Rules that exist in a client file are read from that file, never from here.
+ * Rules that exist in a client file are read from that file, never from here. Everyone counts as a member.
  *
  * TODO:
+ * - Only game and snack XP get the member bonus, community sources do not say whether combat XP does.
  *
  * Created by: Jay
  * Version: KALI 1.0
@@ -48,6 +49,7 @@ internal static class PetRules {
 
     private const int DefaultStartingHappiness = 50;
     private const int DefaultMaximumHappiness = 100;
+    private const int DefaultMemberXpMultiplier = 2;
 
     /// <summary>
     /// The happiness a pet starts with.
@@ -58,5 +60,18 @@ internal static class PetRules {
     /// The most happiness a pet can have.
     /// </summary>
     internal static int MaximumHappiness { get; } = Math.Max(1, ConfigurationManager.GetValue("Pets.MaximumHappiness", DefaultMaximumHappiness));
+
+    /// <summary>
+    /// The factor members get on the XP their pets earn.
+    /// </summary>
+    internal static int MemberXpMultiplier { get; } = Math.Max(1, ConfigurationManager.GetValue("Pets.MemberXpMultiplier", DefaultMemberXpMultiplier));
+
+    /// <summary>
+    /// Gets the factor applied to XP from a source, for a wizard who counts as a member.
+    /// </summary>
+    /// <param name="source">Where the XP comes from.</param>
+    /// <returns>The factor, 1 when the source gets no bonus.</returns>
+    internal static int GetXpMultiplier(PetXpSource source)
+        => source is PetXpSource.Game or PetXpSource.Snack ? MemberXpMultiplier : 1;
 
 }
