@@ -178,6 +178,62 @@ internal static class PetProgression {
     }
 
     /// <summary>
+    /// Adds a set of stat changes to the pet's current stats, holding every stat at its maximum.
+    /// </summary>
+    /// <param name="pet">The pet item.</param>
+    /// <param name="mods">The changes, such as a snack's or a game track's. The set itself is left as it is.</param>
+    /// <returns>The points that raised stats and the points the maximums turned away, with a filled-in copy of the set. A pet that cannot take stats (not hatched, unknown) takes none.</returns>
+    internal static PetStatModResult ApplyStatMods(WizClientObjectItem pet, PetStatModificationSet mods) {
+        var changes = mods?.m_modifications ?? [];
+        var taken = new uint[changes.Count];
+        ulong applied = 0;
+        ulong overflow = 0;
+
+        if (changes.Count > 0 && TryGetPet(pet, out var behavior, out _) && behavior.m_level > 0) {
+            EnsureInitialized(pet);
+            for (var index = 0; index < changes.Count; index++) {
+                var change = changes[index];
+                if (change.m_change <= 0) {
+                    if (change.m_change < 0) {
+                        Logger.Warning("The stat change {Stat} of {Change} is negative, so it is skipped.", Logger.Args(change.m_name.ToString(), change.m_change));
+                    }
+
+                    continue;
+                }
+
+                var current = behavior.m_currentStats?.FirstOrDefault(stat => stat.m_name == change.m_name);
+                var maximum = behavior.m_maxStats?.FirstOrDefault(stat => stat.m_name == change.m_name);
+                if (current is null || maximum is null) {
+                    Logger.Warning("The pet {PetId} has no stat {Stat}, so its {Change} points are not applied.", Logger.Args(pet.m_globalID.Full, change.m_name.ToString(), change.m_change));
+                }
+
+                var room = current is null || maximum is null ? 0 : Math.Max(0, maximum.m_value - current.m_value);
+                var points = Math.Min(change.m_change, room);
+                if (points > 0) {
+                    current.m_value += points;
+                }
+
+                taken[index] = (uint) points;
+                applied += (uint) points;
+                overflow += (uint) (change.m_change - points);
+            }
+        }
+
+        var copy = new PetStatModificationSet {
+            m_name = mods?.m_name ?? default,
+            m_scene = mods?.m_scene ?? default,
+            m_gameScoreFactor = [.. mods?.m_gameScoreFactor ?? []],
+            m_modifications = [.. changes.Select((change, index) => new PetStatModification {
+                m_name = change.m_name,
+                m_change = change.m_change,
+                m_actualChange = taken[index]
+            })]
+        };
+
+        return new PetStatModResult(copy, (uint) Math.Min(applied, uint.MaxValue), (uint) Math.Min(overflow, uint.MaxValue));
+    }
+
+    /// <summary>
     /// Sets the pet's level, clears its XP and expresses exactly the talents that level earns.
     /// </summary>
     /// <param name="pet">The pet item.</param>
