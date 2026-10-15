@@ -70,15 +70,15 @@ internal sealed class HouseState {
 
     private readonly Lock _lock = new();
     private readonly House _house;
-    private readonly HousingZoneInfo _zoneInfo;
+    private readonly HouseTemplateInfo _template;
     private readonly List<PlacedItem> _slots;
     private int _liveCount;
     private int _viewers;
     private bool _retired;
 
-    private HouseState(House house, HousingZoneInfo zoneInfo, List<PlacedItem> slots, uint gidBase) {
+    private HouseState(House house, HouseTemplateInfo template, List<PlacedItem> slots, uint gidBase) {
         _house = house;
-        _zoneInfo = zoneInfo;
+        _template = template;
         _slots = slots;
         _liveCount = slots.Count;
         GidBase = gidBase;
@@ -93,7 +93,7 @@ internal sealed class HouseState {
 
     internal ulong OwnerCharId => _house.OwnerCharId;
 
-    internal string ZoneName => _zoneInfo.ZoneName;
+    internal string ZoneName => _template.LotZone;
 
     internal int LiveCount {
         get {
@@ -114,7 +114,7 @@ internal sealed class HouseState {
     internal int ItemLimit {
         get {
             lock (_lock) {
-                return HousingZones.EffectiveItemLimit(_zoneInfo, _house.BonusSlots);
+                return _template.ItemLimit + _house.BonusSlots;
             }
         }
     }
@@ -132,10 +132,10 @@ internal sealed class HouseState {
     /// and the revision moves once and is stored, so a client with an older cache fetches the blob again.
     /// </summary>
     /// <param name="house">The stored house; the state owns it from now on.</param>
-    /// <param name="zoneInfo">The house's zone and limits.</param>
+    /// <param name="template">The house's template.</param>
     /// <param name="state">The live state when this returns <c>true</c>.</param>
     /// <returns><c>false</c> when the new revision could not be stored.</returns>
-    internal static bool TryCreate(House house, HousingZoneInfo zoneInfo, out HouseState state) {
+    internal static bool TryCreate(House house, HouseTemplateInfo template, out HouseState state) {
         state = null;
         var previousItems = house.Items;
         var previousRevision = house.Revision;
@@ -149,7 +149,7 @@ internal sealed class HouseState {
             return false;
         }
 
-        state = new HouseState(house, zoneInfo, ordered, HouseBlobCodec.NewGidBase());
+        state = new HouseState(house, template, ordered, HouseBlobCodec.NewGidBase());
 
         return true;
     }
@@ -178,8 +178,7 @@ internal sealed class HouseState {
         stored = null;
         lock (_lock) {
             revision = _house.Revision;
-            if (_liveCount >= HousingZones.EffectiveItemLimit(_zoneInfo, _house.BonusSlots)
-                || _slots.Count >= HousingZones.MaxBlobSlots) {
+            if (_liveCount >= _template.ItemLimit + _house.BonusSlots || _slots.Count >= HouseBlobCodec.MaxSlotsThatFit) {
                 return false;
             }
 

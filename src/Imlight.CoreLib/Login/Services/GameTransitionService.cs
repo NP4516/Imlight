@@ -193,7 +193,7 @@ internal class GameTransitionService(SessionActor sessionActor) : MessageService
 
     private static bool IsUnreachableOnLogin(string zone) {
         // A house needs its lot from the Home button, and a login carries none.
-        return IsMinigameZone(zone) || HousingZones.IsHousingZone(zone);
+        return IsMinigameZone(zone) || HouseZoneIndex.IsHouseZone(zone);
     }
 
     private string DetermineLocation(Wizard wizard) {

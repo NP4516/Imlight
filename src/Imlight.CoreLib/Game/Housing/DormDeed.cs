@@ -77,7 +77,24 @@ internal static class DormDeed {
     /// <param name="wizard">The character.</param>
     /// <returns>The lot, or 0 when the character has no Dorm Room yet.</returns>
     internal static ulong LotOf(Wizard wizard)
-        => wizard.HouseLots.GetValueOrDefault(HousingZones.DormInfo.TemplateId);
+        => TryGetStarter(out var starter) ? wizard.HouseLots.GetValueOrDefault(starter.TemplateId) : 0;
+
+    /// <summary>
+    /// Gets the house every character is given: the first template of <c>Housing.StarterDeeds</c> that is a house.
+    /// </summary>
+    /// <param name="starter">The template's definition when this returns <c>true</c>.</param>
+    /// <returns><c>false</c> when no configured starter is a house template.</returns>
+    internal static bool TryGetStarter(out HouseTemplateInfo starter) {
+        foreach (var templateId in HousingSettings.StarterDeeds) {
+            if (HouseTemplates.TryGet(templateId, out starter)) {
+                return true;
+            }
+        }
+
+        starter = default;
+
+        return false;
+    }
 
     /// <summary>
     /// Makes sure a character has a Dorm Room and a deed item that points at it.
@@ -93,7 +110,14 @@ internal static class DormDeed {
         entry = default;
         failure = DormFailure.None;
 
-        var templateId = HousingZones.DormInfo.TemplateId;
+        if (!TryGetStarter(out var starter)) {
+            Logger.Error("No template of Housing.StarterDeeds is a house.");
+            failure = DormFailure.Unavailable;
+
+            return false;
+        }
+
+        var templateId = starter.TemplateId;
         var item = wizard.InventoryBehavior.Items.FirstOrDefault(candidate => candidate.m_templateID == templateId);
         if (item is null && wizard.InventoryBehavior.FreeSlots <= 0) {
             failure = DormFailure.BackpackFull;
@@ -111,7 +135,7 @@ internal static class DormDeed {
 
         var itemCreated = item is null;
         if (itemCreated) {
-            item = CreateDeed(wizard, house.LotGid);
+            item = CreateDeed(wizard, templateId, house.LotGid);
             if (item is null) {
                 failure = wizard.InventoryBehavior.FreeSlots <= 0 ? DormFailure.BackpackFull : DormFailure.Unavailable;
 
@@ -133,9 +157,9 @@ internal static class DormDeed {
         return true;
     }
 
-    private static WizClientObjectItem CreateDeed(Wizard wizard, ulong lotGid) {
-        if (CoreObjectFactory.FinalizeCoreObject(HousingZones.DormInfo.TemplateId) is not WizClientObjectItem item) {
-            Logger.Error("The dorm structure template {TemplateId} is not an item.", Logger.Args(HousingZones.DormInfo.TemplateId));
+    private static WizClientObjectItem CreateDeed(Wizard wizard, uint templateId, ulong lotGid) {
+        if (CoreObjectFactory.FinalizeCoreObject(templateId) is not WizClientObjectItem item) {
+            Logger.Error("The starter house template {TemplateId} is not an item.", Logger.Args(templateId));
 
             return null;
         }
@@ -143,7 +167,7 @@ internal static class DormDeed {
         item.m_characterId = (GID) wizard.CharId;
         CoreObjectFactory.InitializeCoreObjectBehaviors(item, item.m_templateID);
         if (!TrySetLot(item, lotGid, out _)) {
-            Logger.Error("The dorm structure template {TemplateId} has no deed behavior.", Logger.Args(HousingZones.DormInfo.TemplateId));
+            Logger.Error("The starter house template {TemplateId} has no deed behavior.", Logger.Args(templateId));
 
             return null;
         }

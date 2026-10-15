@@ -57,17 +57,16 @@ internal static class HouseAttach {
     /// <param name="messageZoneId">The zone id the client sent. It is not used for an ordinary zone.</param>
     /// <param name="house">The character's house when the zone is a house; otherwise <c>null</c>.</param>
     /// <returns>
-    /// <c>true</c> for an ordinary zone, and for the character's own Dorm Room when the client names no lot or the stored lot.
+    /// <c>true</c> for an ordinary zone, and for the character's own house in the zone when the client names no lot or the stored lot.
     /// </returns>
     internal static bool TryAuthorize(Wizard wizard, string zoneName, ulong messageZoneId, out HouseState house) {
         house = null;
-        if (!HousingZones.IsHousingZone(zoneName)) {
+        if (!HouseZoneIndex.IsHouseZone(zoneName)) {
             return true;
         }
 
-        var lotGid = DormDeed.LotOf(wizard);
-        if (!HousingZones.TryGet(zoneName, out var info) || !info.IsDorm || lotGid == 0
-            || (messageZoneId != 0 && messageZoneId != lotGid)) {
+        var lotGid = LotOfZone(wizard, zoneName);
+        if (lotGid == 0 || (messageZoneId != 0 && messageZoneId != lotGid)) {
             Logger.Warning("Character {CharId} may not attach to house zone {Zone} with lot {MessageZoneId}.",
                 Logger.Args(wizard.CharId, zoneName, messageZoneId));
 
@@ -92,17 +91,24 @@ internal static class HouseAttach {
     /// </summary>
     /// <param name="wizard">The character.</param>
     internal static void ApplyDeedLot(Wizard wizard) {
-        var lotGid = DormDeed.LotOf(wizard);
-        if (lotGid == 0) {
-            return;
+        foreach (var (templateId, lotGid) in wizard.HouseLots) {
+            var deed = wizard.InventoryBehavior.Items.FirstOrDefault(item => item.m_templateID == templateId);
+            if (deed is not null && !DormDeed.TrySetLot(deed, lotGid, out _)) {
+                Logger.Warning("Deed item {ItemId} of character {CharId} has no deed behavior.",
+                    Logger.Args(deed.m_globalID, wizard.CharId));
+            }
+        }
+    }
+
+    private static ulong LotOfZone(Wizard wizard, string zoneName) {
+        foreach (var (templateId, lotGid) in wizard.HouseLots) {
+            if (HouseTemplates.TryGet(templateId, out var info)
+                && string.Equals(info.LotZone, zoneName, StringComparison.OrdinalIgnoreCase)) {
+                return lotGid;
+            }
         }
 
-        var templateId = HousingZones.DormInfo.TemplateId;
-        var deed = wizard.InventoryBehavior.Items.FirstOrDefault(item => item.m_templateID == templateId);
-        if (deed is not null && !DormDeed.TrySetLot(deed, lotGid, out _)) {
-            Logger.Warning("Deed item {ItemId} of character {CharId} has no deed behavior.",
-                Logger.Args(deed.m_globalID, wizard.CharId));
-        }
+        return 0;
     }
 
 }

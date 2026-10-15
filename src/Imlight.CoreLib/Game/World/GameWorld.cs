@@ -84,7 +84,7 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         NpcSpellInventoryCollection.PreloadNpcSpellInventories();
         CreatureSpellbookCollection.PreloadSpellbooks();
         NpcDropTableCollection.PreloadDropTables();
-        HousingZones.Preload();
+        HouseZoneIndex.Preload();
     }
 
     public static Props Props(GameServer server)

@@ -184,7 +184,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         // A house needs its lot, and only the Home button knows it. Friend and group teleports end up here too.
-        if (message.SendToClient && message.HouseLotGid == 0 && HousingZones.IsHousingZone(message.DestinationZone)) {
+        if (message.SendToClient && message.HouseLotGid == 0 && HouseZoneIndex.IsHouseZone(message.DestinationZone)) {
             InformGameClient("You cannot travel to that house.", true);
 
             return;
@@ -848,7 +848,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     }
 
     private void StartDeedZoneTimeout() {
-        Timers.StartSingleTimer(DeedZoneTimeoutKey, new SERVICE_101_PROTOCOL.MSG_DEEDZONE_TIMEOUT(), HousingZones.DeedZoneTimeout);
+        Timers.StartSingleTimer(DeedZoneTimeoutKey, new SERVICE_101_PROTOCOL.MSG_DEEDZONE_TIMEOUT(), HousingSettings.DeedZoneTimeout);
     }
 
     private void AbortDeedZoneTransfer(string step) {

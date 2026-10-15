@@ -69,11 +69,14 @@ internal static class HouseRegistry {
     /// <returns>The live house, or <c>null</c> when it cannot be loaded or stored.</returns>
     internal static HouseState GetOrCreateDorm(Wizard owner, out bool created) {
         created = false;
-        var dorm = HousingZones.DormInfo;
+        if (!DormDeed.TryGetStarter(out var dorm)) {
+            return null;
+        }
+
         var lotGid = owner.HouseLots.GetValueOrDefault(dorm.TemplateId);
         var house = lotGid == 0 ? null : HouseCollection.Load(lotGid);
         if (house is null) {
-            var layout = HousingZones.LoadDormLayout();
+            var layout = HousingZones.LoadDormLayout(dorm.LotZone);
             if (layout is null) {
                 return null;
             }
@@ -113,7 +116,7 @@ internal static class HouseRegistry {
 
         owner.HouseLots[dorm.TemplateId] = house.LotGid;
 
-        return Publish(house.LotGid, owner.CharId, dorm);
+        return Publish(house.LotGid, owner.CharId);
     }
 
     /// <summary>
@@ -125,7 +128,7 @@ internal static class HouseRegistry {
     /// <returns><c>false</c> when the character has no house with that lot.</returns>
     internal static bool TryGetOwned(ulong ownerCharId, ulong lotGid, out HouseState state) {
         if (!s_houses.TryGetValue(lotGid, out state)) {
-            state = Publish(lotGid, ownerCharId, HousingZones.DormInfo);
+            state = Publish(lotGid, ownerCharId);
         }
 
         if (state is null || state.OwnerCharId != ownerCharId) {
@@ -166,7 +169,7 @@ internal static class HouseRegistry {
         }
     }
 
-    private static HouseState Publish(ulong lotGid, ulong ownerCharId, HousingZoneInfo info) {
+    private static HouseState Publish(ulong lotGid, ulong ownerCharId) {
         while (true) {
             if (s_houses.TryGetValue(lotGid, out var existing)) {
                 if (!existing.IsRetired) {
@@ -185,7 +188,7 @@ internal static class HouseRegistry {
                 }
 
                 var house = HouseCollection.Load(lotGid);
-                if (house is null || house.OwnerCharId != ownerCharId || house.TemplateId != info.TemplateId
+                if (house is null || house.OwnerCharId != ownerCharId || !HouseTemplates.TryGet(house.TemplateId, out var info)
                     || !HouseState.TryCreate(house, info, out var created)) {
                     return null;
                 }
