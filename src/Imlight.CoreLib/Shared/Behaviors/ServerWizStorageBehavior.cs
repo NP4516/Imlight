@@ -60,6 +60,20 @@ public class ServerWizStorageBehavior {
     public int BankLimit { get; set; }
 
     /// <summary>
+    /// Raises the capacity of the bank, up to [Bank] MaxBankItems when that is set. A capacity that is above the
+    /// ceiling already stays as it is.
+    /// </summary>
+    /// <param name="amount">How much to add. Zero or less adds nothing.</param>
+    /// <returns>The capacity after the expansion.</returns>
+    internal int Expand(int amount) {
+        var expanded = (int) Math.Min((long) BankLimit + Math.Max(0, amount), int.MaxValue);
+        var ceiling = BankConfig.MaxBankLimit;
+        BankLimit = ceiling > 0 ? Math.Max(BankLimit, Math.Min(expanded, ceiling)) : expanded;
+
+        return BankLimit;
+    }
+
+    /// <summary>
     /// The number of bank items that count against <see cref="BankLimit"/>.
     /// </summary>
     internal int CountRegularItems() => Items.Count(BankRules.CountsTowardBank);

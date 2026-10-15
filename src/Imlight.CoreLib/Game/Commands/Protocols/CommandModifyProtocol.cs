@@ -343,6 +343,48 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set max gold to {goldInt}.");
     }
 
+    [Command("maxbank")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void SetMaxBankCommand(string limit) {
+        if (!int.TryParse(limit, NumberStyles.Integer, CultureInfo.InvariantCulture, out var limitInt) || limitInt < 1) {
+            InformSenderClient("Invalid bank limit.");
+
+            return;
+        }
+
+        if (!Context.Character.SetBankLimit(limitInt)) {
+            InformSenderClient("Could not save the bank limit.");
+
+            return;
+        }
+
+        Context.SessionActor.Tell(BankSync.UpdateBankLimit(Context.Character), null);
+
+        InformSenderClient($"Set the bank limit to {limitInt}.");
+    }
+
+    [Command("expandbank")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void ExpandBankCommand() {
+        var amount = BankConfig.ExpandElixirAmount;
+        if (amount <= 0) {
+            InformSenderClient("[Bank] ExpandElixirAmount is not set, so the bank cannot be expanded.");
+
+            return;
+        }
+
+        var before = Context.Character.StorageBehavior.BankLimit;
+        if (!Context.Character.ExpandBank(amount)) {
+            InformSenderClient("Could not save the bank limit.");
+
+            return;
+        }
+
+        Context.SessionActor.Tell(BankSync.UpdateBankLimit(Context.Character), null);
+
+        InformSenderClient($"Expanded the bank from {before} to {Context.Character.StorageBehavior.BankLimit}.");
+    }
+
     [Command("addgold")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddGoldCommand(string gold) {

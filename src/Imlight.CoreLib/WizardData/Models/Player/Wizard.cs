@@ -701,6 +701,36 @@ public class Wizard {
         });
     }
 
+    /// <summary>
+    /// Raises the capacity of the bank, see <see cref="ServerWizStorageBehavior.Expand"/>, and saves it. The caller
+    /// tells the client with MSG_UPDATEBANKLIMIT.
+    /// </summary>
+    /// <param name="amount">How much capacity to add.</param>
+    /// <returns>False, with the capacity as it was, if the character could not be saved.</returns>
+    public bool ExpandBank(int amount) {
+        var previous = StorageBehavior.BankLimit;
+        StorageBehavior.Expand(amount);
+
+        return SaveItemsOrRollBack(() => StorageBehavior.BankLimit = previous);
+    }
+
+    /// <summary>
+    /// Sets the capacity of the bank to a value, whatever the expansion ceiling says, and saves it. The caller tells
+    /// the client with MSG_UPDATEBANKLIMIT.
+    /// </summary>
+    /// <param name="limit">The new capacity, 1 or more.</param>
+    /// <returns>False, with the capacity as it was, if the limit is below 1 or the character could not be saved.</returns>
+    public bool SetBankLimit(int limit) {
+        if (limit < 1) {
+            return false;
+        }
+
+        var previous = StorageBehavior.BankLimit;
+        StorageBehavior.BankLimit = limit;
+
+        return SaveItemsOrRollBack(() => StorageBehavior.BankLimit = previous);
+    }
+
     private bool SaveItemsOrRollBack(System.Action rollBack) {
         try {
             if (WizardCollection.UpdateCharacterItems(this)) {

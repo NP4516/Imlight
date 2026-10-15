@@ -21,7 +21,8 @@
  *
  * PURPOSE:
  * Reads the bank settings of Imlight.ini: the default capacities of a character's bank and of an account's
- * shared bank, the shared jewel cap and the object names of the NPCs that open the bank.
+ * shared bank, the shared jewel cap, the object names of the NPCs that open the bank and the two settings of
+ * an expansion.
  *
  * USAGE EXAMPLE:
  * if (BankConfig.IsEnabled) { ... }
@@ -53,6 +54,8 @@ internal static class BankConfig {
     private const string MaxSharedBankItemsKey = "Character.MaxSharedBankItems";
     private const string SharedJewelCapKey = "Bank.SharedJewelCap";
     private const string ObjectNamesKey = "Bank.ObjectNames";
+    private const string ExpandElixirAmountKey = "Bank.ExpandElixirAmount";
+    private const string MaxBankLimitKey = "Bank.MaxBankItems";
 
     private static int s_warnedDisabled;
 
@@ -70,6 +73,16 @@ internal static class BankConfig {
     /// The most jewels the shared bank holds. Zero when the key is unset, which keeps jewels out of the shared bank.
     /// </summary>
     internal static int SharedJewelCap => Math.Max(0, ConfigurationManager.GetValue(SharedJewelCapKey, 0));
+
+    /// <summary>
+    /// How much capacity one Expand Bank Elixir adds. Zero when the key is unset, which keeps the bank from being expanded.
+    /// </summary>
+    internal static int ExpandElixirAmount => Math.Max(0, ConfigurationManager.GetValue(ExpandElixirAmountKey, 0));
+
+    /// <summary>
+    /// The largest capacity an expansion can reach. Zero when the key is unset, which means no limit.
+    /// </summary>
+    internal static int MaxBankLimit => Math.Max(0, ConfigurationManager.GetValue(MaxBankLimitKey, 0));
 
     /// <summary>
     /// The object names of the NPCs that open the bank.
