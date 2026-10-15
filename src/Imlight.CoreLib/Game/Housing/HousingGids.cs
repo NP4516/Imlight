@@ -43,6 +43,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Imcodec.Types;
 
 namespace Imlight.CoreLib.Game.Housing;
 
@@ -55,7 +56,6 @@ internal static class HousingGids {
     internal const int MaxSlots = (65535 - 47) / 21;
 
     private const int ObjectGidType = 9;
-    private const ulong ObjectGidTypeMask = 0x000000FF00000000UL;
     private const long LowestBase = 0x80000000L;
     private const long HighestBase = 0xFFFF0000L;
 
@@ -91,11 +91,12 @@ internal static class HousingGids {
     /// <returns><c>true</c> when the id is a housing object id inside the blob's numbering.</returns>
     internal static bool TryGetSlot(ulong gid, uint gidBase, int slotCount, out int slot) {
         slot = -1;
-        if (((gid >> 40) & 0xFF) != ObjectGidType || (gid & ObjectGidTypeMask) != 0) {
+        var parts = new GID(gid).MParts;
+        if (parts.Type != ObjectGidType || parts.Block != 0) {
             return false;
         }
 
-        var offset = unchecked((uint) gid - gidBase);
+        var offset = unchecked(parts.TemplateId - gidBase);
         if (offset >= (uint) slotCount) {
             return false;
         }
