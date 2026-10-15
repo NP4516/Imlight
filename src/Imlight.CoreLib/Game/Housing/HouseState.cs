@@ -20,11 +20,11 @@
  * ========================================================================
  * 
  * PURPOSE:
- * The live state of one house: its placed objects under one lock, persisted on every change, shared
+ * The live state of one house: its placed items under one lock, persisted on every change, shared
  * by every player who is in the house.
  * 
  * USAGE EXAMPLE:
- * if (state.TryAdd(obj, out var slot, out var version)) {
+ * if (state.TryAdd(item, out var slot, out var stored, out var revision)) {
  *     var gidId = HouseBlobCodec.GidIndex(state.GidBase, slot);
  * }
  * 
@@ -32,9 +32,10 @@
  * - Every change is written to the database before it returns. A failed write undoes the change
  *   in memory, so the stored house and the live house never differ.
  * - A change that also moves an item to or from a backpack passes its own save, which writes both in one transaction.
- * - Stored objects are never changed in place; an update replaces the object.
- * - A removed object leaves a slot behind (template id 0), so slot indexes never shift. The slots
- *   are dropped when the first player enters a house nobody else is in.
+ * - Stored items are never changed in place; an update replaces the item.
+ * - The slot table numbers the items the way the client numbers its blob entries. A removed item leaves a null
+ *   slot behind, so the numbers in later patches stay valid. The table is built, and the revision moved so every
+ *   client fetches the new blob, when the state is created.
  * - Use HouseRegistry.TryEnter and HouseRegistry.Release to count viewers.
  * 
  * TODO:
@@ -48,7 +49,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
-using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -58,10 +58,10 @@ namespace Imlight.CoreLib.Game.Housing;
 /// <summary>
 /// A consistent copy of a house for building a blob.
 /// </summary>
-/// <param name="Version">The blob version.</param>
-/// <param name="LiveCount">The number of placed objects, not counting removed slots.</param>
-/// <param name="Objects">The blob objects in slot order, removed slots included.</param>
-internal readonly record struct HouseSnapshot(uint Version, int LiveCount, IReadOnlyList<HousingBlobObject> Objects);
+/// <param name="Revision">The blob version.</param>
+/// <param name="LiveCount">The number of placed items, not counting removed slots.</param>
+/// <param name="Slots">The items in slot order; a removed slot is <c>null</c>.</param>
+internal readonly record struct HouseSnapshot(uint Revision, int LiveCount, IReadOnlyList<PlacedItem> Slots);
 
 /// <summary>
 /// The live, persisted state of one house.
@@ -71,12 +71,16 @@ internal sealed class HouseState {
     private readonly Lock _lock = new();
     private readonly House _house;
     private readonly HousingZoneInfo _zoneInfo;
+    private readonly List<PlacedItem> _slots;
+    private int _liveCount;
     private int _viewers;
     private bool _retired;
 
-    internal HouseState(House house, HousingZoneInfo zoneInfo, uint gidBase) {
+    private HouseState(House house, HousingZoneInfo zoneInfo, List<PlacedItem> slots, uint gidBase) {
         _house = house;
         _zoneInfo = zoneInfo;
+        _slots = slots;
+        _liveCount = slots.Count;
         GidBase = gidBase;
     }
 
@@ -89,12 +93,12 @@ internal sealed class HouseState {
 
     internal ulong OwnerCharId => _house.OwnerCharId;
 
-    internal string ZoneName => _house.ZoneName;
+    internal string ZoneName => _zoneInfo.ZoneName;
 
     internal int LiveCount {
         get {
             lock (_lock) {
-                return HouseBlobCodec.CountLive(_house.Objects);
+                return _liveCount;
             }
         }
     }
@@ -102,7 +106,7 @@ internal sealed class HouseState {
     internal int SlotCount {
         get {
             lock (_lock) {
-                return _house.Objects.Count;
+                return _slots.Count;
             }
         }
     }
@@ -124,199 +128,207 @@ internal sealed class HouseState {
     }
 
     /// <summary>
+    /// Creates the live state of a stored house. The items are numbered by their ids, a new base is drawn,
+    /// and the revision moves once and is stored, so a client with an older cache fetches the blob again.
+    /// </summary>
+    /// <param name="house">The stored house; the state owns it from now on.</param>
+    /// <param name="zoneInfo">The house's zone and limits.</param>
+    /// <param name="state">The live state when this returns <c>true</c>.</param>
+    /// <returns><c>false</c> when the new revision could not be stored.</returns>
+    internal static bool TryCreate(House house, HousingZoneInfo zoneInfo, out HouseState state) {
+        state = null;
+        var previousItems = house.Items;
+        var previousRevision = house.Revision;
+        var ordered = previousItems.OrderBy(item => item.Id).ToList();
+        house.Items = [.. ordered];
+        house.Revision = previousRevision + 1;
+        if (!HouseCollection.Save(house)) {
+            house.Items = previousItems;
+            house.Revision = previousRevision;
+
+            return false;
+        }
+
+        state = new HouseState(house, zoneInfo, ordered, HouseBlobCodec.NewGidBase());
+
+        return true;
+    }
+
+    /// <summary>
     /// Copies the house for building a blob.
     /// </summary>
-    /// <returns>The version, live count and objects, taken together.</returns>
+    /// <returns>The revision, live count and slots, taken together.</returns>
     internal HouseSnapshot Snapshot() {
         lock (_lock) {
-            return new HouseSnapshot(_house.BlobVersion, HouseBlobCodec.CountLive(_house.Objects), [.. _house.Objects]);
+            return new HouseSnapshot(_house.Revision, _liveCount, [.. _slots]);
         }
     }
 
     /// <summary>
-    /// Places an object in a new slot at the end of the list.
+    /// Places an item in a new slot at the end of the table.
     /// </summary>
-    /// <param name="obj">The object to place; it must be a placed object, not a removed slot.</param>
+    /// <param name="item">The item to place; its id is replaced by the next free one.</param>
     /// <param name="slot">The new slot when this returns <c>true</c>.</param>
-    /// <param name="version">The new blob version when this returns <c>true</c>.</param>
+    /// <param name="stored">The item as it is stored when this returns <c>true</c>.</param>
+    /// <param name="revision">The new revision when this returns <c>true</c>.</param>
     /// <param name="save">Writes the house; <c>null</c> writes the house alone.</param>
     /// <returns><c>false</c> at the item limit, when the blob is full, or when the write failed.</returns>
-    internal bool TryAdd(HousingBlobObject obj, out int slot, out uint version, Func<House, bool> save = null) {
+    internal bool TryAdd(PlacedItem item, out int slot, out PlacedItem stored, out uint revision, Func<House, bool> save = null) {
         slot = -1;
+        stored = null;
         lock (_lock) {
-            version = _house.BlobVersion;
-            if (!HouseBlobCodec.IsLive(obj) || HouseBlobCodec.CountLive(_house.Objects) >= ItemLimit
-                || _house.Objects.Count >= HousingZones.MaxBlobSlots) {
+            revision = _house.Revision;
+            if (_liveCount >= HousingZones.EffectiveItemLimit(_zoneInfo, _house.BonusSlots)
+                || _slots.Count >= HousingZones.MaxBlobSlots) {
                 return false;
             }
 
-            _house.Objects.Add(Copy(obj));
-            _house.BlobVersion = version + 1;
+            var added = item with { Id = _house.NextItemId };
+            _house.Items.Add(added);
+            _house.NextItemId = added.Id + 1;
+            _house.Revision = revision + 1;
             if (!Persist(save)) {
-                _house.Objects.RemoveAt(_house.Objects.Count - 1);
-                _house.BlobVersion = version;
+                _house.Items.RemoveAt(_house.Items.Count - 1);
+                _house.NextItemId = added.Id;
+                _house.Revision = revision;
 
                 return false;
             }
 
-            slot = _house.Objects.Count - 1;
-            version = _house.BlobVersion;
+            _slots.Add(added);
+            _liveCount++;
+            slot = _slots.Count - 1;
+            stored = added;
+            revision = _house.Revision;
 
             return true;
         }
     }
 
     /// <summary>
-    /// Removes a placed object. Its slot stays in the list as a removed slot.
+    /// Removes a placed item. Its slot stays in the table as a null slot.
     /// </summary>
     /// <param name="slot">The slot to remove.</param>
-    /// <param name="removed">The object that was removed when this returns <c>true</c>.</param>
-    /// <param name="version">The new blob version when this returns <c>true</c>.</param>
+    /// <param name="removed">The item that was removed when this returns <c>true</c>.</param>
+    /// <param name="revision">The new revision when this returns <c>true</c>.</param>
     /// <param name="save">Writes the house; <c>null</c> writes the house alone.</param>
-    /// <returns><c>false</c> when the slot is not a placed object or the write failed.</returns>
-    internal bool TryRemove(int slot, out HousingBlobObject removed, out uint version, Func<House, bool> save = null) {
+    /// <returns><c>false</c> when the slot is not a placed item or the write failed.</returns>
+    internal bool TryRemove(int slot, out PlacedItem removed, out uint revision, Func<House, bool> save = null) {
         removed = null;
         lock (_lock) {
-            version = _house.BlobVersion;
+            revision = _house.Revision;
             if (!IsLiveSlot(slot)) {
                 return false;
             }
 
-            var previous = _house.Objects[slot];
-            _house.Objects[slot] = Tombstone();
-            _house.BlobVersion = version + 1;
+            var previous = _slots[slot];
+            var index = _house.Items.FindIndex(item => item.Id == previous.Id);
+            _house.Items.RemoveAt(index);
+            _house.Revision = revision + 1;
             if (!Persist(save)) {
-                _house.Objects[slot] = previous;
-                _house.BlobVersion = version;
+                _house.Items.Insert(index, previous);
+                _house.Revision = revision;
 
                 return false;
             }
 
+            _slots[slot] = null;
+            _liveCount--;
             removed = previous;
-            version = _house.BlobVersion;
+            revision = _house.Revision;
 
             return true;
         }
     }
 
     /// <summary>
-    /// Removes several placed objects in one write. The version moves by the number of slots, so a
+    /// Removes several placed items in one write. The revision moves by the number of slots, so a
     /// client can be sent one delete patch per slot with consecutive versions.
     /// </summary>
-    /// <param name="slots">The slots to remove; each must be a placed object, and none may repeat.</param>
-    /// <param name="version">The new blob version when this returns <c>true</c>: the last patch's version.</param>
-    /// <returns><c>false</c> when a slot is not a placed object or the write failed; nothing changes then.</returns>
-    internal bool TryRemoveMany(IReadOnlyCollection<int> slots, out uint version) {
+    /// <param name="slots">The slots to remove; each must be a placed item, and none may repeat.</param>
+    /// <param name="revision">The new revision when this returns <c>true</c>: the last patch's version.</param>
+    /// <returns><c>false</c> when a slot is not a placed item or the write failed; nothing changes then.</returns>
+    internal bool TryRemoveMany(IReadOnlyCollection<int> slots, out uint revision) {
         lock (_lock) {
-            version = _house.BlobVersion;
+            revision = _house.Revision;
             if (slots.Count == 0 || slots.Distinct().Count() != slots.Count || !slots.All(IsLiveSlot)) {
                 return false;
             }
 
-            var previousObjects = _house.Objects;
-            var updatedObjects = new List<HousingBlobObject>(previousObjects);
+            var previousItems = _house.Items;
+            var removedIds = slots.Select(slot => _slots[slot].Id).ToHashSet();
+            _house.Items = [.. previousItems.Where(item => !removedIds.Contains(item.Id))];
+            _house.Revision = revision + (uint) slots.Count;
+            if (!HouseCollection.Save(_house)) {
+                _house.Items = previousItems;
+                _house.Revision = revision;
+
+                return false;
+            }
+
             foreach (var slot in slots) {
-                updatedObjects[slot] = Tombstone();
+                _slots[slot] = null;
             }
 
-            _house.Objects = updatedObjects;
-            _house.BlobVersion = version + (uint) slots.Count;
-            if (!HouseCollection.Save(_house)) {
-                _house.Objects = previousObjects;
-                _house.BlobVersion = version;
-
-                return false;
-            }
-
-            version = _house.BlobVersion;
+            _liveCount -= slots.Count;
+            revision = _house.Revision;
 
             return true;
         }
     }
 
     /// <summary>
-    /// Puts an object back into a removed slot, undoing a <see cref="TryRemove"/> whose follow-up step failed.
-    /// The version still moves forward: the removal may already have been seen. The item limit is not checked.
-    /// </summary>
-    /// <param name="slot">The removed slot.</param>
-    /// <param name="obj">The object to put back.</param>
-    /// <param name="version">The new blob version when this returns <c>true</c>.</param>
-    /// <returns><c>false</c> when the slot is not a removed slot or the write failed.</returns>
-    internal bool TryRestore(int slot, HousingBlobObject obj, out uint version) {
-        lock (_lock) {
-            version = _house.BlobVersion;
-            if (!HouseBlobCodec.IsLive(obj) || slot < 0 || slot >= _house.Objects.Count || IsLiveSlot(slot)) {
-                return false;
-            }
-
-            var previous = _house.Objects[slot];
-            _house.Objects[slot] = Copy(obj);
-            _house.BlobVersion = version + 1;
-            if (!HouseCollection.Save(_house)) {
-                _house.Objects[slot] = previous;
-                _house.BlobVersion = version;
-
-                return false;
-            }
-
-            version = _house.BlobVersion;
-
-            return true;
-        }
-    }
-
-    /// <summary>
-    /// Replaces a placed object with an updated copy of itself.
+    /// Replaces a placed item with an updated copy of itself.
     /// </summary>
     /// <param name="slot">The slot to update.</param>
-    /// <param name="update">Returns the replacement for the stored object; it must not change the stored object in place.</param>
-    /// <param name="version">The new blob version when this returns <c>true</c>.</param>
+    /// <param name="update">Returns the replacement for the stored item; it must keep the id and the template.</param>
+    /// <param name="updated">The item as it is stored when this returns <c>true</c>.</param>
+    /// <param name="revision">The new revision when this returns <c>true</c>.</param>
     /// <returns>
-    /// <c>false</c> when the slot is not a placed object, <paramref name="update"/> returns <c>null</c> or an object
-    /// of another template, or the write failed.
+    /// <c>false</c> when the slot is not a placed item, <paramref name="update"/> returns <c>null</c> or an item
+    /// of another id or template, or the write failed.
     /// </returns>
-    internal bool TryUpdate(int slot, Func<HousingBlobObject, HousingBlobObject> update, out uint version) {
+    internal bool TryUpdate(int slot, Func<PlacedItem, PlacedItem> update, out PlacedItem updated, out uint revision) {
+        updated = null;
         lock (_lock) {
-            version = _house.BlobVersion;
+            revision = _house.Revision;
             if (!IsLiveSlot(slot)) {
                 return false;
             }
 
-            var previous = _house.Objects[slot];
+            var previous = _slots[slot];
             var replacement = update(previous);
             if (replacement is null || ReferenceEquals(replacement, previous)
-                || HouseBlobCodec.TemplateId(replacement) != HouseBlobCodec.TemplateId(previous)) {
+                || replacement.Id != previous.Id || replacement.TemplateId != previous.TemplateId) {
                 return false;
             }
 
-            _house.Objects[slot] = replacement;
-            _house.BlobVersion = version + 1;
+            var index = _house.Items.FindIndex(item => item.Id == previous.Id);
+            _house.Items[index] = replacement;
+            _house.Revision = revision + 1;
             if (!HouseCollection.Save(_house)) {
-                _house.Objects[slot] = previous;
-                _house.BlobVersion = version;
+                _house.Items[index] = previous;
+                _house.Revision = revision;
 
                 return false;
             }
 
-            version = _house.BlobVersion;
+            _slots[slot] = replacement;
+            updated = replacement;
+            revision = _house.Revision;
 
             return true;
         }
     }
 
     /// <summary>
-    /// Counts a player into the house. The first player into a house nobody else is in drops the removed
-    /// slots first and moves the version, so every client fetches the new blob.
+    /// Counts a player into the house.
     /// </summary>
     /// <returns><c>false</c> when the state was retired by its last viewer leaving; get the house from the registry again.</returns>
     internal bool Enter() {
         lock (_lock) {
             if (_retired) {
                 return false;
-            }
-
-            if (_viewers == 0) {
-                DropRemovedSlots();
             }
 
             _viewers++;
@@ -356,31 +368,6 @@ internal sealed class HouseState {
     }
 
     private bool IsLiveSlot(int slot)
-        => slot >= 0 && slot < _house.Objects.Count && HouseBlobCodec.IsLive(_house.Objects[slot]);
-
-    private void DropRemovedSlots() {
-        if (HouseBlobCodec.CountLive(_house.Objects) == _house.Objects.Count) {
-            return;
-        }
-
-        var previousObjects = _house.Objects;
-        var previousVersion = _house.BlobVersion;
-        _house.Objects = [.. previousObjects.Where(HouseBlobCodec.IsLive)];
-        _house.BlobVersion = previousVersion + 1;
-        if (!HouseCollection.Save(_house)) {
-            _house.Objects = previousObjects;
-            _house.BlobVersion = previousVersion;
-        }
-    }
-
-    private static HousingBlobObject Tombstone() => new();
-
-    private static HousingBlobObject Copy(HousingBlobObject obj) => new() {
-        m_gameObjectTemplateID = obj.m_gameObjectTemplateID,
-        m_positionXY = obj.m_positionXY,
-        m_positionZ = obj.m_positionZ,
-        m_yaw = obj.m_yaw,
-        m_extraData1 = obj.m_extraData1,
-    };
+        => slot >= 0 && slot < _slots.Count && _slots[slot] is not null;
 
 }

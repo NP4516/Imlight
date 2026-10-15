@@ -400,7 +400,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         // The client has no in-house check for its Home button, and a same-zone teleport cannot name a house location.
         var wizard = GetActiveWizard();
-        if (wizard.DormLotGid != 0 && wizard.AttachedLotGid == wizard.DormLotGid) {
+        var dormLotGid = DormDeed.LotOf(wizard);
+        if (dormLotGid != 0 && wizard.AttachedLotGid == dormLotGid) {
             return;
         }
 

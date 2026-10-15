@@ -129,11 +129,11 @@ internal static class HousingRules {
     /// <summary>
     /// Counts the placed objects of a template.
     /// </summary>
-    /// <param name="objects">The blob objects of a house, removed slots included.</param>
+    /// <param name="slots">The slots of a house; a removed slot is <c>null</c>.</param>
     /// <param name="templateId">The template id.</param>
     /// <returns>The number of placed copies.</returns>
-    internal static int CountPlaced(IEnumerable<HousingBlobObject> objects, uint templateId)
-        => objects.Count(obj => HouseBlobCodec.TemplateId(obj) == templateId);
+    internal static int CountPlaced(IEnumerable<PlacedItem> slots, uint templateId)
+        => slots.Count(item => item?.TemplateId == templateId);
 
     private static HashSet<uint> HousingTemplateIds
         => LazyInitializer.EnsureInitialized(ref s_housingTemplateIds, BuildHousingTemplateIds);

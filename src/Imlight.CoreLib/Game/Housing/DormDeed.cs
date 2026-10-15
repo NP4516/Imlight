@@ -40,6 +40,7 @@
  * Last Updated: 10/14/2026
  */
 
+using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
@@ -71,6 +72,14 @@ internal readonly record struct DormEntry(HouseState House, ulong DeedGid, bool 
 internal static class DormDeed {
 
     /// <summary>
+    /// Gets the lot of a character's Dorm Room.
+    /// </summary>
+    /// <param name="wizard">The character.</param>
+    /// <returns>The lot, or 0 when the character has no Dorm Room yet.</returns>
+    internal static ulong LotOf(Wizard wizard)
+        => wizard.HouseLots.GetValueOrDefault(HousingZones.DormInfo.TemplateId);
+
+    /// <summary>
     /// Makes sure a character has a Dorm Room and a deed item that points at it.
     /// </summary>
     /// <param name="wizard">The character.</param>
@@ -92,7 +101,7 @@ internal static class DormDeed {
             return false;
         }
 
-        var house = HouseRegistry.GetOrCreateDorm(wizard.CharId, out var houseCreated);
+        var house = HouseRegistry.GetOrCreateDorm(wizard, out var houseCreated);
         if (house is null) {
             Logger.Error("Character {CharId} has no dorm and none could be stored.", Logger.Args(wizard.CharId));
             failure = DormFailure.Unavailable;
@@ -117,17 +126,6 @@ internal static class DormDeed {
         } else if (changed && !WizardItemCollection.ApplyDeedLot(item, house.LotGid)) {
             Logger.Warning("Could not store the lot on deed item {ItemId} of character {CharId}.",
                 Logger.Args(item.m_globalID, wizard.CharId));
-        }
-
-        if (wizard.DormLotGid != house.LotGid) {
-            if (!WizardCollection.UpdateCharacterDormLot(wizard, house.LotGid)) {
-                Logger.Error("Could not store the dorm lot of character {CharId}.", Logger.Args(wizard.CharId));
-                failure = DormFailure.Unavailable;
-
-                return false;
-            }
-
-            wizard.DormLotGid = house.LotGid;
         }
 
         entry = new DormEntry(house, item.m_globalID, houseCreated, itemCreated);

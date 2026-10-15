@@ -286,13 +286,33 @@ public static class WizardCollection {
     }
 
     /// <summary>
-    /// Stores the lot of a character's dorm room.
+    /// Records the lot of a house the character was issued, unless the character already has a lot for the template.
     /// </summary>
-    /// <param name="character">The character to update.</param>
-    /// <param name="dormLotGid">The lot of the character's dorm room.</param>
-    /// <returns><c>false</c> when the character could not be updated.</returns>
-    public static bool UpdateCharacterDormLot(Wizard character, ulong dormLotGid)
-        => UpdateCharacter(character.CharId, existingCharacter => existingCharacter.DormLotGid = dormLotGid);
+    /// <param name="character">The character to update; its in-memory lots follow the stored ones.</param>
+    /// <param name="templateId">The template of the deed or structure item.</param>
+    /// <param name="lotGid">The lot of the issued item.</param>
+    /// <returns><c>true</c> when the character's lot for the template is <paramref name="lotGid"/> now.</returns>
+    public static bool TryAddHouseLot(Wizard character, uint templateId, ulong lotGid) {
+        var matches = false;
+        UpdateCharacterWithSession(character.CharId, (_, existingCharacter) => {
+            existingCharacter.HouseLots ??= [];
+            if (existingCharacter.HouseLots.TryGetValue(templateId, out var storedLot)) {
+                matches = storedLot == lotGid;
+
+                return false;
+            }
+
+            existingCharacter.HouseLots[templateId] = lotGid;
+            matches = true;
+
+            return true;
+        });
+        if (matches) {
+            character.HouseLots[templateId] = lotGid;
+        }
+
+        return matches;
+    }
 
     /// <summary>
     /// Updates the location and orientation of a character.

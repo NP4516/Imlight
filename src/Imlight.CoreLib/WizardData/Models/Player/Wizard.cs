@@ -69,7 +69,12 @@ public class Wizard {
     public string MarkedZoneDisplayName { get; set; }
     public uint LastLoginTime { get; set; }
     public long TimeHomeLastClicked { get; set; }
-    public ulong DormLotGid { get; set; }
+
+    /// <summary>
+    /// The lot of every house the character was issued, by the template of the deed or structure item.
+    /// </summary>
+    public Dictionary<uint, ulong> HouseLots { get; set; } = [];
+
     public byte World { get; set; }
     public Vector3 Location {
         get => GameObject.m_location;

@@ -65,7 +65,7 @@ internal static class HouseAttach {
             return true;
         }
 
-        var lotGid = wizard.DormLotGid;
+        var lotGid = DormDeed.LotOf(wizard);
         if (!HousingZones.TryGet(zoneName, out var info) || !info.IsDorm || lotGid == 0
             || (messageZoneId != 0 && messageZoneId != lotGid)) {
             Logger.Warning("Character {CharId} may not attach to house zone {Zone} with lot {MessageZoneId}.",
@@ -92,13 +92,14 @@ internal static class HouseAttach {
     /// </summary>
     /// <param name="wizard">The character.</param>
     internal static void ApplyDeedLot(Wizard wizard) {
-        if (wizard.DormLotGid == 0) {
+        var lotGid = DormDeed.LotOf(wizard);
+        if (lotGid == 0) {
             return;
         }
 
         var templateId = HousingZones.DormInfo.TemplateId;
         var deed = wizard.InventoryBehavior.Items.FirstOrDefault(item => item.m_templateID == templateId);
-        if (deed is not null && !DormDeed.TrySetLot(deed, wizard.DormLotGid, out _)) {
+        if (deed is not null && !DormDeed.TrySetLot(deed, lotGid, out _)) {
             Logger.Warning("Deed item {ItemId} of character {CharId} has no deed behavior.",
                 Logger.Args(deed.m_globalID, wizard.CharId));
         }

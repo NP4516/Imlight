@@ -20,14 +20,17 @@
  * ========================================================================
  * 
  * PURPOSE:
- * The stored state of one player house: its lot, its blob version and the placed objects.
+ * The stored state of one player house: its lot, the template it was issued from, its revision and the
+ * placed items. Everything in it is a plain domain record, never the client's blob form.
  * 
  * USAGE EXAMPLE:
- * var id = House.GetDocumentId(wizard.CharId, HousingZones.DormInfo.TemplateId);
+ * var id = House.GetDocumentId(wizard.HouseLots[templateId]);
  * 
  * NOTE:
- * Objects are stored in the client's own wire form, so the stored state and the blob are the
- * same data. A removed object stays in the list with template id 0 so slot indexes never shift.
+ * - A lot is one issued deed or structure item. Its global id is the document id, so a character who owns
+ *   several houses has one document per lot.
+ * - Revision is the number the client's blob cache compares. Every stored change moves it forward.
+ * - Item ids are never reused: NextItemId is the id of the next item placed.
  * 
  * TODO:
  * 
@@ -38,7 +41,6 @@
 
 using System;
 using System.Collections.Generic;
-using Imcodec.ObjectProperty.TypeCache;
 
 namespace Imlight.CoreLib.WizardData.Models.Player;
 
@@ -50,20 +52,19 @@ public class House {
     public string Id { get; set; }
     public ulong LotGid { get; set; }
     public ulong OwnerCharId { get; set; }
-    public uint DeedTemplateId { get; set; }
-    public string ZoneName { get; set; }
-    public uint BlobVersion { get; set; }
+    public uint TemplateId { get; set; }
+    public uint Revision { get; set; }
     public int BonusSlots { get; set; }
-    public List<HousingBlobObject> Objects { get; set; } = [];
+    public uint NextItemId { get; set; } = 1;
+    public List<PlacedItem> Items { get; set; } = [];
     public DateTime CreatedUtc { get; set; }
 
     /// <summary>
-    /// Gets the document id of a character's house. One character owns one house per deed template.
+    /// Gets the document id of a house.
     /// </summary>
-    /// <param name="ownerCharId">The owning character.</param>
-    /// <param name="deedTemplateId">The deed or structure template of the house.</param>
+    /// <param name="lotGid">The lot of the house.</param>
     /// <returns>The document id.</returns>
-    public static string GetDocumentId(ulong ownerCharId, uint deedTemplateId)
-        => $"Houses/{ownerCharId}/{deedTemplateId}";
+    public static string GetDocumentId(ulong lotGid)
+        => $"Houses/{lotGid}";
 
 }

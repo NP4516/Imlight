@@ -51,6 +51,7 @@ using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -87,7 +88,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         // The client compares this with its cached copy and asks for the blob only when they differ.
         var snapshot = house.Snapshot();
         SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_REQUEST_BLOBS {
-            Data = HouseBlobCodec.BuildBlobRequest(house.LotGid, snapshot.Version, house.GidBase, snapshot.LiveCount),
+            Data = HouseBlobCodec.BuildBlobRequest(house.LotGid, snapshot.Revision, house.GidBase, snapshot.LiveCount),
         });
     }
 
@@ -140,7 +141,14 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        var placed = HouseBlobCodec.FromPlacement(templateId, message.LocX, message.LocY, message.LocZ, message.Yaw);
+        var placed = new PlacedItem {
+            ItemGid = item.m_globalID,
+            TemplateId = templateId,
+            X = message.LocX,
+            Y = message.LocY,
+            Z = message.LocZ,
+            Yaw = message.Yaw,
+        }.Normalize();
         if (placed is null) {
             HandleForgedRequest($"place item {message.ObjectID} at a position that is not valid");
 
@@ -148,7 +156,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         if (house.LiveCount >= house.ItemLimit
-            || HousingRules.TemplateCopyLimitReached(template, HousingRules.CountPlaced(house.Snapshot().Objects, templateId))) {
+            || HousingRules.TemplateCopyLimitReached(template, HousingRules.CountPlaced(house.Snapshot().Slots, templateId))) {
             InformGameClient("This house cannot hold any more of that.");
 
             return;
@@ -161,7 +169,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        if (!house.TryAdd(placed, out var slot, out var version, stored => HouseCollection.SaveWithBackpack(stored, wizard))) {
+        if (!house.TryAdd(placed, out var slot, out var stored, out var version, document => HouseCollection.SaveWithBackpack(document, wizard))) {
             if (!wizard.InventoryBehavior.AddItem(item)) {
                 Logger.Error("Could not return item {ItemId} to the backpack of character {CharId} after it failed to be placed.",
                     Logger.Args(itemId, wizard.CharId));
@@ -173,18 +181,17 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         ItemSync.SendRemoved(SessionActor.ActorRef, wizard, itemId);
-        var (x, y) = HouseBlobCodec.UnpackLocation(placed.m_positionXY);
         ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHADDHOUSINGOBJECT {
             ObjectID = templateId,
-            LocX = x,
-            LocY = y,
-            LocZ = placed.m_positionZ,
-            Yaw = HouseBlobCodec.UnpackYaw(placed),
+            LocX = stored.X,
+            LocY = stored.Y,
+            LocZ = stored.Z,
+            Yaw = stored.Yaw,
             SubType = HouseBlobCodec.ItemSubType,
             PackageNumber = 0,
             VersionNumber = version,
             GIDID = HouseBlobCodec.GidIndex(house.GidBase, slot),
-            ColorBits = 0,
+            ColorBits = (sbyte) stored.Tint,
         }, isSelfless: false, ZoneBroadcastTarget.Players);
 
         DeleteStoredItem(wizard.CharId, itemId);
@@ -203,15 +210,21 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        HousingBlobObject updated = null;
         var invalid = false;
         var done = house.TryUpdate(slot, current => {
-            updated = HouseBlobCodec.ApplyUpdate(current, message.LocX, message.LocY, message.LocZ, message.Yaw,
-                                                 message.UseExtendedYaw == 1, message.Scale, message.Brightness);
-            invalid = updated is null;
+            var replacement = (current with {
+                X = message.LocX,
+                Y = message.LocY,
+                Z = message.LocZ,
+                Yaw = message.Yaw,
+                ExactYaw = message.UseExtendedYaw == 1,
+                Scale = message.Scale,
+                Brightness = message.Brightness,
+            }).Normalize();
+            invalid = replacement is null;
 
-            return updated;
-        }, out var version);
+            return replacement;
+        }, out var updated, out var version);
         if (invalid) {
             HandleForgedRequest($"move object {message.ObjectGID} to a position, scale or brightness that is not valid");
 
@@ -225,21 +238,20 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        var (x, y) = HouseBlobCodec.UnpackLocation(updated.m_positionXY);
         ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHUPDATEHOUSINGOBJECT {
-            LocX = x,
-            LocY = y,
-            LocZ = updated.m_positionZ,
-            Yaw = HouseBlobCodec.UnpackYaw(updated),
+            LocX = updated.X,
+            LocY = updated.Y,
+            LocZ = updated.Z,
+            Yaw = updated.Yaw,
             SubType = HouseBlobCodec.ItemSubType,
             PackageNumber = 0,
             VersionNumber = version,
             GIDID = HouseBlobCodec.GidIndex(house.GidBase, slot),
-            ObjectID = HouseBlobCodec.TemplateId(updated),
+            ObjectID = updated.TemplateId,
             SwitchTemplateID = 0,
-            UseExtendedYaw = (sbyte) (HouseBlobCodec.UsesExtendedYaw(updated) ? 1 : 0),
-            Scale = HouseBlobCodec.GetScale(updated),
-            Brightness = (sbyte) HouseBlobCodec.GetBrightness(updated),
+            UseExtendedYaw = (sbyte) (updated.ExactYaw ? 1 : 0),
+            Scale = updated.Scale,
+            Brightness = (sbyte) updated.Brightness,
         }, isSelfless: false, ZoneBroadcastTarget.Players);
     }
 
@@ -253,11 +265,11 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
 
         var wizard = GetActiveWizard();
         var snapshot = house.Snapshot();
-        if (slot >= snapshot.Objects.Count) {
+        if (slot >= snapshot.Slots.Count) {
             return;
         }
 
-        var templateId = HouseBlobCodec.TemplateId(snapshot.Objects[slot]);
+        var templateId = snapshot.Slots[slot]?.TemplateId ?? 0;
         if (templateId == 0
             || CoreObjectFactory.GetCoreTemplate(templateId) is not WizItemTemplate template
             || wizard.InventoryBehavior.FreeSlots <= 0
@@ -275,7 +287,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         // The new item and the emptied slot are written in one transaction, so a crash between them cannot lose the item.
-        if (!house.TryRemove(slot, out _, out var version, stored => HouseCollection.SaveWithBackpack(stored, wizard, item))) {
+        if (!house.TryRemove(slot, out _, out var version, document => HouseCollection.SaveWithBackpack(document, wizard, item))) {
             wizard.InventoryBehavior.RemoveItem(item);
             RefusePickUp(house);
 
@@ -344,8 +356,10 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
     private void SendBlob(HouseState house) {
         var snapshot = house.Snapshot();
         try {
+            // A removed slot is an empty entry, which the client numbers and does not count.
+            var entries = snapshot.Slots.Select(item => item?.ToBlobObject() ?? new HousingBlobObject()).ToList();
             SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_SEND_BLOB {
-                Data = HouseBlobCodec.BuildBlob(house.LotGid, snapshot.Version, snapshot.Objects, HouseBlobCodec.EpochDaysNow()),
+                Data = HouseBlobCodec.BuildBlob(house.LotGid, snapshot.Revision, entries, HouseBlobCodec.EpochDaysNow()),
                 UserData = house.GidBase,
             });
         } catch (InvalidOperationException exception) {

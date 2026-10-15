@@ -24,7 +24,7 @@
  * the same HouseState.
  * 
  * USAGE EXAMPLE:
- * var state = HouseRegistry.GetOrCreateDorm(wizard.CharId, out var created);
+ * var state = HouseRegistry.GetOrCreateDorm(wizard, out var created);
  * var entered = HouseRegistry.TryEnter(wizard.CharId, lotGid, out var house);
  * 
  * NOTE:
@@ -41,6 +41,8 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
@@ -53,48 +55,65 @@ namespace Imlight.CoreLib.Game.Housing;
 /// </summary>
 internal static class HouseRegistry {
 
+    private const int CreationLockCount = 32;
+
     private static readonly ConcurrentDictionary<ulong, HouseState> s_houses = new();
+    private static readonly Lock[] s_creationLocks = [.. Enumerable.Range(0, CreationLockCount).Select(_ => new Lock())];
 
     /// <summary>
     /// Finds a character's Dorm Room, creating and storing it when the character has none. However many
     /// logins race, one document and one lot exist per character.
     /// </summary>
-    /// <param name="ownerCharId">The owning character.</param>
+    /// <param name="owner">The owning character.</param>
     /// <param name="created">Whether this call created the house.</param>
     /// <returns>The live house, or <c>null</c> when it cannot be loaded or stored.</returns>
-    internal static HouseState GetOrCreateDorm(ulong ownerCharId, out bool created) {
+    internal static HouseState GetOrCreateDorm(Wizard owner, out bool created) {
         created = false;
         var dorm = HousingZones.DormInfo;
-        var house = HouseCollection.Load(ownerCharId, dorm.TemplateId);
+        var lotGid = owner.HouseLots.GetValueOrDefault(dorm.TemplateId);
+        var house = lotGid == 0 ? null : HouseCollection.Load(lotGid);
         if (house is null) {
             var layout = HousingZones.LoadDormLayout();
             if (layout is null) {
                 return null;
             }
 
-            var lotGid = (ulong) RandomGen.GenerateGUID();
+            var items = (layout.m_housingLayoutObjectList ?? [])
+                .Select(PlacedItem.FromLayout)
+                .Where(item => item is not null)
+                .Select((item, index) => item with { Id = (uint) index + 1 })
+                .ToList();
+            lotGid = lotGid == 0 ? (ulong) RandomGen.GenerateGUID() : lotGid;
             var candidate = new House {
-                Id = House.GetDocumentId(ownerCharId, dorm.TemplateId),
+                Id = House.GetDocumentId(lotGid),
                 LotGid = lotGid,
-                OwnerCharId = ownerCharId,
-                DeedTemplateId = dorm.TemplateId,
-                ZoneName = dorm.ZoneName,
-                BlobVersion = 1,
+                OwnerCharId = owner.CharId,
+                TemplateId = dorm.TemplateId,
+                Revision = 1,
                 BonusSlots = 0,
-                Objects = HouseBlobCodec.FromLayout(layout),
+                NextItemId = (uint) items.Count + 1,
+                Items = items,
                 CreatedUtc = DateTime.UtcNow,
             };
-            created = HouseCollection.TryCreate(candidate, out house);
+            created = HouseCollection.TryCreate(candidate, owner, out house);
             if (house is null) {
                 return null;
             }
 
             if (created) {
-                Logger.Information("Created the dorm {LotGid} of character {CharId}", Logger.Args(house.LotGid, ownerCharId));
+                Logger.Information("Created the dorm {LotGid} of character {CharId}", Logger.Args(house.LotGid, owner.CharId));
             }
         }
 
-        return Publish(house, dorm);
+        if (house.OwnerCharId != owner.CharId || house.TemplateId != dorm.TemplateId) {
+            Logger.Error("House {LotGid} does not belong to the dorm of character {CharId}.", Logger.Args(house.LotGid, owner.CharId));
+
+            return null;
+        }
+
+        owner.HouseLots[dorm.TemplateId] = house.LotGid;
+
+        return Publish(house.LotGid, owner.CharId, dorm);
     }
 
     /// <summary>
@@ -106,9 +125,7 @@ internal static class HouseRegistry {
     /// <returns><c>false</c> when the character has no house with that lot.</returns>
     internal static bool TryGetOwned(ulong ownerCharId, ulong lotGid, out HouseState state) {
         if (!s_houses.TryGetValue(lotGid, out state)) {
-            var dorm = HousingZones.DormInfo;
-            var house = HouseCollection.Load(ownerCharId, dorm.TemplateId);
-            state = house is not null && house.LotGid == lotGid ? Publish(house, dorm) : null;
+            state = Publish(lotGid, ownerCharId, HousingZones.DormInfo);
         }
 
         if (state is null || state.OwnerCharId != ownerCharId) {
@@ -149,14 +166,34 @@ internal static class HouseRegistry {
         }
     }
 
-    private static HouseState Publish(House house, HousingZoneInfo info) {
+    private static HouseState Publish(ulong lotGid, ulong ownerCharId, HousingZoneInfo info) {
         while (true) {
-            var state = s_houses.GetOrAdd(house.LotGid, _ => new HouseState(house, info, HouseBlobCodec.NewGidBase()));
-            if (!state.IsRetired) {
-                return state;
+            if (s_houses.TryGetValue(lotGid, out var existing)) {
+                if (!existing.IsRetired) {
+                    return existing;
+                }
+
+                Evict(existing);
+
+                continue;
             }
 
-            Evict(state);
+            // The house is loaded under the lock, after any earlier state has stored its last change.
+            lock (s_creationLocks[(int) (lotGid % CreationLockCount)]) {
+                if (s_houses.ContainsKey(lotGid)) {
+                    continue;
+                }
+
+                var house = HouseCollection.Load(lotGid);
+                if (house is null || house.OwnerCharId != ownerCharId || house.TemplateId != info.TemplateId
+                    || !HouseState.TryCreate(house, info, out var created)) {
+                    return null;
+                }
+
+                s_houses[lotGid] = created;
+
+                return created;
+            }
         }
     }
 

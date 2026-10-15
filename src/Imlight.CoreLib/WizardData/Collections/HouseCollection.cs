@@ -20,12 +20,12 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Persists houses. The document id is derived from the owner and the deed template, so creating
- * a house is idempotent however many logins race.
+ * Persists houses. The document id is derived from the lot, so creating a house is idempotent however
+ * many logins race, and the owner's lot pointer is written in the same transaction.
  * 
  * USAGE EXAMPLE:
- * var house = HouseCollection.Load(wizard.CharId, templateId);
- * if (house is null) { HouseCollection.TryCreate(newHouse, out house); }
+ * var house = HouseCollection.Load(lotGid);
+ * if (house is null) { HouseCollection.TryCreate(newHouse, owner, out house); }
  * 
  * NOTE:
  * - Reads are direct loads by document id, never queries, because a query can be stale.
@@ -45,6 +45,7 @@ using Imlight.Common;
 using Imlight.CoreLib.WizardData.Databases;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Raven.Client.Documents;
+using Raven.Client.Documents.Session;
 using Raven.Client.Exceptions;
 
 namespace Imlight.CoreLib.WizardData.Collections;
@@ -57,15 +58,14 @@ public static class HouseCollection {
     static HouseCollection() => s_store = PlayerDatabase.Instance.Store;
 
     /// <summary>
-    /// Loads a character's house.
+    /// Loads a house.
     /// </summary>
-    /// <param name="ownerCharId">The owning character.</param>
-    /// <param name="deedTemplateId">The deed or structure template of the house.</param>
+    /// <param name="lotGid">The lot of the house.</param>
     /// <returns>The house, or <c>null</c> when none is stored.</returns>
-    public static House Load(ulong ownerCharId, uint deedTemplateId) {
+    public static House Load(ulong lotGid) {
         using var session = s_store.OpenSession();
 
-        return session.Load<House>(House.GetDocumentId(ownerCharId, deedTemplateId));
+        return session.Load<House>(House.GetDocumentId(lotGid));
     }
 
     /// <summary>
@@ -81,16 +81,13 @@ public static class HouseCollection {
         try {
             using var session = s_store.OpenSession();
 
-            session.Store(house, changeVector: string.Empty, house.Id);
-            var metadata = session.Advanced.GetMetadataFor(house);
-            metadata[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
-
+            StoreNew(session, house);
             session.SaveChanges();
             winner = house;
 
             return true;
         } catch (ConcurrencyException) {
-            winner = Load(house.OwnerCharId, house.DeedTemplateId);
+            winner = Load(house.LotGid);
 
             return false;
         } catch (Exception ex) {
@@ -102,7 +99,59 @@ public static class HouseCollection {
     }
 
     /// <summary>
-    /// Writes the changing parts of a house: its blob version, bonus slots and objects.
+    /// Stores a new house together with its owner's pointer to the lot, in one transaction. When the owner
+    /// already points at another lot for the template, <paramref name="house"/> takes that lot instead, so
+    /// racing creators end up with one lot.
+    /// </summary>
+    /// <param name="house">The house to store; its <see cref="House.Id"/> and lot may be replaced.</param>
+    /// <param name="owner">The owner, whose in-memory lot pointer follows the stored one.</param>
+    /// <param name="winner">
+    /// <paramref name="house"/> when it was stored, otherwise the house that already existed under the lot.
+    /// <c>null</c> when the store failed for another reason.
+    /// </param>
+    /// <returns><c>true</c> when <paramref name="house"/> was stored.</returns>
+    public static bool TryCreate(House house, Wizard owner, out House winner) {
+        try {
+            var stored = WizardCollection.UpdateCharacterWithSession(owner.CharId, (session, storedOwner) => {
+                storedOwner.HouseLots ??= [];
+                if (storedOwner.HouseLots.TryGetValue(house.TemplateId, out var pointedLot)
+                    && pointedLot != house.LotGid) {
+                    house.LotGid = pointedLot;
+                    house.Id = House.GetDocumentId(pointedLot);
+                }
+
+                storedOwner.HouseLots[house.TemplateId] = house.LotGid;
+                StoreNew(session, house);
+
+                return true;
+            });
+            if (!stored) {
+                winner = null;
+
+                return false;
+            }
+
+            owner.HouseLots[house.TemplateId] = house.LotGid;
+            winner = house;
+
+            return true;
+        } catch (ConcurrencyException) {
+            winner = Load(house.LotGid);
+            if (winner is not null) {
+                owner.HouseLots[house.TemplateId] = house.LotGid;
+            }
+
+            return false;
+        } catch (Exception ex) {
+            Logger.Error("Failed to create house {HouseId}: {Reason}", Logger.Args(house.Id, ex.Message));
+            winner = null;
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Writes the changing parts of a house: its revision, bonus slots, next item id and items.
     /// </summary>
     /// <param name="house">The house to save.</param>
     /// <returns><c>true</c> when the stored house now matches <paramref name="house"/>.</returns>
@@ -160,10 +209,17 @@ public static class HouseCollection {
         }
     }
 
+    private static void StoreNew(IDocumentSession session, House house) {
+        session.Store(house, changeVector: string.Empty, house.Id);
+        var metadata = session.Advanced.GetMetadataFor(house);
+        metadata[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+    }
+
     private static void CopyChanging(House from, House to) {
-        to.BlobVersion = from.BlobVersion;
+        to.Revision = from.Revision;
         to.BonusSlots = from.BonusSlots;
-        to.Objects = [.. from.Objects];
+        to.NextItemId = from.NextItemId;
+        to.Items = [.. from.Items];
     }
 
 }
