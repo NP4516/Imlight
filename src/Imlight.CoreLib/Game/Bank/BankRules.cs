@@ -144,7 +144,8 @@ internal static class BankRules {
     internal static bool IsRental(WizClientObjectItem item) => ItemHelper.IsRental(GetTemplate(item));
 
     /// <summary>
-    /// Whether the client has locked the item. A locked item can be neither moved nor deleted.
+    /// Whether the client has locked the item. The bank window lets a locked item move, it only keeps the item
+    /// from being sold, so a locked item is only kept from being deleted here.
     /// </summary>
     /// <param name="item">The item in question.</param>
     /// <returns>True when bit 31 of the pattern is set.</returns>
@@ -206,10 +207,6 @@ internal static class BankRules {
             }
         } else if (quantity != 1) {
             return BankDenial.BadQuantity;
-        }
-
-        if (IsLocked(item)) {
-            return BankDenial.Locked;
         }
 
         if (to != BankContainer.Backpack && IsRental(item)) {
