@@ -20,7 +20,7 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Handles the functionality for the crown shop
+ * Handles the functionality of the crown shop
  * 
  * 
  * USAGE EXAMPLE:
@@ -31,23 +31,24 @@
  * 
  * TODO:
  * - Populating with correct data
- * - Item purchasing
  * - Removing from wishlist (& Wishlist privacy)
  * - Daily Spiral quests
  * 
  * Created by: Phill030
  * Version: KALI 1.0
- * Last Updated: 28.09.2026
+ * Last Updated: 15.10.2026
  */
 
 using Akka.Actor;
 using Imcodec.CoreObject;
+using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.CrownShop;
+using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Game.Packs;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -56,12 +57,24 @@ using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Imlight.CoreLib.Game.Services;
 
 
 internal class CrownShopService(SessionActor sessionActor) : MessageService(sessionActor) {
+
+    private static readonly Random _random = new Random();
+    private static readonly CoreObjectSerializer s_coreObjectSerializer = new CoreObjectSerializer(behaviors: SerializerFlags.None);
+
+    private static ulong _randomUlong() {
+        Span<byte> bytes = stackalloc byte[8];
+        _random.NextBytes(bytes);
+        return BitConverter.ToUInt64(bytes);
+    }
+
+
     protected static Props Props(SessionActor parentActor)
             => Akka.Actor.Props.Create(() => new CrownShopService(parentActor));
 
@@ -250,7 +263,73 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                         MaxEventCurrency1 = wizard.GameStats.m_baseEventCurrency1Pouch
                     });
                     return;
-                default:
+                case ReagentItemTemplate reagentTemplate:
+                    if(!wizard.AddReagent(reagentTemplate.m_templateID, out ClientReagentItem reagentObj)) {
+                        Logger.Warning("Could not add reagent to inventory.");
+
+                        SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_RESPONSE {
+                            Error = 1,
+                        });
+                        return;
+                    }
+
+                    if (!s_coreObjectSerializer.Serialize(reagentObj, 27, out var serializedReagentObj)) {
+                        Logger.Warning("Failed to serialize core object.");
+
+                        return;
+                    }
+
+                    SendToSocket(new WIZARD_12_PROTOCOL.MSG_REAGENTADD {
+                        GlobalID = wizard.GameObjectID,
+                        Data = serializedReagentObj
+                    });
+
+                    SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+                        ItemGlobalID = reagentObj.m_globalID,
+                        ItemTemplateID = (uint) reagentObj.m_templateID,
+                        ItemLocation = 1
+                    });
+
+                    SendToSocket(new WIZARD_12_PROTOCOL.MSG_REAGENTUPDATE {
+                        GlobalID = wizard.GameObjectID,
+                        ItemID = reagentObj.m_globalID,
+                        Quantity = reagentObj.m_quantity
+                    });
+                    return;
+                case PetSnackItemTemplate petSnackTemplate:
+                    // TODO
+                    return;
+                case TourneyTokensAmountTemplate tourneyToken:
+                    // TODO
+                    return;
+                case WizItemTemplate wizItemTemplate:
+                    // Check if the item is an Elixir
+                    var elixirBehavior = itemTemplate?.m_behaviors.OfType<ElixirBehaviorTemplate>().FirstOrDefault();
+                    if (elixirBehavior != null) {
+                        // Check if the player wants to redeem the Elixir
+                        if (message.PurchaseElixirEquipNow > 0) {
+                            return;
+                        }
+
+                    }
+
+
+                    elixirBehavior = itemTemplate?.m_behaviors.OfType<LevelUpElixirBehaviorTemplate>().FirstOrDefault();
+                    if (elixirBehavior != null) {
+                        if (message.PurchaseElixirEquipNow > 0) {
+                            return;
+                        }
+
+                    }
+
+                    elixirBehavior = itemTemplate?.m_behaviors.OfType<WorldElixirBehaviorTemplate>().FirstOrDefault();
+                    if (elixirBehavior != null) {
+                        if (message.PurchaseElixirEquipNow > 0) {
+                            return;
+                        }
+
+                    }
+
                     // Check if the item is emote or teleport effect
                     var customEmote = itemTemplate?.m_behaviors?.OfType<CustomEmoteBehaviorTemplate>().FirstOrDefault();
                     if (customEmote != null && customEmote.m_bitFieldNumber >= 0) {
@@ -263,10 +342,6 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                     }
 
                     // todo: serialize the item only once
-                    var coSerializer = new CoreObjectSerializer(
-                        behaviors: Imcodec.ObjectProperty.SerializerFlags.None
-                    );
-
                     for (uint i = 0; i < message.Count; i++) {
                         if (!wizard.AddItemToInventory(message.Item, out WizClientObjectItem itemCoreObject)) {
                             Logger.Warning("Could not add item to inventory.");
@@ -277,7 +352,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                             return;
                         }
 
-                        if (!coSerializer.Serialize(itemCoreObject, 24, out var serializedItem)) {
+                        if (!s_coreObjectSerializer.Serialize(itemCoreObject, 24, out var serializedItem)) {
                             Logger.Warning("Failed to serialize core object.");
                             return;
                         }
@@ -294,6 +369,9 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                             ItemTemplateID = (uint) message.Item
                         });
                     }
+                    return;
+                default:
+                    Logger.Warning($"Unhandled TemplateID: {message.Item}");
                     break;
             }
         }else {
@@ -330,7 +408,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                 m_expireDuration = 0,
                 m_messageType = 2,
                 m_timeStamp = (ulong) DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                m_mailId = (ulong) DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() // TODO: Don't do this.
+                m_mailId = _randomUlong(),
             };
 
             targetAccount.AddMail(mail);
@@ -345,7 +423,9 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     }
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST))]
-    private void ReceiveWishlistUpdate(WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST message) { }
+    private void ReceiveWishlistUpdate(WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST message) {
+
+    }
 
     [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_CrownShopLogging))]
     private void ReceiveCrownShopLogging(WIZARD2_53_PROTOCOL.MSG_CrownShopLogging message) {
