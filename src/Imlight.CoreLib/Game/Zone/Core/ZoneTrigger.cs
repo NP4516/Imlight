@@ -47,12 +47,14 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.Results;
 using Imlight.CoreLib.Game.Results.Contexts;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Zone.Core;
 
@@ -66,6 +68,7 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
     : ZoneEntity(null, null, null, zoneRef, zone) {
 
     private const double MinPacedWaitSeconds = 1;
+    private const float QueryWizardTimeoutSeconds = 5.0f;
 
     public Trigger TriggerData { get; init; } = trigger;
     private readonly Dictionary<IActorRef, DateTime> _cooldowns = [];
@@ -92,16 +95,13 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
             && TriggerData.m_requirements is not null
             && TriggerData.m_requirements.m_requirements is not null
             && TriggerData.m_requirements.m_requirements.Count > 0) {
-            var queryWizardMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-            var wizardResponse = message.PlayerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryWizardMsg).Result;
-
             var requirementsMet = RequirementDispatcher.EvaluateRequirements(
                 requirements: TriggerData.m_requirements,
                 context: new ZoneRequirementContext(
                     TriggerData.m_requirements,
                     message.PlayerActor,
                     message.PlayerGameObject,
-                    wizardResponse.Wizard,
+                    QueryWizard(message.PlayerActor),
                     ZoneRef,
                     TriggerData.m_triggerName
                 ) {
@@ -164,6 +164,23 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
         }
 
         return kept.Count == results.m_results.Count ? results : new ResultList { m_results = kept };
+    }
+
+    internal static Wizard QueryWizard(IActorRef playerActor) {
+        // A loop outlives its player, and an Ask with no timeout never returns for a stopped actor.
+        if (playerActor is null || playerActor is IInternalActorRef { IsTerminated: true }) {
+            return null;
+        }
+
+        try {
+            return playerActor
+                .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD(),
+                    TimeSpan.FromSeconds(QueryWizardTimeoutSeconds)).Result?.Wizard;
+        } catch (Exception ex) {
+            Logger.Warning("Could not query the wizard of a trigger event's player: {Error}", Logger.Args(ex.Message));
+
+            return null;
+        }
     }
 
     private bool CooldownCheck(IActorRef playerRef) {
