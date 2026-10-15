@@ -29,14 +29,14 @@
  * 
  * NOTE:
  * - Reads are direct loads by document id, never queries, because a query can be stale.
- * - An item that moves between a house and a backpack is written with SaveWithBackpack: one
- *   transaction, so a crash between the two cannot lose or duplicate it.
+ * - An item that moves between a house and a backpack is written with SaveWithBackpack, and objects that move between
+ *   a house and an attic with SaveWithAttic: one transaction, so a crash between the two cannot lose or duplicate them.
  * 
  * TODO:
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -204,6 +204,36 @@ public static class HouseCollection {
         } catch (Exception ex) {
             Logger.Error("Failed to save house {HouseId} with the backpack of character {CharId}: {Reason}",
                 Logger.Args(house.Id, owner.CharId, ex.Message));
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Writes a house together with its owner's attic in one transaction, so objects that move between them are
+    /// either in the house or in the attic, never lost and never in both.
+    /// </summary>
+    /// <param name="house">The house to save.</param>
+    /// <param name="attic">The owner's attic to save.</param>
+    /// <returns><c>true</c> when both are stored; <c>false</c> when neither changed.</returns>
+    public static bool SaveWithAttic(House house, Attic attic) {
+        try {
+            using var session = s_store.OpenSession();
+
+            var storedHouse = session.Load<House>(house.Id);
+            var storedAttic = session.Load<Attic>(attic.Id);
+            if (storedHouse is null || storedAttic is null) {
+                return false;
+            }
+
+            CopyChanging(house, storedHouse);
+            AtticCollection.CopyChanging(attic, storedAttic);
+            session.SaveChanges();
+
+            return true;
+        } catch (Exception ex) {
+            Logger.Error("Failed to save house {HouseId} with attic {AtticId}: {Reason}",
+                Logger.Args(house.Id, attic.Id, ex.Message));
 
             return false;
         }

@@ -201,7 +201,10 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
             // Misc
             ShowSubscriberIcon = 0,
-            TestServer = 1
+            TestServer = 1,
+
+            // Every captured login sends 1, in every zone; the client hides its Pick Up All button while it is 0.
+            PickUpAllEnabled = 1
         };
 
         // Send MSG_PRELOGIN so other services may do their work before we send the final login complete message.

@@ -27,8 +27,9 @@
  * Internal service handling attic messages within the game server session.
  *
  * NOTE:
- * - The attic is a stored list of items in Game/Housing, one blob per family's attic subtype. The blobs and the patches
- *   are built here from the stored items with the generated Imcodec types.
+ * - The attic is a stored list of items in Game/Housing, one blob per family's attic subtype. AtticMessages builds the
+ *   blobs and the patches from the stored items with the generated Imcodec types; HousingService sends them too when
+ *   "Pick Up All Items" fills the attic.
  * - The attic document is created the first time the character needs it, and the client is told its container id then.
  * - The blobs are sent when the window is opened and whenever a client that cannot apply a patch asks for one.
  * - An item keeps its global id in the attic, so it comes back as the same item. Only furniture of a supported family
@@ -193,16 +194,7 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
         }
 
         ItemSync.SendRemoved(SessionActor.ActorRef, wizard, itemId);
-        SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHADDATTIC {
-            BlobGID = attic.ContainerGid,
-            ObjectID = templateId,
-            SubType = change.SubType,
-            PackageNumber = 0,
-            VersionNumber = change.Revision,
-            GIDID = change.GidId,
-            Data = change.Item.Custom ?? string.Empty,
-            PrimaryColorIndex = (sbyte) change.Item.Tint,
-        });
+        SendToSocket(AtticMessages.AddPatch(attic, change));
         SendCount(wizard, attic);
 
         DeleteStoredItem(wizard.CharId, itemId);
@@ -312,54 +304,22 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
         }
 
         _attic = attic;
-        if (created) {
-            SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_SETATTICID { GlobalID = wizard.GameObjectID, AtticID = attic.ContainerGid });
-        }
-
-        if (audit.Removed > 0) {
-            Logger.Warning("The attic of character {CharId} lost {Removed} of {Audited} items whose template is gone.",
-                Logger.Args(wizard.CharId, audit.Removed, audit.Audited));
-            SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_AUDITATTICRESULTS { ItemsAudited = (uint) audit.Audited, ItemsRemoved = (uint) audit.Removed });
+        foreach (var message in AtticMessages.Opening(wizard, attic, created, audit)) {
+            SendToSocket(message);
         }
 
         return true;
     }
 
     private void SendDeletePatch(AtticState attic, AtticChange change)
-        => SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEATTIC {
-            BlobGID = attic.ContainerGid,
-            ObjectID = change.Item.TemplateId,
-            SubType = change.SubType,
-            PackageNumber = 0,
-            VersionNumber = change.Revision,
-            GIDID = change.GidId,
-        });
+        => SendToSocket(AtticMessages.DeletePatch(attic, change));
 
-    private void SendCount(Wizard wizard, AtticState attic) {
-        AtticRegistry.SetSummary(wizard, attic);
-        SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_UPDATEATTICCOUNT { GlobalID = wizard.GameObjectID, ItemCount = attic.LiveCount });
-    }
+    private void SendCount(Wizard wizard, AtticState attic)
+        => SendToSocket(AtticMessages.Count(wizard, attic));
 
     private void SendBlob(AtticState attic, string subType) {
-        var snapshot = attic.Snapshot(subType);
-        try {
-            // A removed slot is an empty entry, which the client numbers and does not count.
-            var blob = new Blob {
-                m_type = HousingBlobs.BlobType,
-                m_subType = subType,
-                m_versionNumber = snapshot.Revision,
-                m_packageNumber = 0,
-                m_associatedGID = attic.ContainerGid,
-                m_epochDays = HousingBlobs.EpochDaysNow(),
-                m_data = new HousingBlob { m_housingBlobObjectList = [.. snapshot.Slots.Select(item => item?.ToBlobObject() ?? new HousingBlobObject())] },
-            };
-            SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_SEND_BLOB {
-                Data = HousingBlobs.Serialize(blob),
-                UserData = snapshot.GidBase,
-            });
-        } catch (InvalidOperationException exception) {
-            Logger.Error("Could not build the {SubType} attic blob of character {CharId}: {Reason}",
-                Logger.Args(subType, attic.CharId, exception.Message));
+        if (AtticMessages.BlobMessage(attic, subType) is { } blob) {
+            SendToSocket(blob);
         }
     }
 

@@ -30,7 +30,7 @@
  *
  * NOTE:
  * - A request is only accepted when it is exactly the bytes the serializer writes for what it parsed, so truncated,
- *   padded and malformed payloads are refused.
+ *   padded and malformed payloads are refused. A list of GIDs only has to parse: no capture shows the client's bytes for one.
  * - The version, count and user data of a request describe the client's cache. They never decide what is sent.
  *
  * TODO:
@@ -41,6 +41,8 @@
  */
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Imcodec.IO;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
@@ -106,6 +108,32 @@ internal static class HousingBlobs {
             }
 
             request = parsed;
+
+            return true;
+        } catch (Exception) {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Parses a list of housing object GIDs the client sends, such as the objects "Pick Up All Items" leaves in place.
+    /// </summary>
+    /// <param name="data">The message's data field; empty for no GIDs.</param>
+    /// <param name="gids">The GIDs when this returns <c>true</c>.</param>
+    /// <returns><c>false</c> when the data is not a serialized <see cref="HousingItemList"/>.</returns>
+    internal static bool TryParseItemList(ByteString data, out IReadOnlyList<ulong> gids) {
+        gids = [];
+        byte[] bytes = data;
+        if (bytes is null || bytes.Length == 0) {
+            return true;
+        }
+
+        try {
+            if (bytes.Length > MaxSerializedLength || !NewSerializer().Deserialize<HousingItemList>(bytes, SerializeMask, out var parsed) || parsed is null) {
+                return false;
+            }
+
+            gids = [.. (parsed.m_housingItemGIDList ?? []).Select(gid => (ulong) gid)];
 
             return true;
         } catch (Exception) {

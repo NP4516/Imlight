@@ -75,6 +75,25 @@ internal readonly record struct AtticChange(HouseEdit Result, string SubType = n
 }
 
 /// <summary>
+/// An item to put in an attic, with the subtype of the blob it goes in.
+/// </summary>
+/// <param name="Item">The item to store; its id is replaced by the next free one.</param>
+/// <param name="SubType">The subtype of the item's family.</param>
+internal readonly record struct AtticAddition(AtticItem Item, string SubType);
+
+/// <summary>
+/// The result of putting several items in an attic at once.
+/// </summary>
+/// <param name="Result">How the change ended; the other values are only set for <see cref="HouseEdit.Done"/> and <see cref="HouseEdit.NeedsResync"/>.</param>
+/// <param name="Changes">One change per item in the order of the additions: its blob, slot, GID id, the version of its patch and the item.</param>
+/// <param name="Renumbered">The subtypes of the blobs that were numbered again; the client needs them before any patch.</param>
+internal readonly record struct AtticBatch(HouseEdit Result, IReadOnlyList<AtticChange> Changes, IReadOnlyList<string> Renumbered) {
+
+    internal bool Done => Result == HouseEdit.Done;
+
+}
+
+/// <summary>
 /// A consistent copy of one blob of an attic.
 /// </summary>
 /// <param name="SubType">The blob's subtype.</param>
@@ -260,6 +279,88 @@ internal sealed class AtticState {
             var slot = table.Slots.Count - 1;
 
             return new AtticChange(HouseEdit.Done, subType, slot, unchecked(table.GidBase + (uint) slot), revision + 1, added);
+        }
+    }
+
+    /// <summary>
+    /// Puts several items in their blobs in one write. Each blob's revision moves by the number of items put in it, so a
+    /// client can be sent one patch per item with consecutive versions. A blob whose table has no room for its items but
+    /// has removed slots is numbered again instead, and nothing is added.
+    /// </summary>
+    /// <param name="additions">The items to store and their blobs' subtypes.</param>
+    /// <param name="save">Writes the attic; <c>null</c> writes the attic alone.</param>
+    /// <returns>
+    /// <see cref="HouseEdit.NotFound"/> when there is nothing to add, <see cref="HouseEdit.LimitReached"/> when the attic or a blob
+    /// cannot hold the items, <see cref="HouseEdit.NeedsResync"/> when blobs were numbered again, <see cref="HouseEdit.SaveFailed"/>
+    /// when the write failed; nothing is added then.
+    /// </returns>
+    internal AtticBatch TryAddMany(IReadOnlyList<AtticAddition> additions, Func<Attic, bool> save = null) {
+        lock (_lock) {
+            if (additions.Count == 0) {
+                return new AtticBatch(HouseEdit.NotFound, [], []);
+            }
+
+            if (_attic.Items.Count + additions.Count > Limit) {
+                return new AtticBatch(HouseEdit.LimitReached, [], []);
+            }
+
+            var crowded = additions.GroupBy(addition => addition.SubType)
+                .Select(group => (Table: TableFor(group.Key), group.Key, Count: group.Count()))
+                .Where(blob => blob.Table.Slots.Count + blob.Count > HousingGids.MaxSlots)
+                .ToList();
+            if (crowded.Any(blob => blob.Table.Live + blob.Count > HousingGids.MaxSlots)) {
+                return new AtticBatch(HouseEdit.LimitReached, [], []);
+            }
+
+            if (crowded.Count > 0) {
+                var renumbered = new List<string>(crowded.Count);
+                foreach (var blob in crowded) {
+                    if (!Renumber(blob.Key, blob.Table)) {
+                        break;
+                    }
+
+                    renumbered.Add(blob.Key);
+                }
+
+                // A blob that was numbered again before a write failed still needs its client to fetch it.
+                return new AtticBatch(renumbered.Count == 0 ? HouseEdit.SaveFailed : HouseEdit.NeedsResync, [], renumbered);
+            }
+
+            var previousItems = _attic.Items;
+            var previousRevisions = _attic.Revisions;
+            var previousNextItemId = _attic.NextItemId;
+            var revisions = new Dictionary<string, uint>(previousRevisions);
+            var items = new List<AtticItem>(previousItems);
+            var slotCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var changes = new List<AtticChange>(additions.Count);
+            var nextItemId = previousNextItemId;
+            foreach (var (item, subType) in additions) {
+                var table = TableFor(subType);
+                var slot = slotCounts.GetValueOrDefault(subType, table.Slots.Count);
+                slotCounts[subType] = slot + 1;
+                var revision = (revisions.TryGetValue(subType, out var current) ? current : 1) + 1;
+                revisions[subType] = revision;
+                var added = item with { Id = nextItemId++ };
+                items.Add(added);
+                changes.Add(new AtticChange(HouseEdit.Done, subType, slot, unchecked(table.GidBase + (uint) slot), revision, added));
+            }
+
+            _attic.Items = items;
+            _attic.Revisions = revisions;
+            _attic.NextItemId = nextItemId;
+            if (!Persist(save)) {
+                _attic.Items = previousItems;
+                _attic.Revisions = previousRevisions;
+                _attic.NextItemId = previousNextItemId;
+
+                return new AtticBatch(HouseEdit.SaveFailed, [], []);
+            }
+
+            foreach (var change in changes) {
+                TableFor(change.SubType).Slots.Add(change.Item);
+            }
+
+            return new AtticBatch(HouseEdit.Done, changes, []);
         }
     }
 

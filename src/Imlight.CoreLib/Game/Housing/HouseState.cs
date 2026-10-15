@@ -349,8 +349,9 @@ internal sealed class HouseState {
     /// </summary>
     /// <param name="itemIds">The ids of the items to remove; none may repeat.</param>
     /// <param name="removed">One change per item in the order of <paramref name="itemIds"/>: its slot, GID id, the version of its patch and the item.</param>
+    /// <param name="save">Writes the house; <c>null</c> writes the house alone.</param>
     /// <returns><see cref="HouseEdit.NotFound"/> when an item is not in the house, <see cref="HouseEdit.SaveFailed"/> when the write failed; nothing changes then.</returns>
-    internal HouseEdit TryRemoveMany(IReadOnlyCollection<uint> itemIds, out IReadOnlyList<HouseChange> removed) {
+    internal HouseEdit TryRemoveMany(IReadOnlyCollection<uint> itemIds, out IReadOnlyList<HouseChange> removed, Func<House, bool> save = null) {
         removed = [];
         lock (_lock) {
             if (itemIds.Count == 0 || itemIds.Distinct().Count() != itemIds.Count) {
@@ -367,7 +368,7 @@ internal sealed class HouseState {
             var removedIds = itemIds.ToHashSet();
             _house.Items = [.. previousItems.Where(candidate => !removedIds.Contains(candidate.Id))];
             _house.Revision = revision + (uint) itemIds.Count;
-            if (!HouseCollection.Save(_house)) {
+            if (!Persist(save)) {
                 _house.Items = previousItems;
                 _house.Revision = revision;
 

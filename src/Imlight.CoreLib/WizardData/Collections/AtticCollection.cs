@@ -153,7 +153,7 @@ public static class AtticCollection {
         }
     }
 
-    private static void CopyChanging(Attic from, Attic to) {
+    internal static void CopyChanging(Attic from, Attic to) {
         to.Revisions = new(from.Revisions);
         to.NextItemId = from.NextItemId;
         to.Items = [.. from.Items];

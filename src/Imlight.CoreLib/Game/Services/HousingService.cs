@@ -33,6 +33,8 @@
  * - The service counts the player into the house at MSG_PRELOGIN and out when the session ends.
  * - A blob request that names the attic is left to AtticService.
  * - Only the owner decorates. A visitor sees the same blob and patches, and every edit they send is refused as forged.
+ * - Picking up every object moves them into the owner's attic, so the service is a viewer of the attic as well. The house
+ *   and the attic are written in one transaction by Game/Housing/HousePickUpAll.
  *
  * TODO:
  *
@@ -67,12 +69,18 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
     private const string ItemSubType = "Item";
 
     private HouseState _house;
+    private AtticState _attic;
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new HousingService(parentActor));
 
     protected override void OnPreDispose() {
         LeaveHouse();
+        if (_attic is not null) {
+            AtticRegistry.Release(_attic);
+            _attic = null;
+        }
+
         base.OnPreDispose();
     }
 
@@ -362,6 +370,72 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }, isSelfless: false, ZoneBroadcastTarget.Players);
     }
 
+    [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_PICKUPALL))]
+    private void ReceivePickUpAll(WIZARDHOUSING_50_PROTOCOL.MSG_PICKUPALL message) {
+        if (!TryGetHouse("pick up every object", out var house)) {
+            return;
+        }
+
+        var wizard = GetActiveWizard();
+        if (!HousingBlobs.TryParseItemList(message.Exceptions, out var kept)) {
+            // Which objects stay is not known, so none is moved.
+            Logger.Warning("Character {CharId} sent a list of objects to keep that could not be read ({Length} bytes).",
+                Logger.Args(wizard.CharId, ((byte[]) message.Exceptions)?.Length ?? 0));
+            InformGameClient("The objects could not be picked up.");
+
+            return;
+        }
+
+        if (!TryGetAttic(out var attic)) {
+            return;
+        }
+
+        var result = HousePickUpAll.Run(house, attic, kept);
+        if (result.Edit == HouseEdit.NeedsResync) {
+            // The attic blobs were numbered again. The client needs them before any patch, and the run goes on with the room they made.
+            foreach (var subType in result.Renumbered) {
+                if (AtticMessages.BlobMessage(attic, subType) is { } blob) {
+                    SendToSocket(blob);
+                }
+            }
+
+            result = HousePickUpAll.Run(house, attic, kept);
+        }
+
+        if (result.Edit is not (HouseEdit.Done or HouseEdit.LimitReached)) {
+            Logger.Warning("Character {CharId} could not pick up every object of lot {LotGid}: {Edit}.",
+                Logger.Args(wizard.CharId, house.LotGid, result.Edit));
+            InformGameClient("The objects could not be picked up.");
+            SendBlob(house);
+
+            return;
+        }
+
+        foreach (var change in result.Added) {
+            SendToSocket(AtticMessages.AddPatch(attic, change));
+        }
+
+        foreach (var change in result.Removed) {
+            ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEHOUSINGOBJECT {
+                SubType = ItemSubType,
+                PackageNumber = 0,
+                VersionNumber = change.Revision,
+                GIDID = change.GidId,
+            }, isSelfless: false, ZoneBroadcastTarget.Players);
+        }
+
+        if (result.Added.Count > 0) {
+            SendToSocket(AtticMessages.Count(wizard, attic));
+        }
+
+        // Any error code makes the client say that the attic is too full, which is the one reason objects stay.
+        SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_PICKUPALL {
+            ItemCount = (uint) result.Removed.Count,
+            ErrorCode = (sbyte) (result.Edit == HouseEdit.LimitReached || result.Left > 0 ? 1 : 0),
+            Exceptions = string.Empty,
+        });
+    }
+
     private bool TryGetHouse(string request, out HouseState house) {
         house = _house;
         if (house is null) {
@@ -376,6 +450,28 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             HandleForgedRequest($"{request} in a house that is not theirs");
 
             return false;
+        }
+
+        return true;
+    }
+
+    private bool TryGetAttic(out AtticState attic) {
+        attic = _attic;
+        if (attic is not null) {
+            return true;
+        }
+
+        var wizard = GetActiveWizard();
+        if (!AtticRegistry.TryEnter(wizard, out attic, out var created, out var audit)) {
+            Logger.Error("Character {CharId} has an attic that cannot be loaded.", Logger.Args(wizard.CharId));
+            InformGameClient("Your attic is not available right now. Please try again later.");
+
+            return false;
+        }
+
+        _attic = attic;
+        foreach (var message in AtticMessages.Opening(wizard, attic, created, audit)) {
+            SendToSocket(message);
         }
 
         return true;
