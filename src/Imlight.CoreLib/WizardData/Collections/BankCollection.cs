@@ -20,8 +20,9 @@
  * ========================================================================
  *
  * PURPOSE:
- * Moves and deletes the items of the shared bank. Each call is one Raven transaction over the account, the
- * character and the item documents involved, so an item or a stack is in exactly one place afterwards.
+ * Moves and deletes the items of the shared bank, and deletes the items of a character's own backpack and bank.
+ * Each call is one Raven transaction over the account, the character and the item documents involved, so an item
+ * or a stack is in exactly one place afterwards.
  *
  * USAGE EXAMPLE:
  * var result = BankCollection.TryMoveShared(wizard, new SharedMove(BankContainer.Backpack, BankContainer.SharedBank, itemId, 1));
@@ -200,6 +201,72 @@ internal static class BankCollection {
         var remaining = FindShared(account.SharedBank, state.Kind, itemId);
 
         return new SharedMoveResult(BankDenial.None, string.Empty, state.Kind, itemId, 0, remaining, null);
+    }
+
+    /// <summary>
+    /// Deletes an item of the wizard's own backpack or bank for good. The id leaves its list and the item document
+    /// goes in one Raven transaction. Reagent and pet snack stacks are not deleted here.
+    /// </summary>
+    /// <param name="wizard">The wizard that deletes.</param>
+    /// <param name="container">Backpack or Bank.</param>
+    /// <param name="itemId">The global id of the item.</param>
+    /// <returns>The result. On success the wizard's list is updated; on a denial nothing changed.</returns>
+    internal static SharedMoveResult TryDeleteOwn(Wizard wizard, BankContainer container, ulong itemId) {
+        var move = new SharedMove(container, container, itemId, 1);
+        if (container == BankContainer.SharedBank) {
+            return Denied(move, BankDenial.WrongContainer, "the shared bank is deleted from with TryDeleteShared");
+        }
+
+        var denial = BankDenial.None;
+        var reason = string.Empty;
+        try {
+            var stored = WizardCollection.UpdateCharacterWithSession(wizard.CharId, (session, storedWizard) => {
+                var ids = container == BankContainer.Backpack ? storedWizard.InventoryBehavior?.InventoryItemIds : storedWizard.StorageBehavior?.BankItemIds;
+                if (ids is null || !ids.Contains(itemId)) {
+                    denial = BankDenial.UnknownItem;
+                    reason = $"item {itemId} is not in {container}";
+
+                    return false;
+                }
+
+                var item = FindDocument<WizClientObjectItem>(session, WizardItemCollection.CollectionName, wizard.CharId, itemId);
+                if (item is null) {
+                    denial = BankDenial.UnknownItem;
+                    reason = $"item {itemId} is listed in {container} but has no document";
+
+                    return false;
+                }
+
+                denial = BankRules.CanDelete(item);
+                if (denial != BankDenial.None) {
+                    reason = $"item {itemId} may not be deleted: {denial}";
+
+                    return false;
+                }
+
+                session.Delete(item);
+                ids.Remove(itemId);
+
+                return true;
+            });
+            if (!stored) {
+                return denial != BankDenial.None
+                    ? Denied(move, denial, reason)
+                    : Denied(move, BankDenial.SaveFailed, "the character is not stored");
+            }
+        } catch (Exception ex) {
+            Logger.Error("Failed to delete item {ItemId} of character {CharId}: {Reason}", Logger.Args(itemId, wizard.CharId, ex.Message));
+
+            return Denied(move, BankDenial.SaveFailed, ex.Message);
+        }
+
+        if (container == BankContainer.Backpack) {
+            wizard.InventoryBehavior.RemoveItem(itemId, out _);
+        } else {
+            wizard.StorageBehavior.RemoveItem(itemId, out _);
+        }
+
+        return new SharedMoveResult(BankDenial.None, string.Empty, BankItemKind.Item, itemId, 0, null, null);
     }
 
     private static MoveState PlanMove(IDocumentSession session, Wizard wizard, Account storedAccount, Wizard storedWizard, SharedMove move) {

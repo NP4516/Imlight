@@ -30,7 +30,8 @@
  * The counts follow the client's: the bank does not count reagents, pet snacks and emotes, the shared bank
  * does not count jewels either and holds them against SharedJewelCap. The backpack check is the server's own
  * (ServerWizInventoryBehavior.FreeSlots), the client also counts equipped items. The caller unequips an
- * equipped item before it asks about it.
+ * equipped item before it asks about it. A rental never goes into the bank or the shared bank, because the
+ * rental expiry only looks at the backpack and what is worn.
  *
  * TODO:
  * Are treasure card posters and vaults that hold no trade cards no trade items? They need housing first.
@@ -45,6 +46,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Shared.Behaviors;
+using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
 
@@ -135,6 +137,13 @@ internal static class BankRules {
     internal static bool IsHouse(WizItemTemplate template) => HasAdjective(template, HouseAdjective);
 
     /// <summary>
+    /// Whether the item is a rental, which the bank and the shared bank refuse.
+    /// </summary>
+    /// <param name="item">The item in question.</param>
+    /// <returns>True when its template is a rental.</returns>
+    internal static bool IsRental(WizClientObjectItem item) => ItemHelper.IsRental(GetTemplate(item));
+
+    /// <summary>
     /// Whether the client has locked the item. A locked item can be neither moved nor deleted.
     /// </summary>
     /// <param name="item">The item in question.</param>
@@ -201,6 +210,10 @@ internal static class BankRules {
 
         if (IsLocked(item)) {
             return BankDenial.Locked;
+        }
+
+        if (to != BankContainer.Backpack && IsRental(item)) {
+            return BankDenial.Rental;
         }
 
         if (to == BankContainer.SharedBank) {

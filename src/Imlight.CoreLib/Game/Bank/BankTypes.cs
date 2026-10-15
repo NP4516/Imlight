@@ -81,5 +81,6 @@ internal enum BankDenial {
     Locked,
     WrongContainer,
     SaveFailed,
+    Rental,
 
 }

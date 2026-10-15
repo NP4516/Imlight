@@ -78,6 +78,12 @@ public class ServerWizStorageBehavior {
     /// <param name="item">The item to be added.</param>
     /// <returns>True if the item was added, false if the bank is full or already holds the item.</returns>
     public bool AddItem(WizClientObjectItem item) {
+        if (BankRules.IsRental(item)) {
+            Logger.Warning("The bank does not hold rentals. Cannot add item with global id {ItemId}.", Logger.Args(item.m_globalID.Full));
+
+            return false;
+        }
+
         if (!HasRoomFor(item)) {
             Logger.Debug("The bank is full. Cannot add item with global id {ItemId}.", Logger.Args(item.m_globalID.Full));
 
