@@ -40,12 +40,12 @@ namespace Imlight.CoreLib.Game.PvP;
 
 internal sealed record PvPArenaReturn(string Zone, string ZoneDisplayName, string Location) {
 
-    public const string LobbyZone = "WizardCity/WC_Duel_Arena";
-    public const string LobbyLocation = "From_PVP_Kiosk";
+    public const string LOBBY_ZONE = "WizardCity/WC_Duel_Arena";
+    public const string LOBBY_LOCATION = "From_PVP_Kiosk";
 
     public static PvPArenaReturn For(PvPQueueEntry entry)
         => string.IsNullOrEmpty(entry.OriginZone)
-            ? new PvPArenaReturn(LobbyZone, string.Empty, LobbyLocation)
+            ? new PvPArenaReturn(LOBBY_ZONE, string.Empty, LOBBY_LOCATION)
             : new PvPArenaReturn(entry.OriginZone, entry.OriginZoneDisplayName, entry.OriginLocation);
 
 }

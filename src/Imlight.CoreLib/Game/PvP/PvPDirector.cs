@@ -59,11 +59,11 @@ namespace Imlight.CoreLib.Game.PvP;
 /// </summary>
 internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
-    private const int MaxQueuedMessagesPerPlayer = 64;
-    private const string MatchmakingTimerKey = "matchmaking";
+    private const int MAX_QUEUED_MESSAGES_PER_PLAYER = 64;
+    private const string MATCHMAKING_TIMER_KEY = "matchmaking";
 
     private static readonly TimeSpan s_matchmakingInterval = TimeSpan.FromSeconds(1);
-    private static TimeSpan s_departureGrace = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan s_departureGrace = TimeSpan.FromSeconds(60);
     private static string DepartureTimerKey(ulong charId) => $"departure-{charId}";
     private static string ConfirmTimerKey(ulong matchId) => $"confirm-{matchId}";
     private static string ArrivalTimerKey(ulong matchId) => $"arrival-{matchId}";
@@ -91,7 +91,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         => Akka.Actor.Props.Create(() => new PvPDirector());
 
     protected override void PreStart() {
-        Timers.StartPeriodicTimer(MatchmakingTimerKey, new PVP_111_PROTOCOL.MSG_MATCHMAKINGTICK(), s_matchmakingInterval);
+        Timers.StartPeriodicTimer(MATCHMAKING_TIMER_KEY, new PVP_111_PROTOCOL.MSG_MATCHMAKINGTICK(), s_matchmakingInterval);
 
         base.PreStart();
     }
@@ -177,13 +177,13 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         if (_queue.Contains(charId)) {
-            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.AlreadyQueued));
+            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.ALREADY_QUEUED));
 
             return;
         }
 
         if (PvPRegistry.IsInMatch(charId)) {
-            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.AlreadyInMatch));
+            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.ALREADY_IN_MATCH));
 
             return;
         }
@@ -191,7 +191,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         if (!PvPMatchFactory.TryGetMatch(message.MatchNameId, out var match)
             || !PvPMatchFactory.TryGetLevelModifiers(match.m_levelModifiersListID.Full, out var levelModifiers)) {
             Logger.Error("Match {MatchId} has no template or level table; {CharId} cannot queue.", Logger.Args(message.MatchNameId, charId));
-            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.InvalidMatchNameId));
+            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.INVALID_MATCH_NAME_ID));
 
             return;
         }
@@ -277,7 +277,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         if (!match.AllAccepted) {
-            SendStatus(entry, PvPMatchActorBuilder.StatusWaitingForOpponent);
+            SendStatus(entry, PvPMatchActorBuilder.STATUS_WAITING_FOR_OPPONENT);
 
             return;
         }
@@ -352,7 +352,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             SendToPlayer(entry.CharId, new WIZARD_12_PROTOCOL.MSG_PVPCONFIRM {
                 TournamentNameID = entry.TournamentNameId,
                 Confirm = 0,
-                MatchActor = PvPMatchActorBuilder.BuildQueued(entry, PvPMatchActorBuilder.StatusMatchFound)
+                MatchActor = PvPMatchActorBuilder.BuildQueued(entry, PvPMatchActorBuilder.STATUS_MATCH_FOUND)
             });
         }
     }
@@ -384,7 +384,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
                 match.LobbySessions[entry.CharId] = lobbySession;
             }
 
-            SendStatus(entry, PvPMatchActorBuilder.StatusWaitingToTeleport);
+            SendStatus(entry, PvPMatchActorBuilder.STATUS_WAITING_TO_TELEPORT);
             SendToPlayer(entry.CharId, new PVP_111_PROTOCOL.MSG_ENTERMATCH {
                 MatchId = match.Id,
                 ArenaZone = arenaZone,
@@ -437,7 +437,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
                 ReturnZoneDisplayName = returnTo.ZoneDisplayName,
                 ReturnLocation = returnTo.Location
             });
-            SendStatus(entry, PvPMatchActorBuilder.StatusInArena);
+            SendStatus(entry, PvPMatchActorBuilder.STATUS_IN_ARENA);
 
             if (match.AllArrived) {
                 StartMatch(match);
@@ -530,7 +530,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
             if (requeue) {
                 if (reason == PvPCancelReason.Declined) {
-                    SendToPlayer(entry.CharId, PvPArenaErrors.Message(PvPArenaErrors.PlayerDeclined));
+                    SendToPlayer(entry.CharId, PvPArenaErrors.Message(PvPArenaErrors.PLAYER_DECLINED));
                 }
 
                 Requeue(entry);
@@ -598,7 +598,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     }
 
     private void SendQueueStatus(PvPQueueEntry entry)
-        => SendStatus(entry, PvPMatchActorBuilder.StatusFindingMatch);
+        => SendStatus(entry, PvPMatchActorBuilder.STATUS_FINDING_MATCH);
 
     private void SendStatus(PvPQueueEntry entry, int status)
         => SendToPlayer(entry.CharId, new GAME_5_PROTOCOL.MSG_MATCHMAKERUPDATE {
@@ -647,7 +647,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             _queuedMessages[charId] = queue;
         }
 
-        if (queue.Count < MaxQueuedMessagesPerPlayer) {
+        if (queue.Count < MAX_QUEUED_MESSAGES_PER_PLAYER) {
             queue.Add(message);
         }
     }

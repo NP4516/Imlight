@@ -90,7 +90,7 @@ internal sealed class PvPWindowState {
                     Logger.Args(wizard.CharId, message.MatchType));
             }
 
-            return [PvPArenaErrors.Message(PvPArenaErrors.InvalidTournamentType)];
+            return [PvPArenaErrors.Message(PvPArenaErrors.INVALID_TOURNAMENT_TYPE)];
         }
 
         var refusal = GetOpenRefusal(message.LeagueID, message.SeasonID, playerActor, playerObject, wizard, utcNow);
@@ -101,7 +101,7 @@ internal sealed class PvPWindowState {
         if (!PvPTournamentFactory.TryGetTournament(PracticeTournament, out var tournament)) {
             Logger.Error("The tournament {Tournament} is missing from the Root.wad.", Logger.Args(PracticeTournament));
 
-            return [PvPArenaErrors.Message(PvPArenaErrors.InvalidTournamentType)];
+            return [PvPArenaErrors.Message(PvPArenaErrors.INVALID_TOURNAMENT_TYPE)];
         }
 
         TournamentNameId = StringHash.Compute(tournament.m_tournamentName);
@@ -187,7 +187,7 @@ internal sealed class PvPWindowState {
                 Logger.Warning("{CharId} sent PvP intent command {Command}, which practice does not offer.",
                     Logger.Args(wizard.CharId, message.Command));
 
-                return ([PvPArenaErrors.Message(PvPArenaErrors.InvalidTournamentType)], null);
+                return ([PvPArenaErrors.Message(PvPArenaErrors.INVALID_TOURNAMENT_TYPE)], null);
         }
     }
 
@@ -218,17 +218,17 @@ internal sealed class PvPWindowState {
         }
 
         if (!PvPMatchFactory.TryGetMatch(message.MatchNameID, out var match)) {
-            return ([PvPArenaErrors.Message(PvPArenaErrors.InvalidMatchNameId)], null);
+            return ([PvPArenaErrors.Message(PvPArenaErrors.INVALID_MATCH_NAME_ID)], null);
         }
 
         string matchName = match.m_matchName;
         if (!tournament.m_allowedMatches.Any(name => (string) name == matchName)) {
-            return ([PvPArenaErrors.Message(PvPArenaErrors.MatchNotAllowed)], null);
+            return ([PvPArenaErrors.Message(PvPArenaErrors.MATCH_NOT_ALLOWED)], null);
         }
 
         // Teams of more than one player come with the later phases.
         if (match.m_teamSize != 1 || match.m_teamCount != 2) {
-            return ([PvPArenaErrors.Message(PvPArenaErrors.InvalidMatchNameId)], null);
+            return ([PvPArenaErrors.Message(PvPArenaErrors.INVALID_MATCH_NAME_ID)], null);
         }
 
         var refusal = GetOpenRefusal(LeagueId, SeasonId, playerActor, playerObject, wizard, utcNow, requireKiosk: false);
@@ -264,15 +264,15 @@ internal sealed class PvPWindowState {
         if (requireKiosk && (_kioskLeagueId == 0 || leagueId != _kioskLeagueId)) {
             Logger.Warning("{CharId} opened a PvP window without using a kiosk of that league.", Logger.Args(wizard.CharId));
 
-            return PvPArenaErrors.PlayerIneligible;
+            return PvPArenaErrors.PLAYER_INELIGIBLE;
         }
 
         if (!PvPLeagueFactory.TryGetLeague(leagueId, out var league) || !PvPSeasonClock.IsOpen(league, seasonId, utcNow)) {
-            return PvPArenaErrors.PlayerIneligible;
+            return PvPArenaErrors.PLAYER_INELIGIBLE;
         }
 
         if (!PvPEligibility.MeetsLeagueRequirements(league, playerActor, playerObject, wizard)) {
-            return PvPArenaErrors.NotInLevelRange;
+            return PvPArenaErrors.NOT_IN_LEVEL_RANGE;
         }
 
         return PvPEligibility.GetQueueRefusal(wizard);

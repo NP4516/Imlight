@@ -48,27 +48,19 @@ namespace Imlight.CoreLib.Game.PvP;
 
 internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
 
-    public const ulong InstanceOwnerFlag = 1UL << 63;
+    public const ulong INSTANCE_OWNER_FLAG = 1UL << 63;
 
     private readonly HashSet<ulong> _accepted = [];
     private readonly HashSet<ulong> _arrived = [];
 
     public ulong Id { get; } = id;
-
     public IReadOnlyList<PvPQueueEntry> Entries { get; } = entries;
-
     public IEnumerable<ulong> CharIds => Entries.Select(entry => entry.CharId);
-
     public PvPMatchState State { get; set; } = PvPMatchState.Confirming;
-
     public string ArenaZone { get; set; }
-
-    public ulong InstanceOwnerId => InstanceOwnerFlag | Id;
-
+    public ulong InstanceOwnerId => INSTANCE_OWNER_FLAG | Id;
     public Dictionary<ulong, IActorRef> LobbySessions { get; } = [];
-
     public bool AllArrived => _arrived.Count == Entries.Count;
-
     public bool AllAccepted => _accepted.Count == Entries.Count;
 
     public bool HasAccepted(ulong charId)

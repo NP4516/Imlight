@@ -49,12 +49,12 @@ namespace Imlight.CoreLib.Game.PvP;
 
 internal static class PvPMatchActorBuilder {
 
-    public const int StatusIdle = 0;
-    public const int StatusFindingMatch = 4;
-    public const int StatusMatchFound = 8;
-    public const int StatusWaitingForOpponent = 10;
-    public const int StatusWaitingToTeleport = 11;
-    public const int StatusInArena = 12;
+    public const int STATUS_IDLE = 0;
+    public const int STATUS_FINDING_MATCH = 4;
+    public const int STATUS_MATCH_FOUND = 8;
+    public const int STATUS_WAITING_FOR_OPPONENT = 10;
+    public const int STATUS_WAITING_TO_TELEPORT = 11;
+    public const int STATUS_IN_ARENA = 12;
 
     private const int IdleEnteredQueue = 41;
 
@@ -62,7 +62,7 @@ internal static class PvPMatchActorBuilder {
     /// The actor of a player who is not in any queue or match. Sending it resets the status window of the client.
     /// </summary>
     public static ByteString BuildIdle(ulong charId)
-        => Serialize(Create(charId, StatusIdle, null));
+        => Serialize(Create(charId, STATUS_IDLE, null));
 
     public static ByteString BuildQueued(PvPQueueEntry entry, int status)
         => Serialize(Create(entry.CharId, status, entry));

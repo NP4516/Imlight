@@ -56,22 +56,17 @@ internal sealed class PvPDuelState(
     private readonly HashSet<IActorRef> _sessionsToWaitFor = [];
 
     public ulong MatchId { get; } = matchId;
-
     public uint TournamentNameId { get; } = tournamentNameId;
-
     public IReadOnlyList<PvPRosterEntry> Roster { get; } = roster;
-
     public PvPDuelRules Rules { get; } = rules;
-
     public CombatTeam OriginalFirstTeam { get; } = firstTeam;
-
-    // The team that acts first in the current round.
     public CombatTeam RoundStarter { get; private set; } = firstTeam;
-
-    // 1 for the first half turn of a round, 2 for the second, 0 before the first round.
+    public bool IsEnding { get; private set; }
+    public bool IsFinished { get; private set; }
+    public int WinningTeam { get; private set; } = -1;
+    public bool HasSessionsToWaitFor => _sessionsToWaitFor.Count > 0;
+    public IReadOnlyCollection<ulong> ForfeitedCharIds => _forfeitedCharIds;
     public int HalfTurn { get; private set; }
-
-    // The team that plans now, or null when both teams plan at once.
     public CombatTeam? ActingTeam
         => !Rules.AlternateTurns || HalfTurn == 0 ? null : HalfTurn == 2 ? Opposite(RoundStarter) : RoundStarter;
 
@@ -96,16 +91,6 @@ internal sealed class PvPDuelState(
 
         return true;
     }
-
-    public bool IsEnding { get; private set; }
-
-    public bool IsFinished { get; private set; }
-
-    public int WinningTeam { get; private set; } = -1;
-
-    public bool HasSessionsToWaitFor => _sessionsToWaitFor.Count > 0;
-
-    public IReadOnlyCollection<ulong> ForfeitedCharIds => _forfeitedCharIds;
 
     /// <summary>
     /// Marks the duel as decided. The clients of <paramref name="sessions"/> are given time to finish the victory

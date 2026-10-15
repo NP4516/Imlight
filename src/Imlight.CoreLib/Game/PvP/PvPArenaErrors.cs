@@ -44,14 +44,14 @@ namespace Imlight.CoreLib.Game.PvP;
 
 internal static class PvPArenaErrors {
 
-    public const string AlreadyQueued = "Error_AlreadyQueued";
-    public const string AlreadyInMatch = "Error_ErrorAlreadyInMatch";
-    public const string NotInLevelRange = "Error_NotInLevelRange";
-    public const string PlayerIneligible = "Error_PlayerIneligible";
-    public const string InvalidTournamentType = "Error_InvalidTournamentType";
-    public const string InvalidMatchNameId = "Error_InvalidMatchNameID";
-    public const string MatchNotAllowed = "Error_ErrorMatchNotAllowed";
-    public const string PlayerDeclined = "Error_PlayerDeclined";
+    public const string ALREADY_QUEUED = "Error_AlreadyQueued";
+    public const string ALREADY_IN_MATCH = "Error_ErrorAlreadyInMatch";
+    public const string NOT_IN_LEVEL_RANGE = "Error_NotInLevelRange";
+    public const string PLAYER_INELIGIBLE = "Error_PlayerIneligible";
+    public const string INVALID_TOURNAMENT_TYPE = "Error_InvalidTournamentType";
+    public const string INVALID_MATCH_NAME_ID = "Error_InvalidMatchNameID";
+    public const string MATCH_NOT_ALLOWED = "Error_ErrorMatchNotAllowed";
+    public const string PLAYER_DECLINED = "Error_PlayerDeclined";
 
     public static WIZARD_12_PROTOCOL.MSG_ARENA_ERROR Message(string key)
         => new() { Error = StringHash.Compute(key) };

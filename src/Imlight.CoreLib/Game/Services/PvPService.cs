@@ -131,7 +131,7 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
 
         // A player in a PvE duel can answer once the duel is over; the match waits for them.
         if (message.Confirm != 0 && (wizard.IsInDuel || wizard.IsInCombatGrace)) {
-            SendToSocket(PvPArenaErrors.Message(PvPArenaErrors.PlayerIneligible));
+            SendToSocket(PvPArenaErrors.Message(PvPArenaErrors.PLAYER_INELIGIBLE));
 
             return;
         }

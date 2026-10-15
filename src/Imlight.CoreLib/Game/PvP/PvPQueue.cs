@@ -45,7 +45,6 @@ internal sealed class PvPQueue {
     private readonly Dictionary<ulong, PvPQueueEntry> _entries = [];
 
     public int Count => _entries.Count;
-
     public IEnumerable<PvPQueueEntry> Entries => _entries.Values;
 
     public bool Contains(ulong charId)

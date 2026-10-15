@@ -59,15 +59,15 @@ internal static class PvPEligibility {
     /// </summary>
     public static string GetQueueRefusal(Wizard wizard) {
         if (PvPRegistry.IsQueued(wizard.CharId)) {
-            return PvPArenaErrors.AlreadyQueued;
+            return PvPArenaErrors.ALREADY_QUEUED;
         }
 
         if (PvPRegistry.IsInMatch(wizard.CharId)) {
-            return PvPArenaErrors.AlreadyInMatch;
+            return PvPArenaErrors.ALREADY_IN_MATCH;
         }
 
         if (wizard.IsInDuel || wizard.IsInCombatGrace) {
-            return PvPArenaErrors.PlayerIneligible;
+            return PvPArenaErrors.PLAYER_INELIGIBLE;
         }
 
         return null;

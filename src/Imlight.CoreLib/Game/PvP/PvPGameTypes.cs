@@ -47,13 +47,13 @@ internal sealed record PvPDuelRules(bool AlternateTurns, bool PipsForBothTeamsAt
 
 internal static class PvPGameTypes {
 
-    public const string AlternatingTurnsPipsAtOnce = "AlternatingTurns_PipsAtOnce";
+    public const string ALTERNATING_TURNS_PIPS_AT_ONCE = "AlternatingTurns_PipsAtOnce";
 
     public static bool TryResolve(IEnumerable<string> modifierNames, out PvPDuelRules rules) {
         var alternateTurns = false;
         var pipsForBothTeams = false;
         foreach (var name in modifierNames ?? []) {
-            if (name == AlternatingTurnsPipsAtOnce) {
+            if (name == ALTERNATING_TURNS_PIPS_AT_ONCE) {
                 alternateTurns = true;
                 pipsForBothTeams = true;
 
