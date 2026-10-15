@@ -48,6 +48,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Housing.Families;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -148,15 +149,25 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         // The item and its template come from the server's own inventory, never from the client.
         var wizard = GetActiveWizard();
         var item = wizard.InventoryBehavior.GetItem(message.ObjectID);
-        if (item is null || message.SwitchCastleBlock != 0) {
-            HandleForgedRequest($"place item {message.ObjectID} that is not in the backpack or is a castle block");
+        if (item is null) {
+            HandleForgedRequest($"place item {message.ObjectID} that is not in the backpack");
 
             return;
         }
 
         var templateId = (uint) Math.Min((ulong) item.m_templateID, uint.MaxValue);
-        if (!HousingRules.TryGetPlaceable(templateId, out var template)) {
+        var placement = HousingItems.Check(templateId, out var template, out var family);
+        if (placement == HousingPlacement.Refused) {
             HandleForgedRequest($"place item {message.ObjectID}, template {templateId}, which is not placeable furniture");
+
+            return;
+        }
+
+        var switchesBlock = message.SwitchCastleBlock != 0 && !HousingFamilies.CastleBlock.Enabled;
+        if (placement == HousingPlacement.NotEnabled || switchesBlock) {
+            Logger.Information("Character {CharId} tried to place item {ItemId} of the {Family} family, which is not enabled.",
+                Logger.Args(wizard.CharId, message.ObjectID, placement == HousingPlacement.NotEnabled ? family.Id : HousingFamilies.CastleBlock.Id));
+            InformGameClient("That kind of object cannot be placed in a house yet.");
 
             return;
         }
@@ -176,7 +187,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         if (house.LiveCount >= house.ItemLimit
-            || HousingRules.TemplateCopyLimitReached(template, house.CountTemplate(templateId))) {
+            || HousingItems.TemplateCopyLimitReached(template, house.CountTemplate(templateId))) {
             InformGameClient("This house cannot hold any more of that.");
 
             return;
@@ -228,8 +239,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        if (message.SwitchCastleBlock != 0 || message.UseExtendedYaw is not (0 or 1)
-            || !house.TryFindByGid(message.ObjectGID, out var current, out _)) {
+        if (message.UseExtendedYaw is not (0 or 1) || !house.TryFindByGid(message.ObjectGID, out var current, out _)) {
             HandleForgedRequest($"move object {message.ObjectGID}, which is not an object of this house");
 
             return;
@@ -237,6 +247,13 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
 
         if (current is null) {
             // The object is gone. The client moved it already, so give it the real state.
+            SendBlob(house);
+
+            return;
+        }
+
+        if (message.SwitchCastleBlock != 0 && !HousingFamilies.CastleBlock.Enabled) {
+            InformGameClient("That kind of object cannot be changed in a house yet.");
             SendBlob(house);
 
             return;
@@ -299,13 +316,13 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         if (placedItem is null
             || CoreObjectFactory.GetCoreTemplate(placedItem.TemplateId) is not WizItemTemplate template
             || wizard.InventoryBehavior.FreeSlots <= 0
-            || HousingRules.TemplateCopyLimitReached(template, wizard.InventoryBehavior.Items.Count(i => i.m_templateID == placedItem.TemplateId))) {
+            || HousingItems.TemplateCopyLimitReached(template, HousingItems.CountInBackpack(wizard, placedItem.TemplateId))) {
             RefusePickUp(house);
 
             return;
         }
 
-        var item = HousingRules.CreateItem(wizard, placedItem.TemplateId);
+        var item = HousingItems.CreateItem(wizard, placedItem.TemplateId);
         if (item is null || !wizard.InventoryBehavior.AddItem(item)) {
             RefusePickUp(house);
 
