@@ -322,7 +322,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        var item = HousingItems.CreateItem(wizard, placedItem.TemplateId);
+        var item = HousingItems.CreateItem(wizard, placedItem.TemplateId, placedItem.ItemGid);
         if (item is null || !wizard.InventoryBehavior.AddItem(item)) {
             RefusePickUp(house);
 

@@ -167,6 +167,19 @@ public static class WizardItemCollection {
     }
 
     /// <summary>
+    /// Checks whether an item is stored under a global id, whoever owns it.
+    /// </summary>
+    /// <param name="itemId">The global id of the item.</param>
+    /// <returns>True if an item with the id is stored, false otherwise.</returns>
+    public static bool Exists(ulong itemId) {
+        using var session = s_store.OpenSession();
+
+        return session.Query<WizClientObjectItem>(collectionName: CollectionName)
+            .Customize(query => query.WaitForNonStaleResults())
+            .Any(x => x.m_globalID == itemId);
+    }
+
+    /// <summary>
     /// Applies the primary dye color to a WizClientObjectItem.
     /// </summary>
     /// <param name="item">The WizClientObjectItem to apply the dye to.</param>

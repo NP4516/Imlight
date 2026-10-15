@@ -37,6 +37,7 @@
  *   0x1422170f0). Which folder a template lives in is not part of it.
  * - Plants, wallpapers and seeds go through their own messages, so they are not furniture.
  * - Furniture of a family that is declared but not enabled is refused without blame, because the client offers it.
+ * - A picked up object gets back the global id its backpack item had, unless something holds that id by now.
  *
  * TODO:
  *
@@ -49,8 +50,10 @@ using System;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
+using Imlight.Common;
 using Imlight.CoreLib.Game.Housing.Families;
 using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Housing;
@@ -150,16 +153,38 @@ internal static class HousingItems {
     /// </summary>
     /// <param name="wizard">The character who picks the object up.</param>
     /// <param name="templateId">The object's template id.</param>
+    /// <param name="itemGid">
+    /// The global id the object had as a backpack item, or 0 for an object that never was one. The item gets it
+    /// back when nothing else holds the id.
+    /// </param>
     /// <returns>The new item, or <c>null</c> when the template is not an item.</returns>
-    internal static WizClientObjectItem CreateItem(Wizard wizard, uint templateId) {
+    internal static WizClientObjectItem CreateItem(Wizard wizard, uint templateId, ulong itemGid = 0) {
         if (CoreObjectFactory.FinalizeCoreObject(templateId) is not WizClientObjectItem item) {
             return null;
         }
 
         item.m_characterId = (GID) wizard.CharId;
+        if (itemGid != 0 && !IsGidInUse(wizard, itemGid)) {
+            item.m_globalID = itemGid;
+        }
+
         CoreObjectFactory.InitializeCoreObjectBehaviors(item, item.m_templateID);
 
         return item;
+    }
+
+    private static bool IsGidInUse(Wizard wizard, ulong itemGid) {
+        if (wizard.InventoryBehavior.GetItem(itemGid) is not null) {
+            return true;
+        }
+
+        try {
+            return WizardItemCollection.Exists(itemGid);
+        } catch (Exception exception) {
+            Logger.Warning("Could not check whether item {ItemId} exists: {Reason}", Logger.Args(itemGid, exception.Message));
+
+            return true;
+        }
     }
 
 }
