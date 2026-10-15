@@ -378,24 +378,8 @@ public class Wizard {
         WizardCollection.UpdateCharacterTrainingPoints(this);
     }
 
-    public bool AddItemToInventory(ulong itemId, out WizClientObjectItem item) {
-        if (itemId <= uint.MaxValue && PetFactory.IsPetTemplate((uint) itemId)) {
-            return AddHatchedPetToInventory((uint) itemId, out item);
-        }
-
-        // The template may be a spell, a missing template or anything else that is not an item.
-        item = CoreObjectFactory.FinalizeCoreObject(itemId) as WizClientObjectItem;
-        if (item is null) {
-            Logger.Warning("Cannot add template {0} to inventory because it is not an item.",
-                Logger.Args(itemId));
-
-            return false;
-        }
-
-        item.m_characterId = (GID) CharId;
-
-        return AddItemToInventory(item);
-    }
+    public bool AddItemToInventory(ulong itemId, out WizClientObjectItem item)
+        => TryCreateItem(itemId, out item) && AddInitializedItemToInventory(item);
 
     /// <summary>
     /// Builds a new item of a template for this character, with its behaviors initialized. A pet template builds a
