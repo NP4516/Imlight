@@ -1240,4 +1240,18 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Sent to a player's session by a house door the player walked up to: the session works out the house on the
+    /// other side and starts the zone transfer.
+    /// </summary>
+    public sealed class MSG_HOUSEDOOR : IServerMessage {
+
+        public byte MessageOrder { get; } = 80;
+        public byte ServiceID { get; } = 102;
+
+        public ulong DoorGid;
+        public string LocationName;
+
+    }
+
 }

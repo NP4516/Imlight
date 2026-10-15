@@ -100,14 +100,14 @@ public sealed record HouseEntry(
     /// <summary>
     /// Makes the entry for a player who has no deed item for the house: the client opens the zone for the template.
     /// </summary>
-    internal static HouseEntry ForTeleport(ulong lotGid, ulong ownerCharId, HouseTemplateInfo template)
-        => new(HouseEntryKind.Teleport, lotGid, template.LotZone, ownerCharId, template.TemplateId, 0, []);
+    internal static HouseEntry ForTeleport(ulong lotGid, ulong ownerCharId, HouseTemplateInfo template, IReadOnlyList<ulong> newItemGids = null)
+        => new(HouseEntryKind.Teleport, lotGid, template.LotZone, ownerCharId, template.TemplateId, 0, newItemGids ?? []);
 
     /// <summary>
     /// Makes the entry for a door: the client opens the zone of the house on the other side.
     /// </summary>
-    internal static HouseEntry ForDoor(ulong lotGid, ulong ownerCharId, HouseTemplateInfo template, ulong doorGid)
-        => new(HouseEntryKind.Door, lotGid, template.LotZone, ownerCharId, template.TemplateId, doorGid, []);
+    internal static HouseEntry ForDoor(ulong lotGid, ulong ownerCharId, HouseTemplateInfo template, ulong doorGid, IReadOnlyList<ulong> newItemGids = null)
+        => new(HouseEntryKind.Door, lotGid, template.LotZone, ownerCharId, template.TemplateId, doorGid, newItemGids ?? []);
 
     /// <summary>
     /// Builds the message that asks the client to load the zone.

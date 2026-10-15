@@ -63,21 +63,30 @@ internal static class HouseAccess {
     /// <param name="visitor">The character who wants in.</param>
     /// <param name="house">The stored house.</param>
     /// <returns>The access level; <see cref="HouseAccessLevel.Denied"/> when the house is missing or its owner cannot be loaded.</returns>
-    internal static HouseAccessLevel Evaluate(Wizard visitor, House house) {
-        if (visitor is null || house is null) {
+    internal static HouseAccessLevel Evaluate(Wizard visitor, House house)
+        => house is null ? HouseAccessLevel.Denied : Evaluate(visitor, house.OwnerCharId);
+
+    /// <summary>
+    /// Decides what a character may do in the houses of an owner.
+    /// </summary>
+    /// <param name="visitor">The character who wants in.</param>
+    /// <param name="ownerCharId">The owner of the house.</param>
+    /// <returns>The access level; <see cref="HouseAccessLevel.Denied"/> when the owner cannot be loaded.</returns>
+    internal static HouseAccessLevel Evaluate(Wizard visitor, ulong ownerCharId) {
+        if (visitor is null) {
             return HouseAccessLevel.Denied;
         }
 
-        if (visitor.CharId == house.OwnerCharId) {
+        if (visitor.CharId == ownerCharId) {
             return HouseAccessLevel.Owner;
         }
 
-        var owner = WizardCollection.GetCharacterUnloaded(house.OwnerCharId);
+        var owner = WizardCollection.GetCharacterUnloaded(ownerCharId);
         if (owner?.GameStats is null || owner.GameStats.m_invisibleToFriends) {
             return HouseAccessLevel.Denied;
         }
 
-        return BuddyRelationshipCollection.AreFriends(house.OwnerCharId, visitor.CharId) ? HouseAccessLevel.Guest : HouseAccessLevel.Denied;
+        return BuddyRelationshipCollection.AreFriends(ownerCharId, visitor.CharId) ? HouseAccessLevel.Guest : HouseAccessLevel.Denied;
     }
 
 }

@@ -72,6 +72,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private const int ZoneTransferDelayMs = 350;
 
     private const string DeedZoneTimeoutKey = "deedzone-timeout";
+    private const string BackpackFullForHouseText = "Your backpack is full. Make room for your house deed and try again.";
 
     public IActorRef ZoneActor;
 
@@ -177,6 +178,12 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
     private void ReceiveZoneTransferRequest(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
         if (_transferGate.IsQueued) {
+            return;
+        }
+
+        // A trigger or a script that teleports into a house zone names no lot, so the player's own house in that zone is used.
+        if (message.SendToClient && message.HouseEntry is null && HouseZoneIndex.IsHouseZone(message.DestinationZone)
+            && !TryUseOwnHouse(message)) {
             return;
         }
 
@@ -406,7 +413,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         if (!HouseDeeds.TryPrepareHome(wizard, out var entry, out var failure)) {
             InformGameClient(failure == HouseGrantFailure.BackpackFull
-                ? "Your backpack is full. Make room for your house deed and try again."
+                ? BackpackFullForHouseText
                 : "Your house is not available right now. Please try again later.", true);
 
             return;
@@ -427,6 +434,31 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         var delay = TimeSpan.FromSeconds(TELEPORT_EFFECTS_TIME);
         Timers.StartSingleTimer("zonetransfer", tpmsg, delay);
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_HOUSEDOOR))]
+    private void ReceiveHouseDoor(ZONE_102_PROTOCOL.MSG_HOUSEDOOR message) {
+        if (_transferGate.IsQueued || Timers.IsTimerActive("zonetransfer")) {
+            return;
+        }
+
+        // The door sits in a house zone, and the house the player is in decides what is on the other side.
+        if (!HouseTravel.TryEnterByDoor(GetActiveWizard(), message.DoorGid, out var entry, out var failure)) {
+            if (failure == HouseTravelFailure.BackpackFull) {
+                InformGameClient(BackpackFullForHouseText, true);
+            }
+
+            return;
+        }
+
+        ReceiveZoneTransferRequest(new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
+            DestinationZone = entry.Zone,
+            DestinationLocation = string.IsNullOrEmpty(message.LocationName) ? HouseDeeds.EntryLocation : message.LocationName,
+            SendToClient = true,
+            IsPrivate = true,
+            OwnerCharId = entry.OwnerCharId,
+            HouseEntry = entry,
+        });
     }
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_WORLDTELEPORTREQUEST))]
@@ -819,6 +851,22 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         SendToSocket(msg);
 
         LogTransferStep("ZONETRANSFERREQUEST sent", previous, true);
+    }
+
+    private bool TryUseOwnHouse(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
+        if (HouseTravel.TryEnterZone(GetActiveWizard(), message.DestinationZone, out var entry, out var failure)) {
+            message.HouseEntry = entry;
+            message.IsPrivate = true;
+            message.OwnerCharId = entry.OwnerCharId;
+
+            return true;
+        }
+
+        Logger.Information("Session {SessionId} cannot teleport into house zone {Zone}: {Failure}.",
+            Logger.Args(SessionActor.SessionID, message.DestinationZone, failure));
+        InformGameClient(failure == HouseTravelFailure.BackpackFull ? BackpackFullForHouseText : "You cannot travel to that house.", true);
+
+        return false;
     }
 
     private bool IsValidHouseTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {

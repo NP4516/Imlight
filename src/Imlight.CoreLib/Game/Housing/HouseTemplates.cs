@@ -31,14 +31,14 @@
  * NOTE:
  * - Templates are resolved by id when asked, never by scanning the catalog or by file name.
  * - A deed with a structure has two lots: the deed's zone is the exterior and the structure's zone the interior.
- *   A deed without one is a house of one zone.
+ *   A deed without one is a house of one zone. Whether a template is a deed or a structure comes from its object type.
  * - The starter templates are the entries of Housing.StarterDeeds that are house templates. Boot checks the list.
  * 
  * TODO:
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System.Collections.Concurrent;
@@ -55,11 +55,12 @@ namespace Imlight.CoreLib.Game.Housing;
 /// </summary>
 /// <param name="TemplateId">The template id of the deed or structure item.</param>
 /// <param name="LotZone">The zone of the house's lot.</param>
-/// <param name="StructureTemplateId">The interior structure's template id, or 0 for none. A structure may name itself.</param>
+/// <param name="StructureTemplateId">The interior structure's template id, or 0 for none. Only a deed's value means anything: a structure names itself, nothing, or by a data mistake another structure.</param>
 /// <param name="PreviewZone">The zone shoppers preview the house in, or empty.</param>
 /// <param name="LayoutFile">The initial layout in the client's pipe-delimited asset form, or empty.</param>
 /// <param name="ItemLimit">The template's item limit, before any bonus slots.</param>
 /// <param name="CastleBlockLimit">The template's castle block limit.</param>
+/// <param name="IsStructure">Whether the template is a structure, the interior side of a residence, rather than a deed.</param>
 internal readonly record struct HouseTemplateInfo(
     uint TemplateId,
     string LotZone,
@@ -67,12 +68,13 @@ internal readonly record struct HouseTemplateInfo(
     string PreviewZone,
     string LayoutFile,
     int ItemLimit,
-    int CastleBlockLimit) {
+    int CastleBlockLimit,
+    bool IsStructure = false) {
 
     /// <summary>
-    /// Whether the house has a structure of its own besides the lot.
+    /// Whether the house is a deed with a structure of its own besides the lot.
     /// </summary>
-    internal bool HasStructure => StructureTemplateId != 0 && StructureTemplateId != TemplateId;
+    internal bool HasStructure => !IsStructure && StructureTemplateId != 0 && StructureTemplateId != TemplateId;
 
 }
 
@@ -94,7 +96,8 @@ internal static class HouseTemplates {
             return true;
         }
 
-        var deed = CoreObjectFactory.GetCoreTemplate(templateId)?.m_behaviors?.OfType<DeedBehaviorTemplate>().FirstOrDefault();
+        var itemTemplate = CoreObjectFactory.GetCoreTemplate(templateId);
+        var deed = itemTemplate?.m_behaviors?.OfType<DeedBehaviorTemplate>().FirstOrDefault();
         var lotZone = deed?.m_lotWorldZone.ToString();
         if (string.IsNullOrEmpty(lotZone)) {
             info = default;
@@ -109,7 +112,8 @@ internal static class HouseTemplates {
             deed.m_previewWorldZone.ToString(),
             deed.m_initialItemLayoutFile.ToString(),
             deed.m_itemLimit,
-            deed.m_castleBlockLimit));
+            deed.m_castleBlockLimit,
+            itemTemplate is WizItemTemplate { m_nObjectType: ObjectType.OT_STRUCTURE }));
 
         return true;
     }
