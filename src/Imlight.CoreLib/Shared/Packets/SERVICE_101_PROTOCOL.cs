@@ -17,6 +17,7 @@
  */
 
 using System.Collections.Generic;
+using Imlight.CoreLib.Game.Housing;
 using Imlight.CoreLib.Shared.Networking;
 
 namespace Imlight.CoreLib.Shared.Packets;
@@ -121,6 +122,7 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
         public string DestinationLocation;
         public bool MakePrivate;
         public ulong OwnerCharId;
+        public HouseEntry HouseEntry;
 
     }
 

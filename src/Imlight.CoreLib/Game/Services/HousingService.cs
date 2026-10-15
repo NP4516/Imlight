@@ -31,12 +31,13 @@
  *   later edits arrive as small versioned patches. The blob and the patches are built here, from the stored
  *   items, with the generated Imcodec types; the house is in Game/Housing.
  * - The service counts the player into the house at MSG_PRELOGIN and out when the session ends.
+ * - Only the owner decorates. A visitor sees the same blob and patches, and every edit they send is refused as forged.
  *
  * TODO:
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -313,6 +314,12 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         var wizard = GetActiveWizard();
+        if (house.OwnerCharId != wizard.CharId) {
+            HandleForgedRequest("pick up an object in a house that is not theirs");
+
+            return;
+        }
+
         if (placedItem is null
             || CoreObjectFactory.GetCoreTemplate(placedItem.TemplateId) is not WizItemTemplate template
             || wizard.InventoryBehavior.FreeSlots <= 0
@@ -353,13 +360,21 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
 
     private bool TryGetHouse(string request, out HouseState house) {
         house = _house;
-        if (house is not null) {
-            return true;
+        if (house is null) {
+            HandleForgedRequest($"{request} outside a house");
+
+            return false;
         }
 
-        HandleForgedRequest($"{request} outside a house");
+        // Only the owner decorates. The client hides the controls from a visitor, so a request is forged.
+        if (house.OwnerCharId != GetActiveWizard().CharId) {
+            house = null;
+            HandleForgedRequest($"{request} in a house that is not theirs");
 
-        return false;
+            return false;
+        }
+
+        return true;
     }
 
     private void HandleForgedRequest(string request) {

@@ -20,27 +20,29 @@
  * ========================================================================
  *
  * PURPOSE:
- * Decides whether a client may attach to a house zone.
+ * Decides whether a client may attach to a house zone, and to whose house.
  *
  * USAGE EXAMPLE:
- * if (!HouseAttach.TryAuthorize(wizard, zoneName, message.ZoneID, out var house)) {
+ * if (!HouseAttach.TryAuthorize(wizard, zoneName, message.ZoneID, out var house, out var access)) {
  *     // refuse the attach
  * }
  *
  * NOTE:
- * - The client names the zone and the lot in MSG_ATTACH, so neither is trusted: the lot must be the one
- *   stored for the character, and the house must belong to the character.
- * - Only the owner enters a house. Visitors are not supported yet.
+ * - The client names the zone and the lot in MSG_ATTACH, so neither is trusted: the lot must be a stored house, its
+ *   template must have the zone as its lot zone, and HouseAccess must let the character in.
+ * - A client that names no lot gets its own house in the zone.
+ * - This reads the stored house and never publishes a live state. HousingService counts the viewer in later.
  *
  * TODO:
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
 using Imlight.Common;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Housing;
@@ -53,33 +55,37 @@ internal static class HouseAttach {
     /// <param name="wizard">The character.</param>
     /// <param name="zoneName">The zone the client attaches to.</param>
     /// <param name="messageZoneId">The zone id the client sent. It is not used for an ordinary zone.</param>
-    /// <param name="house">The character's house when the zone is a house; otherwise <c>null</c>.</param>
+    /// <param name="house">The stored house when the zone is a house; otherwise <c>null</c>.</param>
+    /// <param name="access">The character's access to the house; <see cref="HouseAccessLevel.Denied"/> for an ordinary zone.</param>
     /// <returns>
-    /// <c>true</c> for an ordinary zone, and for the character's own house in the zone when the client names no lot or the stored lot.
+    /// <c>true</c> for an ordinary zone, and for a house the character may enter. A house zone without a lot is the character's own.
     /// </returns>
-    internal static bool TryAuthorize(Wizard wizard, string zoneName, ulong messageZoneId, out HouseState house) {
+    internal static bool TryAuthorize(Wizard wizard, string zoneName, ulong messageZoneId, out House house, out HouseAccessLevel access) {
         house = null;
+        access = HouseAccessLevel.Denied;
         if (!HouseZoneIndex.IsHouseZone(zoneName)) {
             return true;
         }
 
-        var lotGid = LotOfZone(wizard, zoneName);
-        if (lotGid == 0 || (messageZoneId != 0 && messageZoneId != lotGid)) {
-            Logger.Warning("Character {CharId} may not attach to house zone {Zone} with lot {MessageZoneId}.",
-                Logger.Args(wizard.CharId, zoneName, messageZoneId));
+        var lotGid = messageZoneId != 0 ? messageZoneId : LotOfZone(wizard, zoneName);
+        var stored = lotGid == 0 ? null : HouseCollection.Load(lotGid);
+        if (stored is null || !HouseTemplates.TryGet(stored.TemplateId, out var template)
+            || !string.Equals(template.LotZone, zoneName, StringComparison.OrdinalIgnoreCase)) {
+            Logger.Warning("Character {CharId} may not attach to house zone {Zone} with lot {LotGid}: no such house there.",
+                Logger.Args(wizard.CharId, zoneName, lotGid));
 
             return false;
         }
 
-        house = HouseRegistry.Get(lotGid);
-        if (house is null || house.OwnerCharId != wizard.CharId
-            || !string.Equals(house.ZoneName, zoneName, StringComparison.OrdinalIgnoreCase)) {
-            Logger.Warning("Character {CharId} has no house with lot {LotGid} in zone {Zone}.",
+        access = HouseAccess.Evaluate(wizard, stored);
+        if (access == HouseAccessLevel.Denied) {
+            Logger.Warning("Character {CharId} may not enter house {LotGid} in zone {Zone}.",
                 Logger.Args(wizard.CharId, lotGid, zoneName));
-            house = null;
 
             return false;
         }
+
+        house = stored;
 
         return true;
     }

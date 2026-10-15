@@ -301,6 +301,13 @@ public class Wizard {
         WizardCollection.UpdateCharacterTimeWentHome(this, time);
     }
 
+    public void SetInvisibleToFriends(bool invisible) {
+        GameStats.m_invisibleToFriends = invisible;
+
+        // Persistent save.
+        WizardCollection.UpdateCharacterGameStats(this);
+    }
+
     public void SetMaxGold(int maxGold) {
         GameStats.m_baseGoldPouch = maxGold;
 

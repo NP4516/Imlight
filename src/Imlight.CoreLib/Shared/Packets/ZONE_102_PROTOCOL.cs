@@ -23,6 +23,7 @@ using Imcodec.Math;
 using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Game.Housing;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -694,9 +695,14 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public bool ResetInstance;
 
         /// <summary>
+        /// How the client is asked to load the house zone the player is entering. Null for every ordinary zone.
+        /// </summary>
+        public HouseEntry HouseEntry;
+
+        /// <summary>
         /// The lot of the house the player is entering. Zero for every ordinary zone.
         /// </summary>
-        public ulong HouseLotGid;
+        public ulong HouseLotGid => HouseEntry?.LotGid ?? 0;
 
     }
 

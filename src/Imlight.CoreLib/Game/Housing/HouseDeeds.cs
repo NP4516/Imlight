@@ -46,7 +46,7 @@
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -92,15 +92,6 @@ internal readonly record struct HouseGrant(HouseGrantFailure Failure, IReadOnlyL
 /// <param name="Item">The house item the character holds, or <c>null</c> when it is missing.</param>
 /// <param name="NeedsIssue">Whether the item or its lot has to be issued before the character goes there.</param>
 internal readonly record struct HomeTarget(uint TemplateId, ulong Lot, WizClientObjectItem Item, bool NeedsIssue);
-
-/// <summary>
-/// What the zone transfer into a house needs: the item the client opens the zone for, and the new items it has not seen.
-/// </summary>
-/// <param name="DeedGid">The global id of the house item the client is asked to open the zone for.</param>
-/// <param name="LotGid">The lot, which is the zone instance id.</param>
-/// <param name="Zone">The lot zone.</param>
-/// <param name="NewItemGids">The global ids of the items the client has to be told about first.</param>
-internal sealed record HouseEntry(ulong DeedGid, ulong LotGid, string Zone, IReadOnlyList<ulong> NewItemGids);
 
 internal static class HouseDeeds {
 
@@ -179,7 +170,7 @@ internal static class HouseDeeds {
         }
 
         var house = HouseRegistry.GetOrCreate(wizard, target.TemplateId, out _);
-        if (house is null) {
+        if (house is null || !HouseTemplates.TryGet(target.TemplateId, out var template)) {
             Logger.Error("Character {CharId} has no house for template {TemplateId} and none could be stored.",
                 Logger.Args(wizard.CharId, target.TemplateId));
             failure = HouseGrantFailure.Unavailable;
@@ -187,7 +178,7 @@ internal static class HouseDeeds {
             return false;
         }
 
-        entry = new HouseEntry(target.Item.m_globalID, house.LotGid, house.ZoneName, [.. grant.Created.Select(item => (ulong) item.m_globalID)]);
+        entry = HouseEntry.ForDeed(house.LotGid, house.OwnerCharId, template, target.Item.m_globalID, [.. grant.Created.Select(item => (ulong) item.m_globalID)]);
 
         return true;
     }
