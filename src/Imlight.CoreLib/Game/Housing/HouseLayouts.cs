@@ -37,7 +37,7 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -134,7 +134,7 @@ internal static class HouseLayouts {
 
         foreach (var fileName in wad.Files.Keys.Where(name => !name.Contains('/')).Order(StringComparer.Ordinal)) {
             var bytes = wad.OpenFile(fileName);
-            if (bytes.HasValue && TryRead(bytes.Value.ToArray(), out var layout)) {
+            if (bytes.HasValue && TryDeserialize(bytes.Value.ToArray(), out var layout)) {
                 return layout;
             }
         }
@@ -142,22 +142,19 @@ internal static class HouseLayouts {
         return new HousingLayout { m_housingLayoutObjectList = [] };
     }
 
-    private static bool TryRead(byte[] bytes, out HousingLayout layout) {
-        layout = null;
-
-        return bytes.Length >= sizeof(uint) && BitConverter.ToUInt32(bytes, 0) == BindSerializer.BiNDMagic
-            && TryDeserialize(bytes, out layout);
-    }
-
     private static bool TryDeserialize(byte[] bytes, out HousingLayout layout) {
+        layout = null;
         try {
-            return new BindSerializer().Deserialize(bytes, 1, out layout) && layout is not null;
-        } catch (Exception) {
-            // A file of another class decodes up to the cast and throws there.
-            layout = null;
+            if (new BindSerializer().Deserialize<PropertyClass>(bytes, 1, out var parsed) && parsed is HousingLayout found) {
+                layout = found;
 
-            return false;
+                return true;
+            }
+        } catch (Exception) {
+            // A file that is not a layout can fail anywhere in the decode.
         }
+
+        return false;
     }
 
 }
