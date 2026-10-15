@@ -24,6 +24,7 @@ using Imcodec.CoreObject;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Game.Bank;
 using Imlight.CoreLib.Game.Cantrips;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Character;
@@ -156,32 +157,22 @@ internal class CommandModifyProtocol : CommandProtocol {
             }
         }
 
-        WizClientObjectItem coreObject;
-        var addedItemSuccess = isPetTemplate
-            ? Context.Character.AddHatchedPetToInventory((uint) templateIdLong, out coreObject)
-            : Context.Character.AddItemToInventory(templateIdLong, out coreObject);
-        if (!addedItemSuccess) {
-            InformSenderClient("Could not add item to inventory.");
+        if (!Context.Character.TryCreateItem(templateIdLong, out var coreObject)) {
+            InformSenderClient("Could not create the item.");
 
             return;
         }
 
-        var coSerializer = new CoreObjectSerializer(
-            behaviors: Imcodec.ObjectProperty.SerializerFlags.None
-        );
-        if (!coSerializer.Serialize(coreObject, (uint) (PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit), out var serializedCoreObject)) {
-            InformSenderClient("Failed to serialize core object.");
+        // Like a reward: the backpack first, then the bank.
+        var placement = ItemPlacement.Place(Context.Character, coreObject);
+        ItemPlacement.Announce(Context.SessionActor, Context.Character, coreObject, placement);
 
-            return;
-        }
-
-        var networkMessage = new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
-            GlobalID = Context.Character.GameObjectID,
-            SerializedItem = serializedCoreObject
-        };
-        Context.SessionActor.Tell(networkMessage, null);
-
-        InformSenderClient($"Added item {coreObject.m_debugName} to inventory.");
+        InformSenderClient(placement switch {
+            Placement.Backpack => $"Added item {coreObject.m_debugName} to inventory.",
+            Placement.Bank => $"Added item {coreObject.m_debugName} to the bank, the inventory is full.",
+            Placement.SharedBank => $"Added item {coreObject.m_debugName} to the shared bank, the inventory is full.",
+            _ => "Could not add the item, the inventory and the bank are full.",
+        });
     }
 
     [Command("addsnack")]

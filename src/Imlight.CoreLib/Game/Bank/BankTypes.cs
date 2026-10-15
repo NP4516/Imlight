@@ -21,7 +21,7 @@
  *
  * PURPOSE:
  * The vocabulary of the bank: the three containers an item can be in, the kinds of items the bank tells
- * apart and the reasons a request is denied.
+ * apart, where a new item can end up and the reasons a request is denied.
  *
  * USAGE EXAMPLE:
  * var denial = BankRules.CanMove(BankContainer.Backpack, BankContainer.SharedBank, item, 1, wizard, account);
@@ -58,6 +58,18 @@ internal enum BankItemKind {
     Jewel,
     Reagent,
     PetSnack,
+
+}
+
+/// <summary>
+/// Where a new item ended up.
+/// </summary>
+internal enum Placement {
+
+    Backpack,
+    Bank,
+    SharedBank,
+    Lost,
 
 }
 

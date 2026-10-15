@@ -397,6 +397,34 @@ public class Wizard {
         return AddItemToInventory(item);
     }
 
+    /// <summary>
+    /// Builds a new item of a template for this character, with its behaviors initialized. A pet template builds a
+    /// hatched pet. The item is stored nowhere yet.
+    /// </summary>
+    /// <param name="templateId">The template of the item.</param>
+    /// <param name="item">The new item, or null.</param>
+    /// <returns>False when the template is not an item or a pet that can be made.</returns>
+    public bool TryCreateItem(ulong templateId, out WizClientObjectItem item) {
+        if (templateId <= uint.MaxValue && PetFactory.IsPetTemplate((uint) templateId)) {
+            item = PetFactory.CreateHatchedPet(CharId, (uint) templateId);
+
+            return item is not null;
+        }
+
+        // The template may be a spell, a missing template or anything else that is not an item.
+        item = CoreObjectFactory.FinalizeCoreObject(templateId) as WizClientObjectItem;
+        if (item is null) {
+            Logger.Warning("Cannot create item from template {0} because it is not an item.", Logger.Args(templateId));
+
+            return false;
+        }
+
+        item.m_characterId = (GID) CharId;
+        CoreObjectFactory.InitializeCoreObjectBehaviors(item, item.m_templateID);
+
+        return true;
+    }
+
     public bool AddItemToInventory(WizClientObjectItem item) {
         if (item is null) {
             Logger.Warning("Cannot add item to inventory because that item does not exist.");

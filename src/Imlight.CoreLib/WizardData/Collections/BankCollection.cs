@@ -20,7 +20,7 @@
  * ========================================================================
  *
  * PURPOSE:
- * Moves and deletes the items of the shared bank, and deletes the items of a character's own backpack and bank.
+ * Moves, adds and deletes the items of the shared bank, and deletes the items of a character's own backpack and bank.
  * Each call is one Raven transaction over the account, the character and the item documents involved, so an item
  * or a stack is in exactly one place afterwards.
  *
@@ -204,6 +204,50 @@ internal static class BankCollection {
     }
 
     /// <summary>
+    /// Puts a new item, one that is stored nowhere yet, into the shared bank. The item document and the shared
+    /// bank's id list are written in one Raven transaction, checked against the stored shared bank like a move.
+    /// </summary>
+    /// <param name="wizard">The wizard that received the item. Its account owns the shared bank.</param>
+    /// <param name="item">The new item, not a stack. Its owner becomes the account.</param>
+    /// <returns>The result. On success the shared bank of the wizard's account is updated; on a denial nothing was stored.</returns>
+    internal static SharedMoveResult TryAddShared(Wizard wizard, WizClientObjectItem item) {
+        var move = new SharedMove(BankContainer.Backpack, BankContainer.SharedBank, item.m_globalID, 1);
+        var account = wizard.Account;
+        if (account is null) {
+            return Denied(move, BankDenial.WrongContainer, "the wizard has no account");
+        }
+
+        account.SharedBank ??= new AccountSharedBank();
+        var owner = item.m_characterId;
+        MoveState state = null;
+        try {
+            var stored = AccountCollection.UpdateAccountAndCharacterWithSession(account.AccountId, wizard.CharId,
+                (session, storedAccount, _) => {
+                    state = PlanAdd(session, wizard, storedAccount, item, move);
+
+                    return state.Denial == BankDenial.None;
+                });
+            if (!stored) {
+                item.m_characterId = owner;
+
+                return state is { Denial: not BankDenial.None }
+                    ? Denied(move, state.Denial, state.Reason)
+                    : Denied(move, BankDenial.SaveFailed, "the account or the character is not stored");
+            }
+        } catch (Exception ex) {
+            item.m_characterId = owner;
+            Logger.Error("Failed to add item {ItemId} to the shared bank of account {AccountId}: {Reason}",
+                Logger.Args(item.m_globalID.Full, account.AccountId, ex.Message));
+
+            return Denied(move, BankDenial.SaveFailed, ex.Message);
+        }
+
+        AdoptSharedBank(account.SharedBank, state);
+
+        return new SharedMoveResult(BankDenial.None, string.Empty, state.Kind, item.m_globalID, item.m_globalID, null, item);
+    }
+
+    /// <summary>
     /// Deletes an item of the wizard's own backpack or bank for good. The id leaves its list and the item document
     /// goes in one Raven transaction. Reagent and pet snack stacks are not deleted here.
     /// </summary>
@@ -285,6 +329,37 @@ internal static class BankCollection {
             BankItemKind.PetSnack => PlanStackMove(session, wizard, storedAccount, storedWizard, state, s_snacks),
             _ => PlanItemMove(session, wizard, storedAccount, storedWizard, state),
         };
+    }
+
+    private static MoveState PlanAdd(IDocumentSession session, Wizard wizard, Account storedAccount, WizClientObjectItem item, SharedMove move) {
+        var state = new MoveState(move);
+        var shared = storedAccount.SharedBank ??= new AccountSharedBank();
+        state.StoredShared = shared;
+        state.Kind = BankRules.Classify(item, CoreObjectFactory.GetCoreTemplate(item.m_templateID) as WizItemTemplate);
+        if (state.Kind is BankItemKind.Reagent or BankItemKind.PetSnack) {
+            return state.Deny(BankDenial.WrongContainer, $"stack {move.ItemId} is not added to the shared bank from nothing");
+        }
+
+        if (shared.ItemIds.Contains(move.ItemId)) {
+            return state.Deny(BankDenial.UnknownItem, $"item {move.ItemId} is in the shared bank already");
+        }
+
+        shared.Items = AccountCollection.LoadSharedDocuments<WizClientObjectItem>(session, WizardItemCollection.CollectionName, storedAccount.AccountId, shared.ItemIds);
+        var denial = BankRules.CanMove(move.From, move.To, item, 1, wizard, storedAccount);
+        if (denial != BankDenial.None) {
+            return state.Deny(denial, $"item {move.ItemId} may not be added to the shared bank: {denial}");
+        }
+
+        item.m_characterId = (GID) storedAccount.AccountId;
+        WizardItemCollection.StoreInSession(session, item);
+        shared.ItemIds.Add(move.ItemId);
+        shared.Items.Add(item);
+        state.DestinationDoc = item;
+        state.OriginalId = move.ItemId;
+        state.NewId = move.ItemId;
+        state.DestinationIsNew = true;
+
+        return state;
     }
 
     private static MoveState PlanItemMove(IDocumentSession session, Wizard wizard, Account storedAccount, Wizard storedWizard, MoveState state) {
