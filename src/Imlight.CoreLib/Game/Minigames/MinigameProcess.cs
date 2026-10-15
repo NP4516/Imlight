@@ -60,8 +60,7 @@ using Imlight.CoreLib.WizardData.Models.Player;
 internal sealed class MinigameProcess : Process {
 
     private const uint QUERY_WIZARD_TIMEOUT_IN_MS = 5000;
-
-    private const long LoggedScoreCapMultiplier = 100;
+    private const long LOGGED_SCORE_CAP_MULTIPLIER = 100;
 
     private bool IsMinigameActive { get; set; }
     private bool _roundOpen;
@@ -174,7 +173,7 @@ internal sealed class MinigameProcess : Process {
             return true;
         }
 
-        if (capMultiplier <= 0 && score > LoggedScoreCapMultiplier * topThreshold) {
+        if (capMultiplier <= 0 && score > LOGGED_SCORE_CAP_MULTIPLIER * topThreshold) {
             Logger.Warning("{Process} accepted the unusually high score {Score} of {Wizard}, top threshold {Threshold}",
                 Logger.Args(ProcessName, score, wizard.PlayerNameBehavior.GetWizardName(), topThreshold));
         }
