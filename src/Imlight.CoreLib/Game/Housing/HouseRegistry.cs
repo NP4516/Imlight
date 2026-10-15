@@ -76,14 +76,12 @@ internal static class HouseRegistry {
         var lotGid = owner.HouseLots.GetValueOrDefault(dorm.TemplateId);
         var house = lotGid == 0 ? null : HouseCollection.Load(lotGid);
         if (house is null) {
-            var layout = HousingZones.LoadDormLayout(dorm.LotZone);
+            var layout = HouseLayouts.Resolve(dorm, dorm.LotZone);
             if (layout is null) {
                 return null;
             }
 
-            var items = (layout.m_housingLayoutObjectList ?? [])
-                .Select(PlacedItem.FromLayout)
-                .Where(item => item is not null)
+            var items = layout
                 .Select((item, index) => item with { Id = (uint) index + 1 })
                 .ToList();
             lotGid = lotGid == 0 ? (ulong) RandomGen.GenerateGUID() : lotGid;
