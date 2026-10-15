@@ -70,6 +70,20 @@ namespace Imlight.CoreLib.Game.Bank;
 internal sealed class BankRequests(Wizard wizard, IActorRef session, Func<bool> bankIsOpen, Func<ulong, bool> unequip) {
 
     /// <summary>
+    /// Opens the bank window: reads the shared bank again, streams the bank and the shared bank, then opens the
+    /// window. The window fills its lists from what the client holds when it opens, so the stream goes first.
+    /// </summary>
+    internal void Open() {
+        if (!AccountCollection.ReloadSharedBank(wizard.Account)) {
+            Logger.Error("The shared bank of account {AccountId} could not be read again, the window opens with what the session holds.",
+                Logger.Args(wizard.Account.AccountId));
+        }
+
+        BankSync.StreamBank(session, wizard, includeShared: true);
+        session.Tell(new WIZARD_12_PROTOCOL.MSG_OPENBANK { GlobalID = wizard.GameObjectID });
+    }
+
+    /// <summary>
     /// Moves an item or part of a stack from the backpack into the bank or the shared bank.
     /// </summary>
     /// <param name="message">The client's request. UseShared names the destination.</param>

@@ -42,6 +42,7 @@
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imlight.CoreLib.Game.Bank;
+using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 
@@ -53,6 +54,12 @@ internal class BankService(SessionActor sessionActor) : MessageService(sessionAc
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new BankService(parentActor));
+
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_BEGINBANKSESSION))]
+    private void ReceiveBeginBankSession(CHARACTER_103_PROTOCOL.MSG_BEGINBANKSESSION message) {
+        _openBankEntityId = message.EntityId;
+        CreateRequests().Open();
+    }
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_MOVEINVTOBANK))]
     private void ReceiveMoveInventoryToBank(WIZARD_12_PROTOCOL.MSG_MOVEINVTOBANK message)
@@ -109,8 +116,15 @@ internal class BankService(SessionActor sessionActor) : MessageService(sessionAc
     private BankRequests CreateRequests()
         => new(GetActiveWizard(), SessionActor.ActorRef, IsBankOpen, UnequipItem);
 
-    private bool IsBankOpen()
-        => _openBankEntityId != 0 && GetZoneObject(_openBankEntityId) is not null;
+    private bool IsBankOpen() {
+        if (_openBankEntityId == 0) {
+            return false;
+        }
+
+        var bank = GetZoneObject(_openBankEntityId)?.GetComponentOfType<InteractBankComponent>();
+
+        return bank is not null && bank.IsInServiceRange(GetActiveGameObject());
+    }
 
     private bool UnequipItem(ulong itemId)
         => AskOtherService<CHARACTER_103_PROTOCOL.MSG_UNEQUIPITEMRSP>(
