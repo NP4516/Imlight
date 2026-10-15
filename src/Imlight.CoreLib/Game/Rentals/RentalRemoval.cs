@@ -20,10 +20,8 @@
  * ========================================================================
  *
  * PURPOSE:
- * What Wizard.RemoveRentalItem took away, so the caller can tell the client in the order it requires.
  *
  * USAGE EXAMPLE:
- * if (wizard.RemoveRentalItem(itemId, out var removal) && removal.WasEquipped) { SendUnequipItem(removal.SlotName, removal.SlotIndex, itemId); }
  *
  * NOTE:
  * SlotType and SlotIndex only mean something when WasEquipped is true. RemovedEffects is never null.
@@ -41,7 +39,11 @@ using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Rentals;
 
-internal sealed record RentalRemoval(bool WasEquipped, EquipmentSlotType SlotType, byte SlotIndex, List<GameEffectBase> RemovedEffects, ulong TemplateId) {
+internal sealed record RentalRemoval(bool WasEquipped,
+                                     EquipmentSlotType SlotType,
+                                     byte SlotIndex,
+                                     List<GameEffectBase> RemovedEffects,
+                                     ulong TemplateId) {
 
     internal string SlotName => SlotType.ToString();
 

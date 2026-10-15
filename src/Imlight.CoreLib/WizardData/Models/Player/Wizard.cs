@@ -1507,7 +1507,7 @@ public class Wizard {
         // A stored 0 predates the not-started default, and the client would show it as a started timer.
         foreach (var (_, behavior) in RentalItems.Enumerate(this)) {
             if (behavior.m_expireTime == 0) {
-                behavior.m_expireTime = RentalItems.Unset;
+                behavior.m_expireTime = RentalItems.UNSET;
             }
         }
     }

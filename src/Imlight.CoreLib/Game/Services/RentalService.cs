@@ -23,11 +23,14 @@
  * Starts the timer of a rental item when it is first equipped, tells the client the absolute time it runs out, and has every rental that ran out removed.
  *
  * USAGE EXAMPLE:
- * EquipmentService tells MSG_STARTRENTAL after it equipped an item that carries a rental behavior; MSG_ATTACHCOMPLETE and the expiry timer make this service tell MSG_EXPIRERENTAL back for each rental that is due.
+ * EquipmentService tells MSG_STARTRENTAL after it equipped an item that carries a rental behavior; 
+ * MSG_ATTACHCOMPLETE and the expiry timer make this service tell MSG_EXPIRERENTAL back for each rental that is due.
  *
  * NOTE:
- * The expiry is written to the item document before memory and before the client, so a failed write leaves the timer not started and the next equip retries it.
- * The duration comes from the template only (RentalBehaviorTemplate.m_expireTime). Timers die with the session, so the next attach sweeps what ran out and arms the timer again.
+ * The expiry is written to the item document before memory and before the client, 
+ * so a failed write leaves the timer not started and the next equip retries it.
+ * The duration comes from the template only (RentalBehaviorTemplate.m_expireTime). 
+ * Timers die with the session, so the next attach sweeps what ran out and arms the timer again.
  *
  * TODO:
  *
@@ -41,7 +44,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
-using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Rentals;
 using Imlight.CoreLib.Shared.Networking;
@@ -52,7 +54,7 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class RentalService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private const string ExpiryTimerKey = "rental-expiry";
+    private const string EXPIRY_TIMER_KEY = "rental-expiry";
 
     private readonly HashSet<uint> _warnedTemplates = [];
 
@@ -119,12 +121,12 @@ internal class RentalService(SessionActor sessionActor) : MessageService(session
             .Select(rental => (long) rental.Behavior.m_expireTime)
             .ToList();
         if (upcoming.Count == 0) {
-            Timers.Cancel(ExpiryTimerKey);
+            Timers.Cancel(EXPIRY_TIMER_KEY);
 
             return;
         }
 
-        Timers.StartSingleTimer(ExpiryTimerKey, new CHARACTER_103_PROTOCOL.MSG_CHECKRENTALS(), RentalItems.CheckDelay(upcoming.Min(), now));
+        Timers.StartSingleTimer(EXPIRY_TIMER_KEY, new CHARACTER_103_PROTOCOL.MSG_CHECKRENTALS(), RentalItems.CheckDelay(upcoming.Min(), now));
     }
 
 }

@@ -20,13 +20,13 @@
  * ========================================================================
  *
  * PURPOSE:
- * Reads the rental state of an item: the ClientRentalBehavior on the item instance and the RentalBehaviorTemplate on its template.
  *
  * USAGE EXAMPLE:
- * foreach (var (item, behavior) in RentalItems.Enumerate(wizard)) { if (RentalItems.IsDue(behavior, now)) { ... } }
  *
  * NOTE:
- * m_expireTime on the item instance is an absolute Unix time in seconds. Unset (0xFFFFFFFF) is the timer that has not started, the value the client keys its "Equip to Start" prompt on; 0 is an item from before the default existed and counts as not started too.
+ * m_expireTime on the item instance is an absolute Unix time in seconds. 
+ * Unset (0xFFFFFFFF) is the timer that has not started, the value the client keys its "Equip to Start" prompt on; 
+ * 0 is an item from before the default existed and counts as not started too.
  *
  * TODO:
  *
@@ -47,10 +47,9 @@ namespace Imlight.CoreLib.Game.Rentals;
 
 internal static class RentalItems {
 
-    internal const uint Unset = uint.MaxValue;
-
-    private const long MinimumCheckSeconds = 5;
-    private const long MaximumCheckSeconds = 3600;
+    internal const uint UNSET = uint.MaxValue;
+    private const long MINIMUM_CHECK_SECONDS = 5;
+    private const long MAXIMUM_CHECK_SECONDS = 3600;
 
     internal static bool TryGetBehavior(WizClientObjectItem item, out ClientRentalBehavior behavior) {
         if (item?.m_inactiveBehaviors is null) {
@@ -69,7 +68,9 @@ internal static class RentalItems {
     }
 
     internal static bool TryGetRentalTemplate(WizItemTemplate template, out RentalBehaviorTemplate rentalTemplate) {
-        rentalTemplate = template?.m_behaviors?.OfType<RentalBehaviorTemplate>().FirstOrDefault();
+        rentalTemplate = template?.m_behaviors?
+            .OfType<RentalBehaviorTemplate>()
+            .FirstOrDefault();
 
         return rentalTemplate is not null;
     }
@@ -82,13 +83,13 @@ internal static class RentalItems {
     /// <param name="expireTime">The expiry in Unix seconds, capped below the not started value.</param>
     /// <returns>False if the template is not a calendar rental or its duration cannot be read.</returns>
     internal static bool TryGetExpireTime(RentalBehaviorTemplate rentalTemplate, long now, out uint expireTime) {
-        expireTime = Unset;
+        expireTime = UNSET;
         if (rentalTemplate.m_timerType != TimerType.TimerType_Calendar
             || !RentalDuration.TryParse(rentalTemplate.m_expireTime, out var duration)) {
             return false;
         }
 
-        expireTime = (uint) Math.Min(now + (long) duration.TotalSeconds, Unset - 1L);
+        expireTime = (uint) Math.Min(now + (long) duration.TotalSeconds, UNSET - 1L);
 
         return true;
     }
@@ -100,10 +101,10 @@ internal static class RentalItems {
     /// <param name="now">The current time in Unix seconds.</param>
     /// <returns>The time to the expiry plus one second, held between five seconds and one hour.</returns>
     internal static TimeSpan CheckDelay(long nextExpireTime, long now)
-        => TimeSpan.FromSeconds(Math.Clamp(nextExpireTime - now + 1, MinimumCheckSeconds, MaximumCheckSeconds));
+        => TimeSpan.FromSeconds(Math.Clamp(nextExpireTime - now + 1, MINIMUM_CHECK_SECONDS, MAXIMUM_CHECK_SECONDS));
 
     internal static bool IsStarted(ClientRentalBehavior behavior)
-        => behavior.m_expireTime != Unset && behavior.m_expireTime != 0;
+        => behavior.m_expireTime != UNSET && behavior.m_expireTime != 0;
 
     internal static bool IsDue(ClientRentalBehavior behavior, long now)
         => IsStarted(behavior) && behavior.m_expireTime <= now;
