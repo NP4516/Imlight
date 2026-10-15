@@ -77,11 +77,9 @@ public static class PackManager {
                         break;
                     case ReagentItemTemplate:
                         wizard.AddReagent(itemTemplateId, out ClientReagentItem reagentItem);
-                        WizardReagentCollection.AddReagent(reagentItem);
                         break;
                     case PetSnackItemTemplate:
                         wizard.AddSnack(itemTemplateId, out ClientPetSnackItem snack);
-                        WizardPetSnackCollection.AddSnack(snack);
                         break;
                     default:
                         if (wizard.AddItemToInventory(itemTemplateId, out WizClientObjectItem itemCoreObject)) {
