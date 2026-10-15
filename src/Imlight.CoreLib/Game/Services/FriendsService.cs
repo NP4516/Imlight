@@ -569,6 +569,19 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         var targetID = message.TargetCharacterID;
         var wizard = GetActiveWizard();
 
+        // The friends list only offers Go To for friends.
+        if (!BuddyRelationshipCollection.AreFriends(wizard.CharId, targetID)) {
+            Logger.Warning("Player {0} tried to teleport to character ID {1}, who is not a friend.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), targetID));
+
+            SendToSocket(new GAME_5_PROTOCOL.MSG_GOTOPLAYERRESP {
+                TargetCharacterID = targetID,
+                Error = 1
+            });
+
+            return;
+        }
+
         // Check if the target is online.
         if (!TryGetOnlinePlayer(targetID, out var onlinePlayer)) {
             Logger.Debug("Player {0} tried to teleport to character ID {1}, but the character is not online.",
