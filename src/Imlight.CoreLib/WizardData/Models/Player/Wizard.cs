@@ -139,7 +139,7 @@ public class Wizard {
     /// Defaults to Unremarkable (idle).
     /// </summary>
     [JsonIgnore]
-    public uint CurrentEmoteState { get; set; } = StringHash.Compute("Unremarkable");
+    public uint CurrentAnimationState { get; set; } = StringHash.Compute("Unremarkable");
 
     /// <summary>
     /// Tracks hatched pets for MSG_PETTOMEPETADDED. Key: pet global ID, Value: pet template ID.

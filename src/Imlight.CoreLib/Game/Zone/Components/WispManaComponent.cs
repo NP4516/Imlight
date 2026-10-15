@@ -115,7 +115,7 @@ internal sealed class WispManaComponent : ZoneEntityComponent, IComponentFactory
         var playerGid = playerWizard.GameObjectID;
 
         // If the player is already in ActionEmoting, send Unremarkable first to reset!
-        if (playerWizard.CurrentEmoteState == WISP_STATE_ID) {
+        if (playerWizard.CurrentAnimationState == WISP_STATE_ID) {
             var resetMsg = new GAME_5_PROTOCOL.MSG_ENTERSTATE {
                 GameObjectID = playerGid,
                 State = RESET_STATE_ID,
@@ -124,7 +124,7 @@ internal sealed class WispManaComponent : ZoneEntityComponent, IComponentFactory
             };
 
             PlayerBroadcast(resetMsg);
-            playerWizard.CurrentEmoteState = RESET_STATE_ID;
+            playerWizard.CurrentAnimationState = RESET_STATE_ID;
         }
 
         // Enter ActionEmoting with the particle and sound
@@ -152,7 +152,7 @@ internal sealed class WispManaComponent : ZoneEntityComponent, IComponentFactory
                 IgnoreIfCurrentStateIsOff = 0,
             };
             PlayerBroadcast(enterMsg);
-            playerWizard.CurrentEmoteState = WISP_STATE_ID;
+            playerWizard.CurrentAnimationState = WISP_STATE_ID;
         }
     }
 
