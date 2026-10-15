@@ -65,10 +65,10 @@ internal readonly record struct UnstitchPlan(UnstitchedItem Stats, UnstitchedIte
 
 internal static class StitchRules {
 
-    private const int MaxDye = 31;
-    private const int PatternWithoutLock = 0x7FFFFFFF;
+    private const int MAX_DYE = 31;
+    private const int PATTERN_WITHOUT_LOCK = 0x7FFFFFFF;
 
-    internal static readonly IReadOnlyList<EquipmentSlotType> StitchableSlots = [
+    internal static readonly IReadOnlyList<EquipmentSlotType> s_stitchableSlots = [
         EquipmentSlotType.Hat,
         EquipmentSlotType.Robe,
         EquipmentSlotType.Shoes,
@@ -91,7 +91,7 @@ internal static class StitchRules {
             .Where(candidate => template.m_adjectiveList.Any(adjective =>
                 string.Equals(adjective, candidate.ToString(), StringComparison.OrdinalIgnoreCase)))
             .ToList();
-        if (matches.Count != 1 || !StitchableSlots.Contains(matches[0])) {
+        if (matches.Count != 1 || !s_stitchableSlots.Contains(matches[0])) {
             return false;
         }
 
@@ -149,7 +149,7 @@ internal static class StitchRules {
             DisplayTemplateId: ItemHelper.GetDisplayTemplateId(display),
             PrimaryColor: display.m_primaryColor,
             SecondaryColor: display.m_secondaryColor,
-            Pattern: display.m_pattern & PatternWithoutLock,
+            Pattern: display.m_pattern & PATTERN_WITHOUT_LOCK,
             Slot: displaySlot);
         reason = string.Empty;
 
@@ -197,12 +197,12 @@ internal static class StitchRules {
         plan = new UnstitchPlan(
             Stats: new UnstitchedItem((uint) item.m_templateID, statItemColor1, statItemColor2, 0),
             Appearance: new UnstitchedItem(displayTemplateId, item.m_primaryColor, item.m_secondaryColor,
-                item.m_pattern & PatternWithoutLock));
+                item.m_pattern & PATTERN_WITHOUT_LOCK));
         reason = string.Empty;
 
         return true;
     }
 
-    private static bool IsDye(int color) => color is >= 0 and <= MaxDye;
+    private static bool IsDye(int color) => color is >= 0 and <= MAX_DYE;
 
 }

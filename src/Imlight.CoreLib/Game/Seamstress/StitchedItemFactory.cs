@@ -29,7 +29,6 @@
  * The items are only built here: nothing is added to the inventory or saved.
  *
  * TODO:
- * - What should a stitch do to jewels and equipment sets once those exist? Today a socketed input is only reported.
  *
  * Created by: Jay
  * Version: KALI 1.0

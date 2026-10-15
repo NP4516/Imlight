@@ -28,11 +28,6 @@
  * if (!transaction.TryApply([displayItem, statsItem], [stitchedItem], stitchCrowns, out var failure)) { deny(failure); }
  *
  * NOTE:
- * Equipped inputs are taken off first, each as its own commit, which loses nothing. After that the backpack
- * and the Crowns change in memory and AccountCollection.SaveCrownsWithBackpack stores the character, the
- * account and the item documents in one Raven transaction. A failed or crashed write stores none of it and
- * the memory is put back. The client hears about the new and removed items only after the commit, and the
- * caller sends the stitch confirm after this returns, because the client needs the item messages first.
  *
  * TODO:
  *
