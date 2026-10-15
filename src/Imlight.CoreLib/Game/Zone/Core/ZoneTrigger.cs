@@ -45,7 +45,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
-using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Requirements;
@@ -124,9 +123,7 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
             };
         }
 
-        // A result that posts one of this trigger's own fire events would fire it again without end unless a
-        // wait comes first, and the event that fired it has already reached every trigger and quest goal.
-        results = WithoutUnpacedSelfPosts(results, TriggerData.m_fireEvents);
+        results = WithoutNonLoopSelfPosts(results, TriggerData);
 
         ResultDispatcher.ExecuteResults(Context, results, message.PlayerActor, message.PlayerGameObject,
                                        Sender, ZoneRef, triggerName: TriggerData.m_triggerName,
@@ -141,22 +138,28 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
         => requirements?.m_requirements is { } list
         && list.Any(r => r is null || r is RequirementList nested && HasUndecodableRequirement(nested));
 
-    internal static ResultList WithoutUnpacedSelfPosts(ResultList results, IEnumerable<ByteString> fireEvents) {
+    internal static ResultList WithoutNonLoopSelfPosts(ResultList results, Trigger trigger) {
+        var fireEvents = trigger?.m_fireEvents;
         if (results?.m_results is not { Count: > 0 } || fireEvents is null) {
             return results;
         }
 
-        // A self-post after a wait is a loop, one without is a spin. A wait with requirements of its own can be
-        // skipped, which leaves the post unpaced.
+        // A self-post spins unless a wait comes first (a wait with requirements can be skipped), and it only echoes an
+        // event every listener already got unless the trigger changes something or can stop.
+        var canStop = trigger.m_triggerMax != uint.MaxValue
+            || HasRequirements(trigger.m_requirements)
+            || results.m_results.Any(result => HasRequirements(result?.m_requirements));
+        var changesSomething = results.m_results.Any(result => result is not (null or ResWait or ResPostEvent or ResPostQuestEvent));
+        var isLoop = canStop || changesSomething;
+
         var paced = false;
         var kept = new List<Result>(results.m_results.Count);
         foreach (var result in results.m_results) {
-            if (result is ResWait wait && wait.m_secondsToWait >= MinPacedWaitSeconds
-                && wait.m_requirements?.m_requirements is not { Count: > 0 }) {
+            if (result is ResWait wait && wait.m_secondsToWait >= MinPacedWaitSeconds && !HasRequirements(wait.m_requirements)) {
                 paced = true;
             }
 
-            if (!paced && result is ResPostEvent post && fireEvents.Any(x => x == post.m_eventName)) {
+            if (!(paced && isLoop) && result is ResPostEvent post && fireEvents.Any(x => x == post.m_eventName)) {
                 continue;
             }
 
@@ -182,6 +185,9 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
             return null;
         }
     }
+
+    private static bool HasRequirements(RequirementList requirements)
+        => requirements?.m_requirements is { Count: > 0 };
 
     private bool CooldownCheck(IActorRef playerRef) {
         if (_cooldowns.TryGetValue(playerRef, out var lastTriggered)) {
