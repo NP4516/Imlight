@@ -382,10 +382,17 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         SendTeleportEffects();
 
         var currentZone = wizard.Zone;
-        var zoneMap = WorldHubZones.GetHubForZone(currentZone);
+
+        // A visitor the owner sends away answers with this message too, so a house zone leaves the way its exit trigger does.
+        if (!HouseExits.TryResolve(currentZone, out var destinationZone, out var destinationLocation)) {
+            var zoneMap = WorldHubZones.GetHubForZone(currentZone);
+            destinationZone = zoneMap.m_hubZone;
+            destinationLocation = zoneMap.m_location;
+        }
+
         var tpmsg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
-            DestinationZone = zoneMap.m_hubZone,
-            DestinationLocation = zoneMap.m_location,
+            DestinationZone = destinationZone,
+            DestinationLocation = destinationLocation,
             SendToClient = true,
             OwnerCharId = wizard.CharId,
         };

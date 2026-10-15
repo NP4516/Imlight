@@ -20,7 +20,8 @@
  * ========================================================================
  *
  * PURPOSE:
- * Finds where a player goes when they leave a house zone through a trigger that names no destination.
+ * Finds where a player goes when they leave a house zone: through a trigger that names no destination, with Go Home, or
+ * when the owner sends them away (their client answers with Go Home).
  *
  * USAGE EXAMPLE:
  * if (HouseExits.TryResolve(zonePath, out var zone, out var location)) {
