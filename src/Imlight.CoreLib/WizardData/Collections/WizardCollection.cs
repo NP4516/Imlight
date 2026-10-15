@@ -324,13 +324,27 @@ public static class WizardCollection {
     /// </summary>
     /// <param name="wizard">The wizard object containing the updated equipment.</param>
     /// <returns>False when the character is not stored.</returns>
-    public static bool UpdateCharacterItems(Wizard wizard) {
-        return UpdateCharacter(wizard.CharId, existingCharacter => {
+    public static bool UpdateCharacterItems(Wizard wizard) => UpdateCharacterItems(wizard, []);
+
+    /// <summary>
+    /// Updates the equipment of a character and stores the documents of the items that entered it, in one
+    /// transaction, so an item is never stored without being listed or listed without being stored.
+    /// </summary>
+    /// <param name="wizard">The wizard object containing the updated equipment.</param>
+    /// <param name="addedItems">New items that are stored nowhere yet.</param>
+    /// <returns>False when the character is not stored, in which case nothing was written.</returns>
+    public static bool UpdateCharacterItems(Wizard wizard, IReadOnlyCollection<WizClientObjectItem> addedItems) {
+        return UpdateCharacterWithSession(wizard.CharId, (session, existingCharacter) => {
             existingCharacter.InventoryBehavior = wizard.InventoryBehavior;
             existingCharacter.StorageBehavior = wizard.StorageBehavior;
             existingCharacter.EquipmentBehavior = wizard.EquipmentBehavior;
             existingCharacter.PetSnackBehavior = wizard.PetSnackBehavior;
             existingCharacter.AlchemyBehavior = wizard.AlchemyBehavior;
+            foreach (var item in addedItems) {
+                WizardItemCollection.StoreInSession(session, item);
+            }
+
+            return true;
         });
     }
 

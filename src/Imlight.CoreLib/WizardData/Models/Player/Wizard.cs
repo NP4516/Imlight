@@ -456,10 +456,7 @@ public class Wizard {
         }
 
         // Persistent save.
-        WizardItemCollection.AddItem(item);
-        WizardCollection.UpdateCharacterItems(this);
-
-        return true;
+        return SaveItemsOrRollBack(() => InventoryBehavior.RemoveItem(item), item);
     }
 
     public bool AddHatchedPetToInventory(uint templateId, out WizClientObjectItem pet) {
@@ -481,10 +478,8 @@ public class Wizard {
             return false;
         }
 
-        WizardItemCollection.AddItem(pet);
-        WizardCollection.UpdateCharacterItems(this);
-
-        return true;
+        // Persistent save.
+        return SaveItemsOrRollBack(() => InventoryBehavior.RemoveItem(pet), pet);
     }
 
     public bool RemoveItemFromInventory(ulong itemId) {
@@ -627,9 +622,7 @@ public class Wizard {
         }
 
         // Persistent save.
-        WizardItemCollection.AddItem(item);
-
-        return SaveItemsOrRollBack(() => StorageBehavior.RemoveItem(item));
+        return SaveItemsOrRollBack(() => StorageBehavior.RemoveItem(item), item);
     }
 
     /// <summary>
@@ -731,9 +724,9 @@ public class Wizard {
         return SaveItemsOrRollBack(() => StorageBehavior.BankLimit = previous);
     }
 
-    private bool SaveItemsOrRollBack(System.Action rollBack) {
+    private bool SaveItemsOrRollBack(System.Action rollBack, params WizClientObjectItem[] addedItems) {
         try {
-            if (WizardCollection.UpdateCharacterItems(this)) {
+            if (WizardCollection.UpdateCharacterItems(this, addedItems)) {
                 return true;
             }
         } catch (Exception ex) {
