@@ -32,6 +32,7 @@
  * - Templates are resolved by id when asked, never by scanning the catalog or by file name.
  * - A deed with a structure has two lots: the deed's zone is the exterior and the structure's zone the interior.
  *   A deed without one is a house of one zone.
+ * - The starter templates are the entries of Housing.StarterDeeds that are house templates. Boot checks the list.
  * 
  * TODO:
  * 
@@ -41,8 +42,10 @@
  */
 
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
 
 namespace Imlight.CoreLib.Game.Housing;
@@ -109,6 +112,43 @@ internal static class HouseTemplates {
             deed.m_castleBlockLimit));
 
         return true;
+    }
+
+    /// <summary>
+    /// Gets the starter houses: the entries of <c>Housing.StarterDeeds</c> that are house templates, in order.
+    /// </summary>
+    /// <returns>The definitions of the starter templates.</returns>
+    internal static IReadOnlyList<HouseTemplateInfo> Starters() {
+        var starters = new List<HouseTemplateInfo>();
+        foreach (var templateId in HousingSettings.StarterDeeds) {
+            if (TryGet(templateId, out var info)) {
+                starters.Add(info);
+            }
+        }
+
+        return starters;
+    }
+
+    /// <summary>
+    /// Checks at boot that every entry of <c>Housing.StarterDeeds</c> is a house template, and logs the ones that are not.
+    /// </summary>
+    /// <returns><c>true</c> when the list names at least one house and no entry that is not one.</returns>
+    internal static bool ValidateStarters() {
+        var valid = true;
+        var starters = HousingSettings.StarterDeeds;
+        foreach (var templateId in starters) {
+            if (!TryGet(templateId, out _)) {
+                Logger.Error("Housing.StarterDeeds names template {TemplateId}, which is not a house template.", Logger.Args(templateId));
+                valid = false;
+            }
+        }
+
+        if (starters.Count == 0) {
+            Logger.Warning("Housing.StarterDeeds is empty, so no character has a home to go to.");
+            valid = false;
+        }
+
+        return valid;
     }
 
 }

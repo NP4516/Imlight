@@ -20,8 +20,7 @@
  * ========================================================================
  *
  * PURPOSE:
- * Decides whether a client may attach to a house zone, and keeps the deed item it receives at login
- * pointing at the character's lot.
+ * Decides whether a client may attach to a house zone.
  *
  * USAGE EXAMPLE:
  * if (!HouseAttach.TryAuthorize(wizard, zoneName, message.ZoneID, out var house)) {
@@ -41,7 +40,6 @@
  */
 
 using System;
-using System.Linq;
 using Imlight.Common;
 using Imlight.CoreLib.WizardData.Models.Player;
 
@@ -84,21 +82,6 @@ internal static class HouseAttach {
         }
 
         return true;
-    }
-
-    /// <summary>
-    /// Points the deed item in the backpack at the character's lot, so what the client receives never depends on
-    /// how the database stored the behavior.
-    /// </summary>
-    /// <param name="wizard">The character.</param>
-    internal static void ApplyDeedLot(Wizard wizard) {
-        foreach (var (templateId, lotGid) in wizard.HouseLots) {
-            var deed = wizard.InventoryBehavior.Items.FirstOrDefault(item => item.m_templateID == templateId);
-            if (deed is not null && !DormDeed.TrySetLot(deed, lotGid, out _)) {
-                Logger.Warning("Deed item {ItemId} of character {CharId} has no deed behavior.",
-                    Logger.Args(deed.m_globalID, wizard.CharId));
-            }
-        }
     }
 
     private static ulong LotOfZone(Wizard wizard, string zoneName) {

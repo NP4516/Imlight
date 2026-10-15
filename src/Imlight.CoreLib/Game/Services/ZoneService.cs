@@ -81,9 +81,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         = ConfigurationManager.Settings["April Fools.RandomBackFlips"].AsBool();
     private readonly ZoneTransferGate _transferGate = new();
     private uint _currentDynamicZoneId;
-    private ulong _pendingDeedGid;
-    private bool _pendingHouseCreated;
-    private bool _pendingItemCreated;
+    private HouseEntry _pendingHouseEntry;
 
     private const string SIGIL_ENTER_TIMER_KEY = "sigilenter";
     private const float SIGIL_COUNTDOWN_SECONDS = 10.0f;
@@ -393,39 +391,37 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     // This button and the GoHome button are locked client-side until level 2.
     // jooty, again? cmon man
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_GOTODORM))]
-    private void ReceiveGotoDorm(WIZARD_12_PROTOCOL.MSG_GOTODORM message) {
+    private void ReceiveGotoHouse(WIZARD_12_PROTOCOL.MSG_GOTODORM message) {
         if (_transferGate.IsQueued || Timers.IsTimerActive("zonetransfer")) {
             return;
         }
 
         // The client has no in-house check for its Home button, and a same-zone teleport cannot name a house location.
         var wizard = GetActiveWizard();
-        var dormLotGid = DormDeed.LotOf(wizard);
-        if (dormLotGid != 0 && wizard.AttachedLotGid == dormLotGid) {
+        var home = HouseDeeds.ResolveHome(wizard);
+        if (home.Lot != 0 && wizard.AttachedLotGid == home.Lot) {
             return;
         }
 
-        if (!DormDeed.Ensure(wizard, out var dorm, out var failure)) {
-            InformGameClient(failure == DormFailure.BackpackFull
-                ? "Your backpack is full. Make room for your dorm room deed and try again."
-                : "Your dorm room is not available right now. Please try again later.", true);
+        if (!HouseDeeds.TryPrepareHome(wizard, out var entry, out var failure)) {
+            InformGameClient(failure == HouseGrantFailure.BackpackFull
+                ? "Your backpack is full. Make room for your house deed and try again."
+                : "Your house is not available right now. Please try again later.", true);
 
             return;
         }
 
         SendTeleportEffects();
 
-        _pendingDeedGid = dorm.DeedGid;
-        _pendingHouseCreated = dorm.HouseCreated;
-        _pendingItemCreated = dorm.ItemCreated;
+        _pendingHouseEntry = entry;
 
         var tpmsg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
-            DestinationZone = dorm.House.ZoneName,
-            DestinationLocation = "PlayerHouseStart",
+            DestinationZone = entry.Zone,
+            DestinationLocation = HouseDeeds.EntryLocation,
             SendToClient = true,
             IsPrivate = true,
             OwnerCharId = wizard.CharId,
-            HouseLotGid = dorm.House.LotGid,
+            HouseLotGid = entry.LotGid,
         };
 
         wizard.SetTimeHomeLastClicked(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -827,21 +823,20 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     private void SendDeedZoneRequest(Wizard character) {
         // A house transfer has no ZONETRANSFERREQUEST: the client's echo of this message is its answer.
-        if (_pendingItemCreated) {
-            var deed = character.InventoryBehavior.GetItem(_pendingDeedGid);
-            if (deed is null || !ItemSync.SendAdded(SessionActor.ActorRef, character, deed)) {
-                Logger.Error("Session {SessionId} could not send the new dorm deed {ItemId} to the client.",
-                    Logger.Args(SessionActor.SessionID, _pendingDeedGid));
+        var entry = _pendingHouseEntry;
+        foreach (var itemGid in entry?.NewItemGids ?? []) {
+            var item = character.InventoryBehavior.GetItem(itemGid);
+            if (item is null || !ItemSync.SendAdded(SessionActor.ActorRef, character, item)) {
+                Logger.Error("Session {SessionId} could not send the new house item {ItemId} to the client.",
+                    Logger.Args(SessionActor.SessionID, itemGid));
             }
         }
 
-        var arguments = string.Create(CultureInfo.InvariantCulture, $"CLUSTER={character.QueuedLotGid}")
-            + (_pendingHouseCreated ? ";NEWDORM=1" : string.Empty);
         SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTDEEDZONE {
-            GlobalID = _pendingDeedGid,
+            GlobalID = entry?.DeedGid ?? 0,
             Status = 0,
             Teleport = 0,
-            Arguments = arguments,
+            Arguments = string.Create(CultureInfo.InvariantCulture, $"CLUSTER={character.QueuedLotGid}"),
         });
 
         StartDeedZoneTimeout();
@@ -857,17 +852,15 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         var accepted = _transferGate.TryNack();
         LogTransferStep(step, previous, accepted);
 
-        _pendingDeedGid = 0;
-        _pendingHouseCreated = false;
-        _pendingItemCreated = false;
+        _pendingHouseEntry = null;
         GetActiveWizard().QueuedLotGid = 0;
-        InformGameClient("Your dorm room could not be prepared. Please try again.", true);
+        InformGameClient("Your house could not be prepared. Please try again.", true);
     }
 
     [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTDEEDZONE))]
     private void ReceiveDeedZoneEcho(WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTDEEDZONE message) {
         // Only the echo of the request we sent counts. Its Teleport and Arguments are the client's copy of our own.
-        if (_pendingDeedGid == 0 || message.GlobalID != _pendingDeedGid || _transferGate.State != ZoneTransferState.Requested) {
+        if (_pendingHouseEntry is null || message.GlobalID != _pendingHouseEntry.DeedGid || _transferGate.State != ZoneTransferState.Requested) {
             return;
         }
 
@@ -878,9 +871,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
                 var accepted = _transferGate.TryAck();
                 LogTransferStep("REQUESTDEEDZONE echo received", previous, accepted);
                 if (accepted) {
-                    _pendingDeedGid = 0;
-                    _pendingHouseCreated = false;
-                    _pendingItemCreated = false;
+                    _pendingHouseEntry = null;
                     DoZoneTransfer();
                 }
 
@@ -899,7 +890,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_DEEDZONE_TIMEOUT))]
     private void OnDeedZoneTimeout(SERVICE_101_PROTOCOL.MSG_DEEDZONE_TIMEOUT _) {
-        if (_pendingDeedGid == 0 || _transferGate.State != ZoneTransferState.Requested) {
+        if (_pendingHouseEntry is null || _transferGate.State != ZoneTransferState.Requested) {
             return;
         }
 
