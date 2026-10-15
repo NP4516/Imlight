@@ -28,6 +28,7 @@
  * NOTE:
  * - DeedZoneTimeoutSeconds: how long to wait for the client to confirm that a house zone archive is ready.
  * - StarterDeeds: the templates every character is given on the first Home click, as a comma-separated list.
+ * - AtticLimit: how many items an attic holds.
  * 
  * TODO:
  * 

@@ -31,7 +31,7 @@
  * NOTE:
  * - A deed with a structure is two houses, the exterior (the deed) and the interior (the structure). The partner of one
  *   is the other, and the partner is always the same owner's: a visitor walks into the owner's other lot.
- * - A house without a structure that no deed names (a dorm, a one-zone house) has no partner.
+ * - A house without a structure that no deed names (a one-zone house) has no partner.
  * - Whoever owns the houses gets the partner's items and lot issued first, so the client treats them as the owner in
  *   the zone they walk into. The partner house is stored on the first walk through.
  * - A visitor must still be allowed in by the owner.

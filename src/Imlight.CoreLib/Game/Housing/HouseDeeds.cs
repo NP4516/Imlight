@@ -41,8 +41,8 @@
  *   like any other; no data marks it.
  *
  * TODO:
- * - The equipped Islands item decides the home once the equipment slots exist, and the Home target needs the capture to
- *   say which lot of an equipped castle it is.
+ * - The equipped Islands item should decide the home. The slots exist, but which lot of an equipped castle Home goes to
+ *   needs a capture.
  *
  * Created by: Jay
  * Version: KALI 1.0

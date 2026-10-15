@@ -38,7 +38,7 @@
  * - AtticSubType is the blob subtype the client's BlobLoaded gives the attic blob of the family (0x142216a00).
  *   BlobSubType is the subtype of the family's live entries where BaseClientHousingBlobStrategy::CreateObject
  *   (0x1422170f0) names one; it is null where the client names none.
- * - Enabled is the phase limit: it says what is switched on, never what exists.
+ * - Enabled says what the server supports yet, never what exists.
  *
  * TODO:
  * - Only the names tie InteractableBehavior to the Interact subtype and AquariumBehavior to FishAttic. Is that right?
@@ -46,10 +46,9 @@
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
-using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;

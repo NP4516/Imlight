@@ -307,7 +307,7 @@ internal sealed class HouseState {
             _liveCount++;
             var slot = _slots.Count - 1;
 
-            return new HouseChange(HouseEdit.Done, slot, unchecked(_gidBase + (uint) slot), _house.Revision, added);
+            return new HouseChange(HouseEdit.Done, slot, GidIdOf(slot), _house.Revision, added);
         }
     }
 
@@ -339,7 +339,7 @@ internal sealed class HouseState {
             _slots[slot] = null;
             _liveCount--;
 
-            return new HouseChange(HouseEdit.Done, slot, unchecked(_gidBase + (uint) slot), _house.Revision, previous);
+            return new HouseChange(HouseEdit.Done, slot, GidIdOf(slot), _house.Revision, previous);
         }
     }
 
@@ -378,7 +378,7 @@ internal sealed class HouseState {
             var changes = new List<HouseChange>(slots.Count);
             for (var i = 0; i < slots.Count; i++) {
                 var slot = slots[i];
-                changes.Add(new HouseChange(HouseEdit.Done, slot, unchecked(_gidBase + (uint) slot), revision + (uint) i + 1, _slots[slot]));
+                changes.Add(new HouseChange(HouseEdit.Done, slot, GidIdOf(slot), revision + (uint) i + 1, _slots[slot]));
                 _slots[slot] = null;
             }
 
@@ -425,7 +425,7 @@ internal sealed class HouseState {
 
             _slots[slot] = replacement;
 
-            return new HouseChange(HouseEdit.Done, slot, unchecked(_gidBase + (uint) slot), _house.Revision, replacement);
+            return new HouseChange(HouseEdit.Done, slot, GidIdOf(slot), _house.Revision, replacement);
         }
     }
 

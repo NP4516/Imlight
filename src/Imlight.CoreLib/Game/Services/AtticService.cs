@@ -53,7 +53,6 @@ using Imlight.CoreLib.Game.Housing;
 using Imlight.CoreLib.Game.Housing.Families;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
-using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;

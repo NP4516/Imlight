@@ -38,7 +38,7 @@
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -63,7 +63,6 @@ public sealed record PlacedItem {
     private const uint RemapFlag = 0x20000000;
     private const uint ExtendedYawFlag = 0x80000000;
     private const uint ExtendedYawOver255Flag = 0x40000000;
-    private const uint SectorMask = 0x07;
     private const uint TintShift = 3;
     private const uint ScaleShift = 8;
     private const uint ExtendedYawShift = 16;
