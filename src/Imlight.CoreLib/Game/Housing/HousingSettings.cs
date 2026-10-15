@@ -33,7 +33,7 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -50,7 +50,9 @@ internal static class HousingSettings {
 
     private const string DeedZoneTimeoutKey = "Housing.DeedZoneTimeoutSeconds";
     private const string StarterDeedsKey = "Housing.StarterDeeds";
+    private const string AtticLimitKey = "Housing.AtticLimit";
     private const int DefaultDeedZoneTimeoutSeconds = 90;
+    private const int DefaultAtticLimit = 100;
 
     /// <summary>
     /// How long to wait for the client to confirm that a house zone archive is ready:
@@ -61,6 +63,17 @@ internal static class HousingSettings {
             var configured = ConfigurationManager.Settings[DeedZoneTimeoutKey].AsInt();
 
             return TimeSpan.FromSeconds(configured > 0 ? configured : DefaultDeedZoneTimeoutSeconds);
+        }
+    }
+
+    /// <summary>
+    /// How many items an attic holds: <c>Housing.AtticLimit</c>, or 100 when it is not a positive number.
+    /// </summary>
+    internal static int AtticLimit {
+        get {
+            var configured = ConfigurationManager.Settings[AtticLimitKey].AsInt();
+
+            return configured > 0 ? configured : DefaultAtticLimit;
         }
     }
 

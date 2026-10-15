@@ -136,6 +136,8 @@ public class Wizard {
     [JsonIgnore] public string QueuedZoneName;
     [JsonIgnore] public string QueuedZoneLocation;
     [JsonIgnore] public ulong AttachedLotGid;
+    [JsonIgnore] public ulong AtticContainerGid;
+    [JsonIgnore] public int AtticItemCount;
     [JsonIgnore] public ulong QueuedLotGid;
     [JsonIgnore] internal DynamodSet DynamodSet { get; set; }
     [JsonIgnore] internal bool IsInCombatGrace { get; set; }

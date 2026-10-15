@@ -59,6 +59,7 @@ public static class WizardObjectLoader {
         SetPetSnackBehavior(clientObject, ref character);
         SetPetOwnerBehavior(clientObject, ref character);
         SetAlchemyBehavior(clientObject, ref character);
+        SetAtticBehavior(clientObject, character);
 
         return clientObject;
     }
@@ -174,6 +175,14 @@ public static class WizardObjectLoader {
         }
         else {
             throw new Exception("Behavior ClientPetOwnerBehavior not found!");
+        }
+    }
+
+    public static void SetAtticBehavior(WizClientObject clientObject, Wizard character) {
+        // The container and the count are what the client shows before the attic is opened. Nothing is stored in the object.
+        if (CoreObjectFactory.FindBehaviorInstance<ClientAtticBehavior>(clientObject, out var atticBehavior)) {
+            atticBehavior.m_containerGID = (GID) character.AtticContainerGid;
+            atticBehavior.m_atticItemCount = character.AtticItemCount;
         }
     }
 

@@ -31,6 +31,7 @@
  *   later edits arrive as small versioned patches. The blob and the patches are built here, from the stored
  *   items, with the generated Imcodec types; the house is in Game/Housing.
  * - The service counts the player into the house at MSG_PRELOGIN and out when the session ends.
+ * - A blob request that names the attic is left to AtticService.
  * - Only the owner decorates. A visitor sees the same blob and patches, and every edit they send is refused as forged.
  *
  * TODO:
@@ -62,11 +63,8 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class HousingService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private const string BlobType = "Housing";
+    private const string BlobType = HousingBlobs.BlobType;
     private const string ItemSubType = "Item";
-    private const int MaxRequestLength = 4096;
-    private const int MaxSerializedLength = 65535;
-    private const uint SerializeMask = 1;
 
     private HouseState _house;
 
@@ -111,20 +109,26 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
                 }
             ],
         };
-        SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_REQUEST_BLOBS { Data = Serialize(request) });
+        SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_REQUEST_BLOBS { Data = HousingBlobs.Serialize(request) });
     }
 
     [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_REQUEST_BLOBS))]
     private void ReceiveRequestBlobs(WIZARDHOUSING_50_PROTOCOL.MSG_REQUEST_BLOBS message) {
-        var house = _house;
-        if (house is null) {
-            Logger.Warning("Character {CharId} requested house blobs outside a house.", Logger.Args(GetActiveWizard().CharId));
+        var wizard = GetActiveWizard();
+        if (!HousingBlobs.TryParseRequest(message.Data, out var request)) {
+            Logger.Warning("Character {CharId} sent a malformed blob request.", Logger.Args(wizard.CharId));
 
             return;
         }
 
-        if (!TryParseRequest(message.Data, out var request)) {
-            Logger.Warning("Character {CharId} sent a malformed blob request.", Logger.Args(GetActiveWizard().CharId));
+        // The attic has blobs of its own, which AtticService answers.
+        if (wizard.AtticContainerGid != 0 && request.m_associatedGID == wizard.AtticContainerGid) {
+            return;
+        }
+
+        var house = _house;
+        if (house is null) {
+            Logger.Warning("Character {CharId} requested house blobs outside a house.", Logger.Args(wizard.CharId));
 
             return;
         }
@@ -133,7 +137,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         // decides what is sent.
         if (!RequestsItemBlob(request, house.LotGid)) {
             Logger.Warning("Character {CharId} requested blobs that are not the item blob of lot {LotGid}.",
-                Logger.Args(GetActiveWizard().CharId, house.LotGid));
+                Logger.Args(wizard.CharId, house.LotGid));
 
             return;
         }
@@ -422,59 +426,15 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
                 m_versionNumber = snapshot.Revision,
                 m_packageNumber = 0,
                 m_associatedGID = house.LotGid,
-                m_epochDays = EpochDaysNow(),
+                m_epochDays = HousingBlobs.EpochDaysNow(),
                 m_data = new HousingBlob { m_housingBlobObjectList = [.. snapshot.Slots.Select(item => item?.ToBlobObject() ?? new HousingBlobObject())] },
             };
             SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_SEND_BLOB {
-                Data = Serialize(blob),
+                Data = HousingBlobs.Serialize(blob),
                 UserData = snapshot.GidBase,
             });
         } catch (InvalidOperationException exception) {
             Logger.Error("Could not build the blob of lot {LotGid}: {Reason}", Logger.Args(house.LotGid, exception.Message));
-        }
-    }
-
-    private static uint EpochDaysNow()
-        => unchecked((uint) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60 * 1440));
-
-    private static ObjectSerializer NewSerializer()
-        => new(Versionable: false, Behaviors: SerializerFlags.None);
-
-    private static ByteString Serialize(PropertyClass value) {
-        if (!NewSerializer().Serialize(value, SerializeMask, out var serialized)) {
-            throw new InvalidOperationException($"Could not serialize {value.GetType().Name}.");
-        }
-
-        if (serialized.Length > MaxSerializedLength) {
-            throw new InvalidOperationException(
-                $"{value.GetType().Name} is {serialized.Length} bytes, past the {MaxSerializedLength} byte string limit.");
-        }
-
-        return serialized;
-    }
-
-    private static bool TryParseRequest(ByteString data, out BlobRequest request) {
-        // The bytes must be exactly what the serializer writes for the parsed request, so truncated, padded and
-        // malformed payloads are rejected.
-        request = null;
-        byte[] bytes = data;
-        if (bytes is null || bytes.Length == 0 || bytes.Length > MaxRequestLength) {
-            return false;
-        }
-
-        try {
-            var serializer = NewSerializer();
-            if (!serializer.Deserialize<BlobRequest>(bytes, SerializeMask, out var parsed) || parsed is null
-                || !serializer.Serialize(parsed, SerializeMask, out var canonical)
-                || !((byte[]) canonical).AsSpan().SequenceEqual(bytes)) {
-                return false;
-            }
-
-            request = parsed;
-
-            return true;
-        } catch (Exception) {
-            return false;
         }
     }
 

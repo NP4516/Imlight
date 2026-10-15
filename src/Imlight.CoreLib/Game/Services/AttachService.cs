@@ -137,6 +137,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         // The services that answer MSG_PRELOGIN read the lot, and the client's owner check reads it from the deed.
         _wizard.AttachedLotGid = house?.LotGid ?? 0;
         HouseDeeds.ApplyLots(_wizard);
+        AtticRegistry.Describe(_wizard);
 
         // Tiny anti-cheat measure. When the character object is created, we recalculate the game stats.
         CharacterHelper.RecalculateGameStats(_wizard);

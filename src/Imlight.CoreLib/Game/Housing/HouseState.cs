@@ -45,7 +45,7 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -101,9 +101,7 @@ internal sealed class HouseState {
     /// The most blob entries one blob holds: a string field is at most 65,535 bytes, the blob header takes
     /// 47 and every entry 21.
     /// </summary>
-    internal const int MaxSlots = (65535 - 47) / 21;
-
-    private const int HousingGidType = 9;
+    internal const int MaxSlots = HousingGids.MaxSlots;
 
     private readonly Lock _lock = new();
     private readonly House _house;
@@ -209,12 +207,11 @@ internal sealed class HouseState {
     }
 
     /// <summary>
-    /// Draws the base the client numbers a house's blob entries from. The range leaves room for
-    /// <see cref="MaxSlots"/> entries above any base without wrapping past 2^32.
+    /// Draws the base the client numbers a house's blob entries from.
     /// </summary>
     /// <returns>A new GID base.</returns>
     internal static uint NewGidBase()
-        => (uint) Random.Shared.NextInt64(0x80000000L, 0xFFFF0000L);
+        => HousingGids.NewBase();
 
     /// <summary>
     /// Copies the house for building a blob.
@@ -247,18 +244,11 @@ internal sealed class HouseState {
     /// <returns><c>true</c> when the GID is a housing object GID inside this house's numbering.</returns>
     internal bool TryFindByGid(ulong gid, out PlacedItem item, out int slot) {
         item = null;
-        slot = -1;
-        if (((gid >> 40) & 0xFF) != HousingGidType || (gid & 0x000000FF00000000UL) != 0) {
-            return false;
-        }
-
         lock (_lock) {
-            var offset = unchecked((uint) gid - _gidBase);
-            if (offset >= (uint) _slots.Count) {
+            if (!HousingGids.TryGetSlot(gid, _gidBase, _slots.Count, out slot)) {
                 return false;
             }
 
-            slot = (int) offset;
             item = _slots[slot];
 
             return true;
