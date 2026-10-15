@@ -35,7 +35,8 @@ public enum EquipmentSlotType {
     Ring,
     Pet,
     Mount,
-    Deck
+    Deck,
+    Elixir
 
 }
 
