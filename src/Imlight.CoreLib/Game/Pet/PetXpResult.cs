@@ -20,13 +20,14 @@
  * ========================================================================
  *
  * PURPOSE:
- * Describes what a grant of pet XP did: how much XP the pet received and how many levels it gained.
+ * Describes what a grant of pet XP did: how much XP the pet received and which levels it reached.
  *
  * USAGE EXAMPLE:
  * var result = PetProgression.AddXp(pet, xp, PetXpSource.Game);
  * if (result.Applied) { ... }
  *
  * NOTE:
+ * A level lists the talent and derby power it expressed, which is what the level-up window shows.
  *
  * TODO:
  *
@@ -35,23 +36,39 @@
  * Last Updated: 10/14/2026
  */
 
+using System.Collections.Generic;
+
 namespace Imlight.CoreLib.Game.Pet;
+
+/// <summary>
+/// A level a pet reached and what it earned there.
+/// </summary>
+/// <param name="Level">The level reached.</param>
+/// <param name="NewTalent">The id of the combat talent expressed at this level, or 0 if none.</param>
+/// <param name="NewDerbyPower">The id of the derby talent expressed at this level, or 0 if none.</param>
+/// <param name="ActiveRating">The pet's active rating once this level's talents are expressed.</param>
+internal sealed record PetLevelUp(byte Level, uint NewTalent, uint NewDerbyPower, byte ActiveRating);
 
 /// <summary>
 /// The outcome of a grant of pet XP.
 /// </summary>
 /// <param name="Granted">The XP the pet received, with any bonus for the source. 0 if the pet gained nothing.</param>
-/// <param name="LevelsGained">How many levels the XP carried the pet up.</param>
-internal sealed record PetXpResult(uint Granted, int LevelsGained) {
+/// <param name="LevelUps">The levels the XP carried the pet up to, in order.</param>
+internal sealed record PetXpResult(uint Granted, IReadOnlyList<PetLevelUp> LevelUps) {
 
     /// <summary>
     /// The result of a pet that cannot gain XP.
     /// </summary>
-    internal static PetXpResult None { get; } = new(0, 0);
+    internal static PetXpResult None { get; } = new(0, []);
 
     /// <summary>
     /// True if the pet received XP.
     /// </summary>
     internal bool Applied => Granted > 0;
+
+    /// <summary>
+    /// How many levels the XP carried the pet up.
+    /// </summary>
+    internal int LevelsGained => LevelUps.Count;
 
 }

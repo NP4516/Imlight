@@ -20,13 +20,14 @@
  * ========================================================================
  *
  * PURPOSE:
- * Gives a pet XP the way a player should see it: adds it, saves the pet and tells the client.
+ * Gives a pet XP the way a player should see it: adds it, saves the pet, tells the client and grants
+ * the loot of every level reached.
  *
  * USAGE EXAMPLE:
- * PetXpAward.Give(SessionActor.ActorRef, wizard, pet, 4, PetXpSource.Combat);
+ * PetXpAward.Give(SessionActor.ActorRef, playerObj, wizard, pet, 4, PetXpSource.Combat);
  *
  * NOTE:
- * The client expects the pet's new state before the floating XP text, so the behavior update goes first.
+ * The client expects the level-up windows first, then the pet's new state, then the floating XP text.
  *
  * TODO:
  *
@@ -36,10 +37,12 @@
  */
 
 using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Pet;
@@ -49,16 +52,19 @@ namespace Imlight.CoreLib.Game.Pet;
 /// </summary>
 internal static class PetXpAward {
 
+    private const byte ShowLevelUpWindow = 1;
+
     /// <summary>
-    /// Adds XP to a pet, saves the pet and sends the client its new state.
+    /// Adds XP to a pet, saves the pet, sends the client its new state and grants the loot of the levels reached.
     /// </summary>
     /// <param name="session">The owner's session, which receives the messages.</param>
+    /// <param name="playerObj">The owner's game object, which the level loot requirements are checked against.</param>
     /// <param name="wizard">The owner.</param>
     /// <param name="pet">The pet item.</param>
     /// <param name="xp">The XP to add, before any bonus for the source.</param>
     /// <param name="source">Where the XP comes from.</param>
     /// <returns>What the pet received, which is <see cref="PetXpResult.None"/> if it cannot gain XP.</returns>
-    internal static PetXpResult Give(IActorRef session, Wizard wizard, WizClientObjectItem pet, uint xp, PetXpSource source) {
+    internal static PetXpResult Give(IActorRef session, CoreObject playerObj, Wizard wizard, WizClientObjectItem pet, uint xp, PetXpSource source) {
         var result = PetProgression.AddXp(pet, xp, source);
         if (!result.Applied) {
             return result;
@@ -69,6 +75,10 @@ internal static class PetXpAward {
 
         foreach (var message in CreateMessages(pet, result)) {
             session.Tell(message, null);
+        }
+
+        foreach (var levelUp in result.LevelUps) {
+            PetLevelLoot.Grant(session, playerObj, wizard, pet, levelUp.Level);
         }
 
         return result;
@@ -82,6 +92,19 @@ internal static class PetXpAward {
     /// <returns>The messages to send.</returns>
     internal static List<IMessage> CreateMessages(WizClientObjectItem pet, PetXpResult result) {
         List<IMessage> messages = [];
+        if (CoreObjectFactory.FindBehaviorInstance<ClientPetItemBehavior>(pet, out var behavior)) {
+            messages.AddRange(result.LevelUps.Select(levelUp => new PET_9_PROTOCOL.MSG_PETLEVELUP {
+                GlobalID = pet.m_globalID,
+                OverallRating = (byte) behavior.m_overallRating,
+                ActiveRating = levelUp.ActiveRating,
+                PetLevel = levelUp.Level,
+                NewTalent = levelUp.NewTalent,
+                NewDerbyPower = levelUp.NewDerbyPower,
+                NewJewel = 0,
+                Display = ShowLevelUpWindow
+            }));
+        }
+
         if (PetBehaviorUpdate.TryCreate(pet, out var update)) {
             messages.Add(update);
         }

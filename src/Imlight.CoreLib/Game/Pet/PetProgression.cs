@@ -130,7 +130,7 @@ internal static class PetProgression {
     /// <param name="pet">The pet item.</param>
     /// <param name="xp">The XP to add, before any bonus for the source.</param>
     /// <param name="source">Where the XP comes from, which decides the bonus.</param>
-    /// <returns>What the pet received and how many levels it gained, or <see cref="PetXpResult.None"/> if it cannot gain XP (not hatched, no XP ladder, at the top level, unknown).</returns>
+    /// <returns>What the pet received and the levels it reached, or <see cref="PetXpResult.None"/> if it cannot gain XP (not hatched, no XP ladder, at the top level, unknown).</returns>
     internal static PetXpResult AddXp(WizClientObjectItem pet, uint xp, PetXpSource source) {
         if (xp == 0 || !TryGetPet(pet, out var behavior, out var template) || behavior.m_level == 0) {
             return PetXpResult.None;
@@ -144,6 +144,9 @@ internal static class PetProgression {
         }
 
         var granted = (uint) Math.Min((ulong) xp * (uint) PetRules.GetXpMultiplier(source), uint.MaxValue);
+        var talentsBefore = behavior.m_expressedTalents.Count;
+        var derbyBefore = behavior.m_expressedDerbyTalents.Count;
+        var activeRating = (int) behavior.m_activeRating;
 
         // A zero rung stops the walk, so a pet with an all-zero ladder cannot loop.
         var total = (ulong) behavior.m_XP + granted;
@@ -162,7 +165,16 @@ internal static class PetProgression {
         behavior.m_XP = level >= maxLevel ? 0 : (uint) total;
         EnsureInitialized(pet);
 
-        return new PetXpResult(granted, level - startLevel);
+        // Each level expressed one more talent of each kind at the end of the lists.
+        List<PetLevelUp> levelUps = [];
+        for (var gained = 0; gained < level - startLevel; gained++) {
+            var talent = behavior.m_expressedTalents.ElementAtOrDefault(talentsBefore + gained);
+            var derbyPower = behavior.m_expressedDerbyTalents.ElementAtOrDefault(derbyBefore + gained);
+            activeRating += RankOf(talent) + RankOf(derbyPower);
+            levelUps.Add(new PetLevelUp((byte) (startLevel + 1 + gained), talent, derbyPower, (byte) activeRating));
+        }
+
+        return new PetXpResult(granted, levelUps);
     }
 
     /// <summary>

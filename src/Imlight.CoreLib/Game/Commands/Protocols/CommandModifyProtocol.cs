@@ -283,7 +283,7 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        var result = PetXpAward.Give(Context.SessionActor, Context.Character, pet, amount, PetXpSource.Command);
+        var result = PetXpAward.Give(Context.SessionActor, Context.CharacterObject, Context.Character, pet, amount, PetXpSource.Command);
         if (!result.Applied) {
             InformSenderClient("This pet cannot gain XP.");
 

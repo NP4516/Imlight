@@ -65,7 +65,7 @@ Your command context will not drop. If you select a player, that player will sti
 | additem | Quality Assurance | `.mod additem $id` | Adds an item to your inventory by ID. |
 | addsnack | Quality Assurance | `.mod addsnack $id` | Adds a snack to your pet snack bag. |
 | petlevel | Quality Assurance | `.mod petlevel $level` | Sets the level of your equipped pet and expresses the talents that level earns. |
-| petxp | Quality Assurance | `.mod petxp $xp` | Adds XP to your equipped pet, carrying any overflow into the next levels. |
+| petxp | Quality Assurance | `.mod petxp $xp` | Adds XP to your equipped pet, carrying any overflow into the next levels. Each level reached shows the pet level-up window. |
 | pethappiness | Quality Assurance | `.mod pethappiness $happiness` | Sets the happiness of your equipped pet, up to its maximum. |
 | pettalent | Quality Assurance | `.mod pettalent $talentName` | Gives your equipped pet a talent by its exact name and expresses it. |
 | name | Quality Assurance | `.mod name $newName` | Adds a new name override to your character. |
