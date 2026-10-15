@@ -171,18 +171,21 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
         // The backpack changes in memory only and is written together with the attic, so a crash between the
         // two cannot lose the item or leave it in both places.
         var itemId = item.m_globalID;
-        if (!wizard.InventoryBehavior.RemoveItem(item)) {
-            return;
-        }
+        AtticChange change;
+        lock (HouseDeeds.BackpackLock(wizard)) {
+            if (!wizard.InventoryBehavior.RemoveItem(item)) {
+                return;
+            }
 
-        var change = attic.TryAdd(new AtticItem { ItemGid = itemId, TemplateId = templateId, Family = family.Id }, family.AtticSubType,
-            document => AtticCollection.SaveWithBackpack(document, wizard));
-        if (!change.Done) {
-            if (!wizard.InventoryBehavior.AddItem(item)) {
+            change = attic.TryAdd(new AtticItem { ItemGid = itemId, TemplateId = templateId, Family = family.Id }, family.AtticSubType,
+                document => AtticCollection.SaveWithBackpack(document, wizard));
+            if (!change.Done && !wizard.InventoryBehavior.AddItem(item)) {
                 Logger.Error("Could not return item {ItemId} to the backpack of character {CharId} after it failed to go in the attic.",
                     Logger.Args(itemId, wizard.CharId));
             }
+        }
 
+        if (!change.Done) {
             if (change.Result == HouseEdit.NeedsResync) {
                 SendBlob(attic, family.AtticSubType);
             }
@@ -211,28 +214,32 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
-        if (CoreObjectFactory.GetCoreTemplate(stored.TemplateId) is not WizItemTemplate template
-            || wizard.InventoryBehavior.FreeSlots <= 0
-            || HousingItems.TemplateCopyLimitReached(template, HousingItems.CountInBackpack(wizard, stored.TemplateId))) {
-            InformGameClient("Your backpack cannot hold that object.");
+        WizClientObjectItem item;
+        AtticChange change;
+        lock (HouseDeeds.BackpackLock(wizard)) {
+            if (CoreObjectFactory.GetCoreTemplate(stored.TemplateId) is not WizItemTemplate template
+                || wizard.InventoryBehavior.FreeSlots <= 0
+                || HousingItems.TemplateCopyLimitReached(template, HousingItems.CountInBackpack(wizard, stored.TemplateId))) {
+                InformGameClient("Your backpack cannot hold that object.");
 
-            return;
-        }
+                return;
+            }
 
-        var item = HousingItems.CreateItem(wizard, stored.TemplateId, stored.ItemGid);
-        if (item is null || !wizard.InventoryBehavior.AddItem(item)) {
-            InformGameClient("The object could not be taken out of the attic.");
+            item = HousingItems.CreateItem(wizard, stored.TemplateId, stored.ItemGid);
+            if (item is null || !wizard.InventoryBehavior.AddItem(item)) {
+                InformGameClient("The object could not be taken out of the attic.");
 
-            return;
-        }
+                return;
+            }
 
-        // The new item and the emptied slot are written in one transaction, so a crash between them cannot lose the item.
-        var change = attic.TryRemove(stored.Id, document => AtticCollection.SaveWithBackpack(document, wizard, item));
-        if (!change.Done) {
-            wizard.InventoryBehavior.RemoveItem(item);
-            InformGameClient("The object could not be taken out of the attic.");
+            // The new item and the emptied slot are written in one transaction, so a crash between them cannot lose the item.
+            change = attic.TryRemove(stored.Id, document => AtticCollection.SaveWithBackpack(document, wizard, item));
+            if (!change.Done) {
+                wizard.InventoryBehavior.RemoveItem(item);
+                InformGameClient("The object could not be taken out of the attic.");
 
-            return;
+                return;
+            }
         }
 
         if (!ItemSync.SendAdded(SessionActor.ActorRef, wizard, item)) {

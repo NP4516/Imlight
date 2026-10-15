@@ -34,6 +34,8 @@
  * - A character has one lot per house template, in Wizard.HouseLots. The pointer is written before the item exists,
  *   so an item that is trashed or traded is issued again with the same lot and the house keeps its furniture.
  * - A deed that names a structure is issued together with it, each item with its own lot.
+ * - A character's backpack lock (BackpackLock) covers issuing and every handler that moves a house item between the
+ *   backpack, a house and the attic. Take it before any house or attic state, never inside one.
  * - Running an issue again changes nothing. Nothing is created when the backpack cannot hold everything that is
  *   missing, and a lot that was stored stays stored.
  * - The house document is not created by an issue. The first entry creates it from the template's layout.
@@ -100,9 +102,17 @@ internal static class HouseDeeds {
     /// </summary>
     internal const string EntryLocation = "Start";
 
-    private const int IssueLockCount = 32;
+    private const int BackpackLockCount = 32;
 
-    private static readonly Lock[] s_issueLocks = [.. Enumerable.Range(0, IssueLockCount).Select(_ => new Lock())];
+    private static readonly Lock[] s_backpackLocks = [.. Enumerable.Range(0, BackpackLockCount).Select(_ => new Lock())];
+
+    /// <summary>
+    /// Gets the lock that keeps one character's backpack list from changing in two places at once while house items are
+    /// issued, placed, picked up and moved to or from the attic.
+    /// </summary>
+    /// <param name="wizard">The character.</param>
+    /// <returns>The lock to hold for as long as the backpack is read and then changed.</returns>
+    internal static Lock BackpackLock(Wizard wizard) => s_backpackLocks[(int) (wizard.CharId % BackpackLockCount)];
 
     /// <summary>
     /// Finds the house Home goes to.
@@ -189,7 +199,7 @@ internal static class HouseDeeds {
     /// </summary>
     /// <param name="wizard">The character.</param>
     internal static void ApplyLots(Wizard wizard) {
-        lock (s_issueLocks[(int) (wizard.CharId % IssueLockCount)]) {
+        lock (BackpackLock(wizard)) {
             foreach (var item in HouseItems(wizard)) {
                 if (!TryEnsureLot(wizard, TemplateIdOf(item), out var lot)) {
                     Logger.Warning("Could not give house item {ItemId} of character {CharId} a lot.", Logger.Args(item.m_globalID, wizard.CharId));
@@ -230,7 +240,7 @@ internal static class HouseDeeds {
     }
 
     private static HouseGrant IssueAll(Wizard wizard, IReadOnlyList<uint> requested) {
-        lock (s_issueLocks[(int) (wizard.CharId % IssueLockCount)]) {
+        lock (BackpackLock(wizard)) {
             if (!TryCollectTemplates(requested, out var wanted, out var failure)) {
                 return new HouseGrant(failure, []);
             }

@@ -207,17 +207,20 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         // The backpack changes in memory only and is written together with the house, so a crash between
         // the two cannot lose the item or leave it in both places.
         var itemId = item.m_globalID;
-        if (!wizard.InventoryBehavior.RemoveItem(item)) {
-            return;
-        }
+        HouseChange change;
+        lock (HouseDeeds.BackpackLock(wizard)) {
+            if (!wizard.InventoryBehavior.RemoveItem(item)) {
+                return;
+            }
 
-        var change = house.TryAdd(placed, document => HouseCollection.SaveWithBackpack(document, wizard));
-        if (!change.Done) {
-            if (!wizard.InventoryBehavior.AddItem(item)) {
+            change = house.TryAdd(placed, document => HouseCollection.SaveWithBackpack(document, wizard));
+            if (!change.Done && !wizard.InventoryBehavior.AddItem(item)) {
                 Logger.Error("Could not return item {ItemId} to the backpack of character {CharId} after it failed to be placed.",
                     Logger.Args(itemId, wizard.CharId));
             }
+        }
 
+        if (!change.Done) {
             if (change.Result == HouseEdit.NeedsResync) {
                 SendBlob(house);
             }
@@ -330,29 +333,33 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        if (placedItem is null
-            || CoreObjectFactory.GetCoreTemplate(placedItem.TemplateId) is not WizItemTemplate template
-            || wizard.InventoryBehavior.FreeSlots <= 0
-            || HousingItems.TemplateCopyLimitReached(template, HousingItems.CountInBackpack(wizard, placedItem.TemplateId))) {
-            RefusePickUp(house);
+        WizClientObjectItem item;
+        HouseChange change;
+        lock (HouseDeeds.BackpackLock(wizard)) {
+            if (placedItem is null
+                || CoreObjectFactory.GetCoreTemplate(placedItem.TemplateId) is not WizItemTemplate template
+                || wizard.InventoryBehavior.FreeSlots <= 0
+                || HousingItems.TemplateCopyLimitReached(template, HousingItems.CountInBackpack(wizard, placedItem.TemplateId))) {
+                RefusePickUp(house);
 
-            return;
-        }
+                return;
+            }
 
-        var item = HousingItems.CreateItem(wizard, placedItem.TemplateId, placedItem.ItemGid);
-        if (item is null || !wizard.InventoryBehavior.AddItem(item)) {
-            RefusePickUp(house);
+            item = HousingItems.CreateItem(wizard, placedItem.TemplateId, placedItem.ItemGid);
+            if (item is null || !wizard.InventoryBehavior.AddItem(item)) {
+                RefusePickUp(house);
 
-            return;
-        }
+                return;
+            }
 
-        // The new item and the emptied slot are written in one transaction, so a crash between them cannot lose the item.
-        var change = house.TryRemove(placedItem.Id, document => HouseCollection.SaveWithBackpack(document, wizard, item));
-        if (!change.Done) {
-            wizard.InventoryBehavior.RemoveItem(item);
-            RefusePickUp(house);
+            // The new item and the emptied slot are written in one transaction, so a crash between them cannot lose the item.
+            change = house.TryRemove(placedItem.Id, document => HouseCollection.SaveWithBackpack(document, wizard, item));
+            if (!change.Done) {
+                wizard.InventoryBehavior.RemoveItem(item);
+                RefusePickUp(house);
 
-            return;
+                return;
+            }
         }
 
         if (!ItemSync.SendAdded(SessionActor.ActorRef, wizard, item)) {
