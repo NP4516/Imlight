@@ -159,6 +159,8 @@ public static class WizardCollection {
             DynamodCollection.DeleteAllDynamodSets(id);
             WizardReagentCollection.DeleteReagentBag(id);
 
+            // The houses and the attic belong to the character, and go with them in the same transaction.
+            DeleteHousing(session, character);
             session.Delete(character);
             session.SaveChanges();
             s_documentIdByCharId.TryRemove(id, out _);
@@ -561,6 +563,18 @@ public static class WizardCollection {
                 .Where(x => x.AccountId == accountId)
                 .ToList();
         }
+    }
+
+    private static void DeleteHousing(IDocumentSession session, Wizard character) {
+        var houseIds = (character.HouseLots ?? []).Values.Distinct().Select(House.GetDocumentId).ToList();
+        if (houseIds.Count > 0) {
+            // A lot is only the character's when its house says so.
+            foreach (var house in session.Load<House>(houseIds).Values.Where(house => house is not null && house.OwnerCharId == character.CharId)) {
+                session.Delete(house);
+            }
+        }
+
+        session.Delete(Attic.GetDocumentId(character.CharId));
     }
 
     private static void LoadEquippedItems(IDocumentSession session, Wizard wizard) {
