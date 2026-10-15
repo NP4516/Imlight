@@ -269,7 +269,7 @@ internal static class BankSync {
     internal static WIZARD2_53_PROTOCOL.MSG_UPDATEBANKLIMIT UpdateBankLimit(Wizard wizard)
         => new() {
             GlobalID = wizard.GameObjectID,
-            BankLimit = wizard.StorageBehavior.BankLimit,
+            BankLimit = wizard.StorageBehavior.Limit,
         };
 
     /// <summary>

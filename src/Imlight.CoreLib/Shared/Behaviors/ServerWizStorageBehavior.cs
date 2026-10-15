@@ -55,9 +55,15 @@ public class ServerWizStorageBehavior {
     [JsonIgnore] public List<WizClientObjectItem> Items { get; set; } = [];
 
     /// <summary>
-    /// The most regular items the bank holds. Reagents, pet snacks and emotes do not count, see <see cref="BankRules"/>.
+    /// The capacity this character has of its own, from an expansion or a GM command. Zero follows the ini
+    /// default, see <see cref="Limit"/>.
     /// </summary>
     public int BankLimit { get; set; }
+
+    /// <summary>
+    /// The most regular items the bank holds. Reagents, pet snacks and emotes do not count, see <see cref="BankRules"/>.
+    /// </summary>
+    [JsonIgnore] public int Limit => BankLimit > 0 ? BankLimit : BankConfig.MaxBankItems;
 
     /// <summary>
     /// Raises the capacity of the bank, up to [Bank] MaxBankItems when that is set. A capacity that is above the
@@ -66,15 +72,16 @@ public class ServerWizStorageBehavior {
     /// <param name="amount">How much to add. Zero or less adds nothing.</param>
     /// <returns>The capacity after the expansion.</returns>
     internal int Expand(int amount) {
-        var expanded = (int) Math.Min((long) BankLimit + Math.Max(0, amount), int.MaxValue);
+        var current = Limit;
+        var expanded = (int) Math.Min((long) current + Math.Max(0, amount), int.MaxValue);
         var ceiling = BankConfig.MaxBankLimit;
-        BankLimit = ceiling > 0 ? Math.Max(BankLimit, Math.Min(expanded, ceiling)) : expanded;
+        BankLimit = ceiling > 0 ? Math.Max(current, Math.Min(expanded, ceiling)) : expanded;
 
         return BankLimit;
     }
 
     /// <summary>
-    /// The number of bank items that count against <see cref="BankLimit"/>.
+    /// The number of bank items that count against <see cref="Limit"/>.
     /// </summary>
     internal int CountRegularItems() => Items.Count(BankRules.CountsTowardBank);
 
@@ -84,7 +91,7 @@ public class ServerWizStorageBehavior {
     /// <param name="item">The item that would be added.</param>
     /// <returns>True when the item takes no space or a slot is free.</returns>
     internal bool HasRoomFor(WizClientObjectItem item)
-        => !BankRules.CountsTowardBank(item) || CountRegularItems() < BankLimit;
+        => !BankRules.CountsTowardBank(item) || CountRegularItems() < Limit;
 
     /// <summary>
     /// Adds an item to the bank.
@@ -173,7 +180,7 @@ public class ServerWizStorageBehavior {
     /// <param name="sharedBankLimit">The capacity of the account's shared bank.</param>
     /// <returns>The client behavior with both capacities.</returns>
     public ClientWizStorageBehavior ToClientBehavior(int sharedBankLimit) => new() {
-        m_bankLimit = BankLimit,
+        m_bankLimit = Limit,
         m_sharedBankLimit = sharedBankLimit,
         m_itemList = [],
     };

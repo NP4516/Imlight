@@ -20,7 +20,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Serialization;
-using Imlight.CoreLib.Game.Bank;
 using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -1518,18 +1517,11 @@ public class Wizard {
         };
 
     private void InitializeDefaultStorage()
-        => StorageBehavior = new ServerWizStorageBehavior {
-            BankLimit = BankConfig.MaxBankItems
-        };
+        => StorageBehavior = new ServerWizStorageBehavior();
 
     private void AfterDatabaseLoadStorageBehavior() {
         // Characters stored before the bank existed have no storage behavior yet.
         StorageBehavior ??= new ServerWizStorageBehavior();
-
-        // A stored limit of 0 means the ini key was unset at that time, so the ini value applies.
-        if (StorageBehavior.BankLimit <= 0) {
-            StorageBehavior.BankLimit = BankConfig.MaxBankItems;
-        }
     }
 
     /// <summary>

@@ -373,7 +373,7 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        var before = Context.Character.StorageBehavior.BankLimit;
+        var before = Context.Character.StorageBehavior.Limit;
         if (!Context.Character.ExpandBank(amount)) {
             InformSenderClient("Could not save the bank limit.");
 
@@ -382,7 +382,7 @@ internal class CommandModifyProtocol : CommandProtocol {
 
         Context.SessionActor.Tell(BankSync.UpdateBankLimit(Context.Character), null);
 
-        InformSenderClient($"Expanded the bank from {before} to {Context.Character.StorageBehavior.BankLimit}.");
+        InformSenderClient($"Expanded the bank from {before} to {Context.Character.StorageBehavior.Limit}.");
     }
 
     [Command("addgold")]
