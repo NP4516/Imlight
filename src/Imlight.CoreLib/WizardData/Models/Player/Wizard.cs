@@ -1278,7 +1278,7 @@ public class Wizard {
     public bool IncrementRegistryValue(string key) {
         var incrementSuccess = QuestBehavior.IncrementRegistryValue(key);
         if (!incrementSuccess) {
-            Logger.Warning("Could not increment registry value {0} for player {1}.",
+            Logger.Warning("Could not increment registry value {Key} for player {PlayerName}.",
                 Logger.Args(key, PlayerNameBehavior.GetWizardName()));
 
             return false;
@@ -1293,7 +1293,7 @@ public class Wizard {
     public bool IncrementQuestRegistryValue(string questName, string key) {
         var incrementSuccess = QuestBehavior.IncrementQuestRegistryValue(questName, key);
         if (!incrementSuccess) {
-            Logger.Warning("Could not increment quest registry value {0} for quest {1} for player {2}.",
+            Logger.Warning("Could not increment quest registry value {Key} for quest {QuestName} for player {PlayerName}.",
                 Logger.Args(key, questName, PlayerNameBehavior.GetWizardName()));
 
             return false;

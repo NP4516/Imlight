@@ -69,7 +69,7 @@ internal sealed class ResIncrementEntryHandler : BaseResultHandler<ResIncrementE
             .GetPlayerRef()
             .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryWizardMsg, queryTimeout).Result;
         if (queryResponse == null) {
-            Logger.Error("ResIncrementEntry handler failed to retrieve character data within {0} seconds.",
+            Logger.Error("ResIncrementEntry handler failed to retrieve character data within {TimeoutSeconds} seconds.",
                 Logger.Args(QueryWizardTimeoutSeconds));
 
             return false;
