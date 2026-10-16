@@ -76,7 +76,7 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
     );
     private static readonly bool s_hidePetWhileMounted
         = ConfigurationManager.Settings["Character.HidePetWhileMounted"].AsBool();
-    private const long ExpiredRentalGraceSeconds = 60;
+    private const long EXPIRED_RENTAL_GRACE_SECONDS = 60;
 
     private readonly Dictionary<ulong, long> _expiredRentals = [];
     private ulong _summonedPetId;
@@ -290,8 +290,12 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             var item = wizard.EquipmentBehavior.GetItem(message.ItemId) ?? wizard.InventoryBehavior.GetItem(message.ItemId);
 
             // A message that outlived its item, or one sent before the timer ran out, changes nothing.
-            if (item is null || !RentalItems.TryGetBehavior(item, out var behavior)
-                || !RentalItems.IsDue(behavior, DateTimeOffset.UtcNow.ToUnixTimeSeconds())) {
+            if (item is null || !RentalItems.TryGetBehavior(item, out var behavior)) {
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (!RentalItems.IsDue(behavior, now)) {
                 return;
             }
 
@@ -323,7 +327,11 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
 
     private void RememberExpiredRental(ulong itemId) {
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        foreach (var staleId in _expiredRentals.Where(expired => now - expired.Value > ExpiredRentalGraceSeconds).Select(expired => expired.Key).ToList()) {
+        var staleIds = _expiredRentals
+            .Where(expired => now - expired.Value > EXPIRED_RENTAL_GRACE_SECONDS)
+            .Select(expired => expired.Key)
+            .ToList();
+        foreach (var staleId in staleIds) {
             _expiredRentals.Remove(staleId);
         }
 
@@ -332,7 +340,7 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
 
     private bool WasRentalJustExpired(ulong itemId)
         => _expiredRentals.TryGetValue(itemId, out var expiredAt)
-            && DateTimeOffset.UtcNow.ToUnixTimeSeconds() - expiredAt <= ExpiredRentalGraceSeconds;
+            && DateTimeOffset.UtcNow.ToUnixTimeSeconds() - expiredAt <= EXPIRED_RENTAL_GRACE_SECONDS;
 
     private void SpawnPetEntity(WizClientObjectItem petItem = null) {
         var zoneActor = SessionActor.GetZoneActor();

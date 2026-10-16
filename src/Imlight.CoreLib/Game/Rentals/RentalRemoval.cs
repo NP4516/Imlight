@@ -45,6 +45,11 @@ internal sealed record RentalRemoval(bool WasEquipped,
                                      List<GameEffectBase> RemovedEffects,
                                      ulong TemplateId) {
 
+    private const byte NO_SLOT = 255;
+
     internal string SlotName => SlotType.ToString();
+
+    internal static RentalRemoval FromBackpack(WizClientObjectItem item)
+        => new(false, EquipmentSlotType.Mount, NO_SLOT, [], item.m_templateID.Full);
 
 }

@@ -583,16 +583,7 @@ public class Wizard {
             return false;
         }
 
-        var template = ItemHelper.GetItemTemplate(item);
-        var slotType = EquipmentSlotType.Mount;
-        byte slotIndex = 255;
-        List<GameEffectBase> removedEffects = [];
-        if (worn is not null) {
-            slotType = ItemHelper.GetItemSlot(template).SlotType;
-            slotIndex = EquipmentBehavior.GetSlotOfItem(itemId);
-            EquipmentBehavior.UnequipItem(itemId);
-            removedEffects = ResetUnequippedSlot(template, slotType);
-        }
+        removal = worn is null ? RentalRemoval.FromBackpack(item) : UnequipWornRental(item);
 
         if (InventoryBehavior.HasItem(itemId)) {
             InventoryBehavior.RemoveItem(itemId, out _);
@@ -611,8 +602,6 @@ public class Wizard {
         } catch (Exception ex) when (ex is TimeoutException or RavenException) {
             Logger.Error("Failed to delete the document of expired rental {0}: {1}", Logger.Args(itemId, ex.Message));
         }
-
-        removal = new RentalRemoval(worn is not null, slotType, slotIndex, removedEffects, item.m_templateID.Full);
 
         return true;
     }
@@ -1353,6 +1342,16 @@ public class Wizard {
 
         // Persistent save.
         WizardCollection.UpdateCharacterMount(this);
+    }
+
+    private RentalRemoval UnequipWornRental(WizClientObjectItem item) {
+        var template = ItemHelper.GetItemTemplate(item);
+        var slotType = ItemHelper.GetItemSlot(template).SlotType;
+        var slotIndex = EquipmentBehavior.GetSlotOfItem(item.m_globalID);
+        EquipmentBehavior.UnequipItem(item.m_globalID);
+        var removedEffects = ResetUnequippedSlot(template, slotType);
+
+        return new RentalRemoval(true, slotType, slotIndex, removedEffects, item.m_templateID.Full);
     }
 
     private List<GameEffectBase> ResetUnequippedSlot(WizItemTemplate template, EquipmentSlotType slotType) {
