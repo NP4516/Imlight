@@ -127,6 +127,10 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
                 }
             }
 
+            if (template.m_behaviors?.OfType<ElixirBehaviorTemplate>().FirstOrDefault() is { } elixirTemplate) {
+                PlaySound(elixirTemplate.m_unequipSound);
+            }
+
             // Sync health and mana display, clamping current values to the new maximums.
             var clientStats = wizard.GameStats.GetClientTypeAlternative();
             if (wizard.GameStats.m_currentHitpoints > clientStats.m_baseHitpoints) {

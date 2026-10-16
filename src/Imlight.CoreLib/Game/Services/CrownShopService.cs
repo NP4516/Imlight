@@ -432,6 +432,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                     wizard.GetInitializedGameObject());
             }
 
+            PlaySound(elixirTemplate.m_equipSound);
             return true;
         }
 
@@ -490,6 +491,8 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             parentID = elixirItem.m_globalID,
             EffectEnabled = 1
         });
+
+        PlaySound(elixirTemplate.m_equipSound);
 
         // Update health and mana display with new maximums.
         var clientStats = wizard.GameStats.GetClientTypeAlternative();

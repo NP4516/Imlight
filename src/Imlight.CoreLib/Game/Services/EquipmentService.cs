@@ -51,6 +51,7 @@ using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Game.Pet;
@@ -512,6 +513,7 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
                     wizard.GetInitializedGameObject());
             }
 
+            PlaySound(elixirTemplate.m_equipSound);
             SyncHealthAndMana(wizard);
             return;
         }
@@ -561,6 +563,7 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             EffectEnabled = 1
         });
 
+        PlaySound(elixirTemplate.m_equipSound);
         SyncHealthAndMana(wizard);
         StartElixirPlaytimeTicker();
     }
@@ -677,6 +680,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
                 var removedEffects = CharacterEffectHelper.RemoveEffectsFromWizard(wizard, template);
                 if (removedEffects is { Count: > 0 }) {
                     SendRemoveEffects(removedEffects);
+                }
+
+                if (template.m_behaviors?.OfType<ElixirBehaviorTemplate>().FirstOrDefault() is { } elixirTemplate) {
+                    PlaySound(elixirTemplate.m_unequipSound);
                 }
             }
         }
