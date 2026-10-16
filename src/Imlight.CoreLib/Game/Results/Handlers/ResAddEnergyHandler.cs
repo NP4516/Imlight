@@ -57,14 +57,10 @@ internal sealed class ResAddEnergyHandler : BaseResultHandler<ResAddEnergy> {
                 ? (int) (Result.m_energyPercent * maxEnergy)
                 : maxEnergy;
 
-        Logger.Error($"{addedEnergy}");
-
         var energy = wizard.PetOwnerBehavior.Energy + addedEnergy;
         energy = Result.m_overfill != 0
             ? Math.Max(0, energy)
             : Math.Clamp(energy, 0, maxEnergy);
-
-        Logger.Error($"{energy}");
 
         wizard.UpdateEnergy(energy);
         context.GetPlayerRef().Tell(new PET_9_PROTOCOL.MSG_PETENERGYTICK {
