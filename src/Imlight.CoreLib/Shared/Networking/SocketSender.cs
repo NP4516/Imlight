@@ -93,25 +93,16 @@ internal sealed class SocketSender : ReceiveActor, IDisposable {
     }
 
     private void SendToSocket(IMessage message) {
-        if (_isDisposed) {
-            return;
-        }
-
-        try {
-            if (!_socket.Connected) {
-                Dispose();
-                return;
-            }
-        }
-        catch (ObjectDisposedException) {
+        if (!_socket.Connected) {
             Dispose();
-            return;
         }
-
         if (_isSending) {
             Logger.Error("SessionActor {SessionId} send failure: " +
                          "Synchronous send operation already in progress.", Logger.Args(_sessionid));
                          
+            return;
+        }
+        if (_isDisposed) {
             return;
         }
 
@@ -125,10 +116,6 @@ internal sealed class SocketSender : ReceiveActor, IDisposable {
                     $"SessionActor [{_sessionid}] send failure: " +
                     $"Sent {bytesSent} bytes out of {data.Length} bytes.");
             }
-        }
-        catch (ObjectDisposedException) {
-            Dispose();
-            return;
         }
         catch (SocketException ex) {
             throw new SessionFatalException($"SessionActor [{_sessionid}] send failure: {ex.SocketErrorCode}");
