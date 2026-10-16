@@ -219,10 +219,12 @@ public class Wizard {
         var healthDifference = newBaseStats.m_hitpoints - oldBaseStats.m_hitpoints;
         var manaDifference = newBaseStats.m_mana - oldBaseStats.m_mana;
         var powerPipDifference = newBaseStats.m_pipChance - oldBaseStats.m_pipChance;
+        var energyDifference = newBaseStats.m_petEnergy - oldBaseStats.m_petEnergy;
 
         GameStats.m_baseHitpoints += healthDifference;
         GameStats.m_baseMana += manaDifference;
         GameStats.m_powerPipBase += powerPipDifference;
+        GameStats.m_energyMax += energyDifference;
 
         // Don't reset XP - preserve overflow XP when leveling up.
         // XP is managed by AddExperiencePoints/RemoveExperiencePoints.
@@ -1510,15 +1512,11 @@ public class Wizard {
     }
 
     private void AfterDatabaseLoadPetOwnerBehavior() {
-        var magicSchool = MagicSchoolBehavior.MagicSchool;
-        var level = MagicSchoolBehavior.Level;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
-        var normMaxEnergy = baseStats.m_petEnergy;
-        GameStats.m_energyMax = normMaxEnergy;
+        var maxEnergy = GameStats.m_energyMax;
 
         if (PetOwnerBehavior is null) {
             PetOwnerBehavior = new ServerPetOwnerBehavior();
-            PetOwnerBehavior.SetEnergy(GameStats.m_energyMax);
+            PetOwnerBehavior.SetEnergy(maxEnergy);
 
             return;
         }
@@ -1540,8 +1538,8 @@ public class Wizard {
         var energyRegained = timeDifference / energyTickIntervalInSeconds;
 
         // If the player has regained more energy than their max, set it to the max.
-        if (PetOwnerBehavior.Energy + energyRegained > normMaxEnergy) {
-            UpdateEnergy(normMaxEnergy);
+        if (PetOwnerBehavior.Energy + energyRegained > maxEnergy) {
+            UpdateEnergy(maxEnergy);
         }
         else {
             UpdateEnergy((int) (PetOwnerBehavior.Energy + energyRegained));
@@ -1556,6 +1554,8 @@ public class Wizard {
         GameStats.MagicSchool = MagicSchoolBehavior.MagicSchool;
         GameStats.m_schoolID = (uint) MagicSchoolBehavior.MagicSchool;
         GameStats.m_highestCharacterLevelOnAccount = highestLevelOnAcc;
+
+        CharacterHelper.RecalculateGameStats(this);
     }
 
     private void AfterDatabaseLoadAlchemyBehavior()
