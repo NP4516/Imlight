@@ -18,14 +18,15 @@
 
 using System;
 using System.Linq;
+using Imcodec.Math;
+using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
+using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.WizardData.Databases;
+using Imlight.CoreLib.WizardData.Models.Player;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Linq;
 using Raven.Client.Documents.Session;
-using Imlight.Common;
-using Imlight.CoreLib.WizardData.Databases;
-using Imlight.CoreLib.WizardData.Models.Player;
-using Imcodec.ObjectProperty.TypeCache;
-using Imcodec.Math;
 
 namespace Imlight.CoreLib.WizardData.Collections;
 
@@ -481,6 +482,9 @@ public static class WizardCollection {
             .Where(i => wizard.EquipmentBehavior.EquippedItemIds
             .Any(e => i.m_globalID == e))
         ];
+
+        // Synchronize active elixir behaviors with their remaining playtime seconds from SlotList.
+        wizard.EquipmentBehavior.SyncActiveElixirTimes();
 
         // The friends list is expanded to include a 'relationship' model
         // which helps keep track of the relationship between two players for moderation purposes.
