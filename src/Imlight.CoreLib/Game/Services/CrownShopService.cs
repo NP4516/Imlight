@@ -39,9 +39,11 @@
  * Last Updated: 15.10.2026
  */
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.CoreObject;
-using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
@@ -50,23 +52,20 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.CrownShop;
 using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Game.Packs;
+using Imlight.CoreLib.Game.Results;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 
 namespace Imlight.CoreLib.Game.Services;
 
-
 internal class CrownShopService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private static readonly Random _random = new Random();
-    private static readonly CoreObjectSerializer s_coreObjectSerializer = new CoreObjectSerializer(behaviors: SerializerFlags.None);
+    private static readonly Random _random = new();
+    private static readonly CoreObjectSerializer s_coreObjectSerializer = new(behaviors: SerializerFlags.None);
 
     private static ulong _randomUlong() {
         Span<byte> bytes = stackalloc byte[8];
@@ -74,10 +73,8 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         return BitConverter.ToUInt64(bytes);
     }
 
-
     protected static Props Props(SessionActor parentActor)
-            => Akka.Actor.Props.Create(() => new CrownShopService(parentActor));
-
+        => Akka.Actor.Props.Create(() => new CrownShopService(parentActor));
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PCS_SEGDATA_REQUEST))]
     private void ReceiveCrownShopSegDataRequest(WIZARD_12_PROTOCOL.MSG_PCS_SEGDATA_REQUEST message) {
@@ -115,16 +112,16 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         }
 
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_SEGDATA_RESPONSE {
-            Success = (byte) 1,
+            Success = 1,
             Data = serializedData
         });
 
         // We need to call this to "sync" the CrownShop Crown-Balance, else it just says 0
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_CROWNBALANCE {
-            Failure = (byte) 0,
+            Failure = 0,
             TotalCrowns = wizard.Account.Crowns,
             CharacterID = wizard.CharId,
-            CacheBalanceForCSSegmentation = (byte) 1
+            CacheBalanceForCSSegmentation = 1
         });
     }
 
@@ -193,7 +190,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             return;
         }
 
-        int amountToPay = int.MaxValue;
+        int amountToPay;
         if (message.Type == 0) {
             // User is buying with gold
             amountToPay = message.Count * catalogItem.m_goldCost;
@@ -237,7 +234,8 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                 CharacterID = wizard.CharId,
                 CacheBalanceForCSSegmentation = 1
             });
-        }else {
+        }
+        else {
             throw new InvalidOperationException($"Invalid currency provided: {message.Type}");
         }
 
@@ -264,7 +262,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                     });
                     return;
                 case ReagentItemTemplate reagentTemplate:
-                    if(!wizard.AddReagent(reagentTemplate.m_templateID, out ClientReagentItem reagentObj)) {
+                    if (!wizard.AddReagent(reagentTemplate.m_templateID, out ClientReagentItem reagentObj)) {
                         Logger.Warning("Could not add reagent to inventory.");
 
                         SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_RESPONSE {
@@ -303,36 +301,28 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                     // TODO
                     return;
                 case WizItemTemplate wizItemTemplate:
-                    // Check if the item is an Elixir
-                    var elixirBehavior = itemTemplate?.m_behaviors.OfType<ElixirBehaviorTemplate>().FirstOrDefault();
-                    if (elixirBehavior != null) {
-                        // Check if the player wants to redeem the Elixir
-                        if (message.PurchaseElixirEquipNow > 0) {
+                    // Check if the item is an Elixir.
+                    var elixirBehavior = wizItemTemplate.m_behaviors?.OfType<ElixirBehaviorTemplate>().FirstOrDefault();
+                    if (elixirBehavior is not null && message.PurchaseElixirEquipNow > 0) {
+                        if (TryEquipElixir(wizard, message.Item, wizItemTemplate, elixirBehavior)) {
                             return;
                         }
-
+                        // If it couldn't be equipped (already 3 active, duplicate type, etc.), fall back to inventory.
                     }
 
-
-                    elixirBehavior = itemTemplate?.m_behaviors.OfType<LevelUpElixirBehaviorTemplate>().FirstOrDefault();
-                    if (elixirBehavior != null) {
-                        if (message.PurchaseElixirEquipNow > 0) {
-                            return;
-                        }
-
+                    var levelUpElixir = wizItemTemplate.m_behaviors?.OfType<LevelUpElixirBehaviorTemplate>().FirstOrDefault();
+                    if (levelUpElixir is not null && message.PurchaseElixirEquipNow > 0) {
+                        return;
                     }
 
-                    elixirBehavior = itemTemplate?.m_behaviors.OfType<WorldElixirBehaviorTemplate>().FirstOrDefault();
-                    if (elixirBehavior != null) {
-                        if (message.PurchaseElixirEquipNow > 0) {
-                            return;
-                        }
-
+                    var worldElixir = wizItemTemplate.m_behaviors?.OfType<WorldElixirBehaviorTemplate>().FirstOrDefault();
+                    if (worldElixir is not null && message.PurchaseElixirEquipNow > 0) {
+                        return;
                     }
 
                     // Check if the item is emote or teleport effect
-                    var customEmote = itemTemplate?.m_behaviors?.OfType<CustomEmoteBehaviorTemplate>().FirstOrDefault();
-                    if (customEmote != null && customEmote.m_bitFieldNumber >= 0) {
+                    var customEmote = itemTemplate.m_behaviors?.OfType<CustomEmoteBehaviorTemplate>().FirstOrDefault();
+                    if (customEmote is not null && customEmote.m_bitFieldNumber >= 0) {
                         if (customEmote.m_emoteType == CustomEmoteType.CE_Teleport) {
                             wizard.UnlockCustomTeleportEffect(customEmote.m_bitFieldNumber);
                         }
@@ -364,7 +354,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
                         // This adds the item to 'REVIEW MY ORDER'
                         SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-                            ItemGlobalID = wizard.GameObjectID,
+                            ItemGlobalID = itemCoreObject.m_globalID,
                             ItemLocation = 1,
                             ItemTemplateID = (uint) message.Item
                         });
@@ -374,7 +364,8 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                     Logger.Warning($"Unhandled TemplateID: {message.Item}");
                     break;
             }
-        }else {
+        }
+        else {
             var targetCharacter = WizardCollection.GetCharacterUnloaded(message.Recipient);
             if (targetCharacter is null) {
                 Logger.Error("Recipient with CharacterId {0} was not found.", Logger.Args(message.Recipient));
@@ -422,6 +413,118 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         }
     }
 
+    private bool TryEquipElixir(Wizard wizard,
+                                ulong templateId,
+                                WizItemTemplate itemTemplate,
+                                ElixirBehaviorTemplate elixirTemplate) {
+        uint durationSeconds = 0;
+        if (!string.IsNullOrEmpty(elixirTemplate.m_expireTime)) {
+            _ = uint.TryParse(elixirTemplate.m_expireTime, out durationSeconds);
+        }
+
+        // Case 1: Instant refill (duration == 0).
+        if (durationSeconds == 0) {
+            if (elixirTemplate.m_equipActionList?.m_results?.Count > 0) {
+                ResultDispatcher.ExecuteResults(
+                    Context,
+                    elixirTemplate.m_equipActionList,
+                    SessionActor.ActorRef,
+                    wizard.GetInitializedGameObject());
+            }
+
+            return true;
+        }
+
+        // Case 2: Timed elixir (duration > 0).
+        var equipBehavior = wizard.EquipmentBehavior;
+        if (!equipBehavior.CanEquipElixir(elixirTemplate)) {
+            return false; // Can't equip right now; caller falls back to inventory.
+        }
+
+        var elixirItem = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(templateId);
+        elixirItem.m_characterId = (GID) wizard.CharId;
+        CoreObjectFactory.InitializeCoreObjectBehaviors(elixirItem, templateId);
+
+        if (CoreObjectFactory.FindBehaviorInstance<ClientElixirBehavior>(elixirItem, out var clientElixir)) {
+            clientElixir.m_expireTime = durationSeconds;
+            clientElixir.m_statsApplied = true;
+        }
+
+        if (!equipBehavior.EquipElixir(elixirItem, durationSeconds)) {
+            return false;
+        }
+
+        var addedEffects = CharacterEffectHelper.AddEffectsToWizard(wizard, itemTemplate);
+
+        WizardItemCollection.AddItem(elixirItem);
+        WizardCollection.UpdateCharacterItems(wizard);
+
+        if (s_coreObjectSerializer.Serialize(elixirItem, 24, out var serializedItem)) {
+            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+                GlobalID = wizard.GameObjectID,
+                SerializedItem = serializedItem
+            });
+        }
+
+        SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+            ItemGlobalID = elixirItem.m_globalID,
+            ItemLocation = 1,
+            ItemTemplateID = (uint) templateId
+        });
+
+        SendToSocket(new GAME_5_PROTOCOL.MSG_EQUIPITEM {
+            ItemID = elixirItem.m_globalID,
+            SlotName = "Elixir",
+            IsEquip = 1
+        });
+
+        SendAddEffects(wizard, addedEffects);
+
+        // Start HUD countdown timer and enable HUD icon.
+        SendToSocket(new WIZARD2_53_PROTOCOL.MSG_SETELIXIRTIMER {
+            GlobalID = elixirItem.m_globalID,
+            TimerTime = durationSeconds
+        });
+
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE {
+            parentID = elixirItem.m_globalID,
+            EffectEnabled = 1
+        });
+
+        // Update health and mana display with new maximums.
+        var clientStats = wizard.GameStats.GetClientTypeAlternative();
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH {
+            CharacterID = wizard.GameObjectID,
+            NewHealth = wizard.GameStats.m_currentHitpoints,
+            NewHealthMax = clientStats.m_baseHitpoints,
+            DisplayDiff = 1
+        });
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEMANA {
+            Mana = wizard.GameStats.m_currentMana,
+            MaxMana = clientStats.m_baseMana,
+            DisplayDiff = 1
+        });
+
+        return true;
+    }
+
+    private void SendAddEffects(Wizard wizard, List<GameEffectBase> effects) {
+        if (effects is null || effects.Count == 0) {
+            return;
+        }
+
+        foreach (var effect in effects) {
+            if (!s_coreObjectSerializer.Serialize(effect, PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out var effectData)) {
+                continue;
+            }
+
+            SendToSocket(new GAME_5_PROTOCOL.MSG_ADDEFFECT {
+                GameObjectID = wizard.GameObjectID,
+                EffectData = effectData
+            });
+        }
+    }
+
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST))]
     private void ReceiveWishlistUpdate(WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST message) {
 
@@ -437,6 +540,6 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PCS_PATCH))]
     private void ReceivePCsPatch(WIZARD_12_PROTOCOL.MSG_PCS_PATCH message) {
         Logger.Warning("What is MSG_PCS_PATCH for? This is called when someone opens player gifts");
-
     }
+
 }
