@@ -16,11 +16,11 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
  * ========================================================================
- * CROWNSHOP SERVICE
+ * GIFTING SERVICE
  * ========================================================================
  * 
  * PURPOSE:
- * Handles the functionality of the crown shop
+ * Handles the functionality of gifting
  * 
  * 
  * USAGE EXAMPLE:
@@ -30,13 +30,11 @@
  * 
  * 
  * TODO:
- * - Populating with correct data
- * - Removing from wishlist (& Wishlist privacy)
- * - Daily Spiral quests
+ * - There are 3 types of possible ways for "gifts"
  * 
  * Created by: Phill030
  * Version: KALI 1.0
- * Last Updated: 15.10.2026
+ * Last Updated: 17.10.2026
  */
 using Akka.Actor;
 using Imcodec.CoreObject;
