@@ -1,22 +1,56 @@
+/*
+ * Imlight
+ * Copyright (C) 2025 Revive101
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * ========================================================================
+ * CROWNSHOP SERVICE
+ * ========================================================================
+ * 
+ * PURPOSE:
+ * Handles the functionality of the crown shop
+ * 
+ * 
+ * USAGE EXAMPLE:
+ *
+ * 
+ * NOTE:
+ * 
+ * 
+ * TODO:
+ * - Populating with correct data
+ * - Removing from wishlist (& Wishlist privacy)
+ * - Daily Spiral quests
+ * 
+ * Created by: Phill030
+ * Version: KALI 1.0
+ * Last Updated: 15.10.2026
+ */
 using Akka.Actor;
-using Akka.Dispatch;
 using Imcodec.CoreObject;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
-using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Packs;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
-using Imlight.CoreLib.WizardData.Collections;
-using Imlight.CoreLib.WizardData.Models.Player;
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using static ICSharpCode.SharpZipLib.Zip.ExtendedUnixData;
 
 namespace Imlight.CoreLib.Game.Services;
 
