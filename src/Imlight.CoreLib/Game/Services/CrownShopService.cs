@@ -147,6 +147,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PRICE_LOCK_RESPONSE {
                 Error = 1,
             });
+            return;
         }
 
         if (!CrownShopHandler.TryGetCrownShopItem(message.Item, out var item)) {
