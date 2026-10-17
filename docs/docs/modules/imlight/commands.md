@@ -79,7 +79,7 @@ Your command context will not drop. If you select a player, that player will sti
 | cantriplevelup | Quality Assurance | `.mod cantriplevelup` | Levels up your cantrip level. |
 | cantriplevel | Quality Assurance | `.mod cantriplevel $level` | Changes your cantrip level. |
 | badge | Quality Assurance | `.mod badge $locale_id` | Changes your badge. This must be a locale id to function. |
-| setcrowns | Quality Assurance | `.mod setcrowns $newAmount` | Changes your badge. This must be a locale id to function. |
+| setcrowns | Quality Assurance | `.mod setcrowns $newAmount` | Changes your crowns |
 
 ## DynaMod Commands
 
