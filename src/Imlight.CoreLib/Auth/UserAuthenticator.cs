@@ -39,6 +39,7 @@
  */
 
 using System;
+using System.Diagnostics;
 using Imcodec.IO;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Cryptography;
@@ -77,6 +78,7 @@ internal static class UserAuthenticator {
         = ConfigurationManager.Settings["Global Settings.EnforceRevision"].AsBool();
     private static readonly string s_serverRevision 
         = ConfigurationManager.Settings["Global Settings.GameRevision"].AsString();
+    private static readonly TimeSpan s_deadline = TimeSpan.FromSeconds(10);
 
     internal class AuthenticationDetails {
         
@@ -94,14 +96,26 @@ internal static class UserAuthenticator {
     /// <param name="authMessage">The authentication message.</param>
     /// <returns>The authentication details.</returns>
     internal static AuthenticationDetails Authenticate(SessionActor sessionActor, MSG_USER_AUTHEN_V3 authMessage) {
+        var stopwatch = Stopwatch.StartNew();
+        var details = AuthenticateUser(sessionActor, authMessage);
+        Logger.Debug("SessionActor {Id} authentication finished in {Elapsed} ms with {Result}.",
+            Logger.Args(sessionActor.SessionID, stopwatch.ElapsedMilliseconds, details._result));
+
+        return details;
+    }
+
+    private static AuthenticationDetails AuthenticateUser(SessionActor sessionActor, MSG_USER_AUTHEN_V3 authMessage) {
         var sessionId  = sessionActor.SessionID;
         var offerTime  = sessionActor.OfferTime;
         var offerMilli = sessionActor.OfferMillisecondsIntoSecond;
         var (returnedSessionid, username, clientKey1) = DecodeRec1(authMessage.Rec1, sessionActor);
         var details = new AuthenticationDetails();
+        var stopwatch = Stopwatch.StartNew();
 
         // Check if the session id matches.
         if (returnedSessionid != sessionId) {
+            Logger.Warning("SessionActor {0} was rejected: session id mismatch. (Given: {1})",
+                Logger.Args(sessionId, returnedSessionid));
             details._result = UserAuthenResult.AuthenFailed;
 
             return details;
@@ -121,11 +135,16 @@ internal static class UserAuthenticator {
         }
 
         // Check if we can find the account.
-        var matchedAccount = AccountCollection.GetAccount(username);
+        var matchedAccount = AccountCollection.GetAccountForCharacterList(username);
         if (matchedAccount is null) {
+            Logger.Warning("SessionActor {0} was rejected: account not found.", Logger.Args(sessionId));
             details._result = UserAuthenResult.AuthenFailed;
 
             return details;
+        }
+
+        if (stopwatch.Elapsed > s_deadline) {
+            return TimedOut(details, sessionActor, stopwatch);
         }
 
         // Check to see if this machine is banned.
@@ -154,6 +173,10 @@ internal static class UserAuthenticator {
             return details;
         }
 
+        if (stopwatch.Elapsed > s_deadline) {
+            return TimedOut(details, sessionActor, stopwatch);
+        }
+
         details._account = matchedAccount;
 
         var doesPasswordMatch = ClientKey.VerifyCK1(matchedAccount.PasswordHash, sessionId, offerTime, offerMilli, clientKey1);
@@ -175,10 +198,20 @@ internal static class UserAuthenticator {
             return details;
         }
         else {
+            Logger.Warning("SessionActor {0} was rejected: bad password.", Logger.Args(sessionId));
             details._result = UserAuthenResult.AuthenFailed;
 
             return details;
         }
+    }
+
+    private static AuthenticationDetails TimedOut(AuthenticationDetails details, SessionActor sessionActor, Stopwatch stopwatch) {
+        Logger.Warning("SessionActor {0} authentication ran past its deadline after {1} ms.",
+            Logger.Args(sessionActor.SessionID, stopwatch.ElapsedMilliseconds));
+
+        details._result = UserAuthenResult.Timeout;
+
+        return details;
     }
 
     private static (ushort, string, string) DecodeRec1(ByteString rec1, SessionActor sessionActor) {

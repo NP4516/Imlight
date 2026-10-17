@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -57,20 +57,31 @@ public class TcpListenerActor : ReceiveActor {
     private readonly CancellationTokenSource _tokenSource;
     private readonly IActorRef _serverRef;
 
-    public TcpListenerActor(string name, int port, IActorRef serverRef) {
+    public TcpListenerActor(string name, int port, IActorRef serverRef, bool startListening = true) {
         this.Name = name;
         this.Port = port;
         this.Listener = new TcpListener(IPAddress.Parse("0.0.0.0"), port);
         this._tokenSource = CancellationTokenSource.CreateLinkedTokenSource(new CancellationToken());
         this._serverRef = serverRef;
 
-        Start();
+        Receive<SERVER_100_PROTOCOL.MSG_STARTLISTENING>(_ => {
+            Start();
+            Sender.Tell(new SERVER_100_PROTOCOL.MSG_STARTLISTENING_COMPLETE());
+        });
+
+        if (startListening) {
+            Start();
+        }
     }
 
-    public static Props Props(string name, int port, IActorRef serverRef) 
-        => Akka.Actor.Props.Create(() => new TcpListenerActor(name, port, serverRef));
+    public static Props Props(string name, int port, IActorRef serverRef, bool startListening = true) 
+        => Akka.Actor.Props.Create(() => new TcpListenerActor(name, port, serverRef, startListening));
 
     public async void Start() {
+        if (Listening) {
+            return;
+        }
+
         try {
             this.Listener.Start();
             this.Listening = true;
@@ -123,6 +134,13 @@ public class TcpListenerActor : ReceiveActor {
     private void AllocateNewSocket(Socket socket) {
         Logger.Debug("TcpListener for {Name} accepted connection from {RemoteEndPoint}.",
             Logger.Args(Name, socket.RemoteEndPoint?.ToString()));
+
+        try {
+            socket.NoDelay = true;
+        } catch (Exception ex) when (ex is SocketException or ObjectDisposedException) {
+            Logger.Debug("TcpListener for {Name} could not set NoDelay on a socket. {Exception}",
+                Logger.Args(Name, ex.Message));
+        }
 
         var msg = new SERVER_100_PROTOCOL.MSG_ALLOCATESOCKET() { Socket = socket };
         _serverRef.Tell(msg);

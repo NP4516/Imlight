@@ -29,7 +29,6 @@
  * Implements complex reagent quantity and rarity rolling mechanics.
  * 
  * TODO:
- * - Investigate icon sourcing for non-standard reagent types
  * 
  * Created by: Jooty
  * Version: KALI 1.0
@@ -66,9 +65,12 @@ internal sealed class InteractReagentComponent(ZoneEntity entity)
     public string ServiceName => "Interact";
     public string NpcIcon {
         get {
-            // todo: Not all icons come from shared worlddata.
-            var goTemplate = Entity.Template as GameObjectTemplate;
-            return $"|_Shared|WorldData|{goTemplate.m_sIcon}";
+            string icon = (Entity.Template as GameObjectTemplate)?.m_sIcon;
+            if (string.IsNullOrEmpty(icon)) {
+                return "";
+            }
+
+            return icon.Contains('|') ? icon : $"|_Shared|WorldData|{icon}";
         }
     }
     public string NpcNameKey {
@@ -77,7 +79,12 @@ internal sealed class InteractReagentComponent(ZoneEntity entity)
                 return "";
             }
 
-            // An object name that doesn't resolve to a reagent template used to throw here, and the memento
+            string displayName = goTemplate.m_displayName;
+            if (!string.IsNullOrEmpty(displayName)) {
+                return displayName;
+            }
+
+            // A node name that doesn't resolve to a reagent template used to throw here, and the memento
             // reads this key unguarded while building the press-X banner, suppressing the prompt for the
             // whole node. Fall back to empty so the banner still appears.
             var reagentItemTemplate = ReagentFactory.GetReagentTemplate(goTemplate.m_objectName);

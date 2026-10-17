@@ -29,6 +29,7 @@ namespace Imlight.CoreLib.WizardData.Collections;
 public static class AccountCollection {
     
     public const string CollectionName = "Accounts";
+    private const int LoginWarmupAccountSample = 5;
     private static readonly IDocumentStore s_store;
 
     static AccountCollection() {
@@ -107,8 +108,12 @@ public static class AccountCollection {
         return UpdateAccount(accountId.Value, update);
     }
 
-    private static Account LoadAccountDetails(IDocumentSession session, Account account) {
-        WizardCollection.LoadWizardsOntoAccount(account.AccountId, ref account);
+    private static Account LoadAccountDetails(IDocumentSession session, Account account, bool characterListOnly = false) {
+        if (characterListOnly) {
+            WizardCollection.LoadWizardsForCharacterList(account.AccountId, ref account);
+        } else {
+            WizardCollection.LoadWizardsOntoAccount(account.AccountId, ref account);
+        }
 
         var infractions = session.Query<Infraction>(collectionName: InfractionCollection.CollectionName)
             .Where(i => i.AccountId == account.AccountId)
@@ -214,6 +219,57 @@ public static class AccountCollection {
         return account is null
             ? null
             : LoadAccountDetails(session, account);
+    }
+
+    /// <summary>
+    /// Gets an account from the database by its username, with only the character data the character
+    /// list needs. Use <see cref="GetAccount(string)"/> when the characters are going to be played.
+    /// </summary>
+    /// <param name="username"></param>
+    /// <returns></returns>
+    public static Account GetAccountForCharacterList(string username) {
+        using var session = s_store.OpenSession();
+
+        var account = session.Query<Account>(collectionName: CollectionName)
+            .FirstOrDefault(a => a.Username == username);
+
+        return account is null
+            ? null
+            : LoadAccountDetails(session, account, characterListOnly: true);
+    }
+
+    /// <summary>
+    /// Gets an account from the database by its ID, with only the character data the character list needs.
+    /// Use <see cref="GetAccount(ulong)"/> when the characters are going to be played.
+    /// </summary>
+    /// <param name="id"></param>
+    /// <returns></returns>
+    public static Account GetAccountForCharacterList(ulong id) {
+        using var session = s_store.OpenSession();
+
+        var account = session.Query<Account>(collectionName: CollectionName)
+            .FirstOrDefault(a => a.AccountId == id);
+
+        return account is null
+            ? null
+            : LoadAccountDetails(session, account, characterListOnly: true);
+    }
+
+    /// <summary>
+    /// Runs the queries of a character list login without writing anything. It uses the stored account with
+    /// the most characters, or an account that matches nothing when none is stored.
+    /// </summary>
+    /// <returns></returns>
+    internal static Account GetAccountForLoginWarmup() {
+        using var session = s_store.OpenSession();
+
+        var account = session.Query<Account>(collectionName: CollectionName)
+            .Take(LoginWarmupAccountSample)
+            .ToList()
+            .OrderByDescending(a => a.CharacterIds.Count)
+            .FirstOrDefault() ?? new Account();
+
+        return LoadAccountDetails(session, account, characterListOnly: true);
     }
 
     /// <summary>

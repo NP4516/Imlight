@@ -360,5 +360,34 @@ public sealed class SERVER_100_PROTOCOL : IServerProtocol {
         public ushort[] PlayerCounts;
 
     }
+
+    /// <summary>
+    /// Asks the game server to close a stale session, such as the one a reattaching client left behind.
+    /// </summary>
+    public class MSG_KICKSESSION : IServerMessage {
+
+        public byte MessageOrder { get; } = 31;
+        public byte ServiceID { get; } = 100;
+
+        public ushort SessionID;
+
+    }
+
+    /// <summary>
+    /// Tells a server, and the servers it owns, to bind their TCP listeners and start accepting connections.
+    /// </summary>
+    public class MSG_STARTLISTENING : IServerMessage {
+
+        public byte MessageOrder { get; } = 32;
+        public byte ServiceID { get; } = 100;
+
+    }
+
+    public class MSG_STARTLISTENING_COMPLETE : IServerMessage {
+
+        public byte MessageOrder { get; } = 33;
+        public byte ServiceID { get; } = 100;
+
+    }
     
 }

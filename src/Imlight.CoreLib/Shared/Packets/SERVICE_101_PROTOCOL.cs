@@ -184,6 +184,7 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 101;
 
         public string RemoteIp;
+        public bool CountTimeout;
 
     }
 
@@ -197,6 +198,7 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 101;
 
         public bool Found;
+        public int PriorTimeouts;
         public ulong UserId;
         public ulong CharId;
         public string FallbackZone;
@@ -217,6 +219,17 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 101;
 
         public string RemoteIp;
+
+    }
+
+    /// <summary>
+    /// Asks the equipment service to re-sync the summoned pet after the mount
+    /// changed outside its own equip handlers.
+    /// </summary>
+    public class MSG_SYNC_PET_FOR_MOUNT : IServerMessage {
+
+        public byte MessageOrder { get; } = 20;
+        public byte ServiceID { get; } = 101;
 
     }
 

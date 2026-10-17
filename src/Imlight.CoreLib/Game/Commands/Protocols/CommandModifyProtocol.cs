@@ -17,8 +17,10 @@
  */
 
 using System;
+using System.Linq;
 using Imcodec.CoreObject;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Cantrips;
 using Imlight.CoreLib.Game.Pet;
@@ -132,8 +134,28 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
+        var isPetTemplate = PetFactory.IsPetTemplate((uint) templateIdLong);
+        if (!isPetTemplate && template.m_behaviors.Any(b => b?.m_behaviorName.ToString() == "PetItemBehavior")) {
+            InformSenderClient("Cannot add this pet item because it is not in the pet list.");
+
+            return;
+        }
+
+        if (!isPetTemplate) {
+            var probe = CoreObjectFactory.FinalizeCoreObject(templateIdLong) as WizClientObjectItem;
+            if (probe is not null) {
+                CoreObjectFactory.InitializeCoreObjectBehaviors(probe, probe.m_templateID);
+            }
+
+            if (probe?.m_inactiveBehaviors?.Contains(null) == true) {
+                InformSenderClient("Cannot add this item because one of its behaviors cannot be created.");
+
+                return;
+            }
+        }
+
         WizClientObjectItem coreObject;
-        var addedItemSuccess = PetFactory.IsPetTemplate((uint) templateIdLong)
+        var addedItemSuccess = isPetTemplate
             ? Context.Character.AddHatchedPetToInventory((uint) templateIdLong, out coreObject)
             : Context.Character.AddItemToInventory(templateIdLong, out coreObject);
         if (!addedItemSuccess) {
@@ -145,7 +167,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         var coSerializer = new CoreObjectSerializer(
             behaviors: Imcodec.ObjectProperty.SerializerFlags.None
         );
-        if (!coSerializer.Serialize(coreObject, 24, out var serializedCoreObject)) {
+        if (!coSerializer.Serialize(coreObject, (uint) (PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit), out var serializedCoreObject)) {
             InformSenderClient("Failed to serialize core object.");
 
             return;

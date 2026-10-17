@@ -98,14 +98,26 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
         CreateObjectForAllPlayers();
     }
 
-    public override void OnEnabled()
-        => CreateObjectForAllPlayers();
+    public override void OnEnabled() {
+        CreateObjectForAllPlayers();
 
-    public override void OnDisabled() =>
+        // Everyone tracked as able to see the object was just sent it, so the next move can cull or restore them.
+        foreach (var player in _playersWithRequirementsMet.Values) {
+            if (!_playerIgnoreBecauseDynamod.ContainsKey(player)) {
+                _playersInRange.Add(player);
+            }
+        }
+    }
+
+    public override void OnDisabled() {
         // Broadcast the removal of the object to all players.
         PlayerBroadcast(new GAME_5_PROTOCOL.MSG_REMOVEOBJECT {
             GameObjectID = Entity.ActiveGameObject.m_globalID
         });
+
+        // Nobody has the object any more. The requirements record stays so a re-enable can send it again.
+        _playersInRange.Clear();
+    }
 
     public override void OnPlayerJoin(CoreObject player, IActorRef suspect, Wizard wizard) {
         // Check to see if dynamods would enable/disable this object.

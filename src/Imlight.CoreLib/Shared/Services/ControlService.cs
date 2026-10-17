@@ -35,9 +35,12 @@ internal class ControlService : MessageService, IHandshakeService {
     private readonly Stopwatch _responseStopwatch;
     private bool _isWaitingForHeartbeatResponse;
     private bool _isInGameServer;
+    private readonly bool _isLoginServer;
 
     public ControlService(SessionActor parentActor) : base(parentActor) {
         this._responseStopwatch = new Stopwatch();
+        this._isLoginServer = SessionActor.ServerRef?.Path.Name
+            == ConfigurationManager.Settings["Login Server.LoginServerName"].AsString();
 
         SendSessionOffer();
     }
@@ -57,7 +60,7 @@ internal class ControlService : MessageService, IHandshakeService {
     private void SendSessionOffer() {
         // Ask the game client for a session.
         var currentUnixTimestamp = (uint) (DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds;
-        var timestampUpper = (int) (currentUnixTimestamp >> 32);
+        var timestampUpper = 0;
         var timestampLower = (int) (currentUnixTimestamp & uint.MaxValue);
         var millisecondsIntoCurrentSecond = (uint) (DateTime.UtcNow.TimeOfDay.TotalMilliseconds % 1000);
 
@@ -84,19 +87,24 @@ internal class ControlService : MessageService, IHandshakeService {
 
     [MessageHandler(typeof(ControlMessageProtocol.SessionAccept))]
     private void ReceiveSessionAccept(ControlMessageProtocol.SessionAccept message) {
+        Logger.Debug("SessionActor {Sid} SessionAccept received.", Logger.Args(SessionActor.SessionID));
+
         // The game client approves of the agreed upon session.
         _responseStopwatch.Stop();
         if (message.SessionId != SessionActor.SessionID) {
             throw new Exception($"SessionActor [{SessionActor.SessionID}] misaligned Session ID.");
+        }
+        if (_sessionValid) {
+            Logger.Debug("SessionActor {Sid} ignored a repeated SessionAccept.", Logger.Args(SessionActor.SessionID));
+
+            return;
         }
 
         // Set local variables.
         _sessionValid = true;
         _isWaitingForHeartbeatResponse = false;
 
-        // The session is now valid. For optimization purposes, our parent SessionActor doesn't load
-        // all the services on creation. Instead, we wait for the session to be valid.
-        // We need to now tell our SessionActor that the session is created, and to grab the rest of its services.
+        // The SessionActor marks the session valid and replays the messages it cached while the handshake was open.
         var msg = new SERVICE_101_PROTOCOL.MSG_GETALLSERVICES();
         SessionActor.ActorRef.Tell(msg);
         SessionActor
@@ -184,6 +192,16 @@ internal class ControlService : MessageService, IHandshakeService {
 
     private void SessionAcceptTimer() {
         if (_sessionValid) {
+            return;
+        }
+
+        if (_isLoginServer) {
+            // The login client abandons its first socket and retries on a new one, so a timeout here is expected.
+            Logger.Information("SessionActor {SessionID} from {RemoteEndPoint} did not return a SessionAccept within " +
+                "{Wait}s; closing session (initial-handshake timeout).",
+                Logger.Args(SessionActor.SessionID, SessionActor.Ip, _keepAliveRspWaitTime));
+            CloseSession();
+
             return;
         }
 
