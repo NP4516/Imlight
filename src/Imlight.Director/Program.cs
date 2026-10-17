@@ -45,6 +45,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using Akka.Actor;
 using Imlight.Common;
 using Imlight.CoreLib.Auth;
@@ -284,8 +286,10 @@ internal static class Program {
         Console.Write("   :: L&G Boot ::    ");
         Console.ForegroundColor = ConsoleColor.White;
 
-        // Write the version. Our schema is NNyWWc, where NN is the two-digit year, and WW is the week of the year.
-        // c is the build configuration, which is either DEBUG or RELEASE.
+        // Write the version. Our schema is {yy}Q{quarter}.{week}c, followed by the build configuration (dev or canary).
+        // yy is the two-digit year and week uses the .NET FirstDay/Monday rule (not ISO). Published builds can stamp
+        // the version as {yy}Q{quarter}.{week}c{commit count} in the assembly's InformationalVersion (the part before
+        // any '+'); when that is present it is shown as is, otherwise the banner is computed from the current date.
         var buildConfiguration = GetBuildConfiguration();
         Console.Write(@"|___/");
         Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -300,8 +304,27 @@ internal static class Program {
                         CalendarWeekRule.FirstDay,
                         DayOfWeek.Monday);
 
-        Console.Write($" ({MajorVersion} {year}Q{quarter}.{week}c {buildConfiguration})\n");
+        string builtVersion = GetBuiltVersion();
+        if (builtVersion != null) {
+            Console.Write($" ({MajorVersion} {builtVersion} {buildConfiguration})\n");
+        } else {
+            Console.Write($" ({MajorVersion} {year}Q{quarter}.{week}c {buildConfiguration})\n");
+        }
         Console.WriteLine("");
+    }
+
+    /// <summary>
+    /// Returns the version stamped into the assembly at publish time (the InformationalVersion part before '+'),
+    /// or null when it is missing or not in the {yy}Q{quarter}.{week}c{count} format.
+    /// </summary>
+    private static string GetBuiltVersion() {
+        var informational = Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (informational == null) {
+            return null;
+        }
+
+        var core = informational.Split('+')[0];
+        return Regex.IsMatch(core, @"^\d{2}Q[1-4]\.\d{1,2}c\d+$") ? core : null;
     }
 
     private static string GetBuildConfiguration() {
