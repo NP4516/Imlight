@@ -51,7 +51,7 @@ namespace Imlight.CoreLib.Game.CrownShop;
 public static class CrownShopHandler {
     private static readonly bool s_enabled
         = ConfigurationManager.Settings["CrownShop.Enabled"].AsBool();
-    private static readonly uint s_wishlishMaxSize
+    private static readonly uint s_wishlistMaxSize
         = ConfigurationManager.Settings["CrownShop.WishlistMaxSize"].AsUInt();
     private static readonly uint s_wishlistSBExpansionSize
     = ConfigurationManager.Settings["CrownShop.WishlistSBExpansionSize"].AsUInt();
@@ -208,7 +208,7 @@ public static class CrownShopHandler {
             var crownShopData = new CrownShopData() {
                 m_items = crownShopItems.Values.ToList(),
                 m_crownShopLayout = crownShopLayout,
-                m_wishlistMaxSize = (int) s_wishlishMaxSize,
+                m_wishlistMaxSize = (int) s_wishlistMaxSize,
                 m_wishlistSBExpansionSize = (int) s_wishlistSBExpansionSize,
                 // Probably has something todo with MSG_PCS_SEGDATA_RESPONSE
                 m_crownShopSegReqsSummary = new(),
