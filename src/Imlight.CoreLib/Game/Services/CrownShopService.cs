@@ -64,12 +64,12 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class CrownShopService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private static readonly Random _random = new();
+    private static readonly Random s_random = new();
     private static readonly CoreObjectSerializer s_coreObjectSerializer = new(behaviors: SerializerFlags.None);
 
     private static ulong _randomUlong() {
         Span<byte> bytes = stackalloc byte[8];
-        _random.NextBytes(bytes);
+        s_random.NextBytes(bytes);
         return BitConverter.ToUInt64(bytes);
     }
 
