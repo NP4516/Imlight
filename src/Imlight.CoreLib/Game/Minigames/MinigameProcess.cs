@@ -63,7 +63,7 @@ using Imlight.CoreLib.WizardData.Models.Player;
 internal sealed class MinigameProcess : Process {
 
     private const uint QUERY_WIZARD_TIMEOUT_IN_MS = 5000;
-    private const long LOGGED_SCORE_CAP_MULTIPLIER = 100;
+    private const long LoggedScoreCapMultiplier = 100;
     private const int CHEST_GAME_WIN_SCORE = 1;
 
     private bool IsMinigameActive { get; set; }
@@ -225,15 +225,15 @@ internal sealed class MinigameProcess : Process {
 
         // The cap is a multiple of the top threshold. Left unset, scores far above it are only logged.
         var topThreshold = thresholds[^1];
-        var capMultiplier = ConfigurationManager.GetValue("Minigames.ScoreCapMultiplier", 0.0);
-        if (capMultiplier > 0 && score > capMultiplier * topThreshold) {
+        var capMultiplier = ConfigurationManager.GetValue("Minigames.ScoreCapMultiplier", 0);
+        if (capMultiplier > 0 && score > capMultiplier * (long) topThreshold) {
             Logger.Warning("{Process} rejected the score {Score} of {Wizard}, above {Multiplier} times {Threshold}",
                 Logger.Args(ProcessName, score, wizard.PlayerNameBehavior.GetWizardName(), capMultiplier, topThreshold));
 
             return true;
         }
 
-        if (capMultiplier <= 0 && score > LOGGED_SCORE_CAP_MULTIPLIER * topThreshold) {
+        if (capMultiplier <= 0 && score > LoggedScoreCapMultiplier * topThreshold) {
             Logger.Warning("{Process} accepted the unusually high score {Score} of {Wizard}, top threshold {Threshold}",
                 Logger.Args(ProcessName, score, wizard.PlayerNameBehavior.GetWizardName(), topThreshold));
         }
@@ -341,7 +341,8 @@ internal sealed class MinigameProcess : Process {
             if (response?.Wizard is not null) {
                 return response;
             }
-        } catch (Exception ex) {
+        }
+        catch (Exception ex) {
             reason = ex.GetBaseException().Message;
         }
 
