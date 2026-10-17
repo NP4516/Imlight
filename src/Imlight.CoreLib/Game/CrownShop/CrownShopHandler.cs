@@ -63,15 +63,15 @@ public static class CrownShopHandler {
         = ConfigurationManager.Settings["Database.SpiralDBLocalPath"] + "/CrownShop";
 
 
-    private static readonly JsonSerializerOptions _jsonSerializerOptions = new() {
+    private static readonly JsonSerializerOptions s_jsonSerializerOptions = new() {
         PropertyNameCaseInsensitive = true,
         AllowTrailingCommas = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
     };
 
-    private static FileSystemWatcher _watcher;
-    private static DateTime _lastReloadTime = DateTime.MinValue;
-    private static readonly object _reloadLock = new();
+    private static FileSystemWatcher s_watcher;
+    private static DateTime s_lastReloadTime = DateTime.MinValue;
+    private static readonly object s_reloadLock = new();
 
 
 
@@ -96,37 +96,36 @@ public static class CrownShopHandler {
         }
 
         // Load data from config files
-        lock(_reloadLock) {
+        lock(s_reloadLock) {
             Logger.Information("Loading CrownShop configuration from: {0}", Logger.Args(s_crownShopConfigPath));
 
             var loadedTabs = new List<CrownShopTabConfig>();
             var loadedCategories = new List<CrownShopCategoryConfig>();
 
-            for(int i = 0; i < 11; i++) {
-                var tabFilePath = Path.Combine(basePath, $"Tab{i}.json");
-
-                if(!File.Exists(tabFilePath)) {
-                    Logger.Warning("CrownShop tab configuration file not found: {0}", Logger.Args(tabFilePath));
+            var filePaths = Directory.GetFiles(basePath, "*", SearchOption.TopDirectoryOnly);
+            foreach(var path in filePaths) {
+                if (!File.Exists(path)) {
+                    Logger.Warning("CrownShop tab configuration file not found: {0}", Logger.Args(path));
                     continue;
                 }
 
                 try {
-                    var json = File.ReadAllText(tabFilePath);
-                    var tab = JsonSerializer.Deserialize<CrownShopTabConfig>(json, _jsonSerializerOptions);
+                    var json = File.ReadAllText(path);
+                    var tab = JsonSerializer.Deserialize<CrownShopTabConfig>(json, s_jsonSerializerOptions);
 
-                    if(tab == null) {
-                        Logger.Warning("CrownShop tab configuration file is empty or invalid: {0}", Logger.Args(tabFilePath));
+                    if (tab == null) {
+                        Logger.Warning("CrownShop tab configuration file is empty or invalid: {0}", Logger.Args(path));
                         continue;
                     }
 
                     loadedTabs.Add(tab);
-
                     foreach (var category in tab.Categories) {
                         loadedCategories.Add(category);
                     }
 
-                } catch (Exception e) {
-                    Logger.Warning("Failed to load CrownShop tab configuration file: {0}. Error: {1}", Logger.Args(tabFilePath, e.Message));
+                }
+                catch (Exception e) {
+                    Logger.Warning("Failed to load CrownShop tab configuration file: {0}. Error: {1}", Logger.Args(path, e.Message));
                 }
             }
 
@@ -233,7 +232,7 @@ public static class CrownShopHandler {
             Logger.Information("CrownShop successfully initialized: {0} tabs, {1} categories.",
                 Logger.Args(s_crownShopTabs.Count, s_crownShopCategories.Count));
 
-            if (s_autoReloadOnChanges && _watcher == null) {
+            if (s_autoReloadOnChanges && s_watcher == null) {
                 SetupAutoReloadWatcher(basePath);
             }
 
@@ -242,14 +241,14 @@ public static class CrownShopHandler {
 
     private static void SetupAutoReloadWatcher(string basePath) {
         try {
-            _watcher = new FileSystemWatcher(basePath, "*.json") {
+            s_watcher = new FileSystemWatcher(basePath, "*.json") {
                 NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
                 EnableRaisingEvents = true
             };
 
-            _watcher.Changed += OnConfigFileChanged;
-            _watcher.Created += OnConfigFileChanged;
-            _watcher.Renamed += (s, e) => OnConfigFileChanged(s, e);
+            s_watcher.Changed += OnConfigFileChanged;
+            s_watcher.Created += OnConfigFileChanged;
+            s_watcher.Renamed += (s, e) => OnConfigFileChanged(s, e);
 
             Logger.Information("CrownShop: Live hot-reload watcher enabled for {0}.", Logger.Args(s_crownShopConfigPath));
         } catch(Exception e) {
@@ -258,11 +257,11 @@ public static class CrownShopHandler {
     }
 
     private static void OnConfigFileChanged(object sender, FileSystemEventArgs e) {
-        if ((DateTime.UtcNow - _lastReloadTime).TotalMilliseconds < 500) {
+        if ((DateTime.UtcNow - s_lastReloadTime).TotalMilliseconds < 500) {
             return;
         }
 
-        _lastReloadTime = DateTime.UtcNow;
+        s_lastReloadTime = DateTime.UtcNow;
         Logger.Information("CrownShop file changed. Reloading...");
         Load();
     }
