@@ -26,7 +26,10 @@
  * if (BadgeGate.Blocks(template.m_purchaseRequirements, templateId, SessionActor.ActorRef, GetActiveGameObject(), wizard, SessionActor.GetZoneActor())) { ... }
  *
  * NOTE:
- * Only lists that name a badge are enforced, and only for badges the catalog calls earnable: a requirement on a badge no rule or quest awards counts as met, so such an item is not locked forever. The other requirement kinds in purchase lists are not all answered by the server yet, and an unanswered kind evaluates to false, which would deny items that sell today.
+ * Only lists that name a badge are enforced, and only for badges the catalog calls earnable: 
+ * a requirement on a badge no rule or quest awards counts as met, so such an item is not locked forever. 
+ * The other requirement kinds in purchase lists are not all answered by the server yet, 
+ * and an unanswered kind evaluates to false, which would deny items that sell today.
  *
  * TODO:
  * Enforce the other purchase requirement kinds once their handlers exist?
@@ -58,22 +61,39 @@ internal static class BadgeGate {
         : GenericRequirementContext(requirements, playerRef, playerObj, wizard, zoneRef) { }
 
     internal static bool Blocks(RequirementList requirements, ulong templateId, IActorRef playerRef, CoreObject playerObj, Wizard wizard, IActorRef zoneRef) {
-        var names = new List<string>();
-        CollectBadgeNames(requirements, names);
-        names = [.. names.Distinct(StringComparer.Ordinal)];
-        if (names.Count == 0) {
+        var badgeNames = GetBadgeNames(requirements);
+        if (badgeNames.Count == 0) {
             return false;
         }
 
         var catalog = BadgeCatalog.Current;
-        var unearnable = names.Where(name => !catalog.IsEarnable(StringHash.Compute(name))).ToList();
-        if (unearnable.Count > 0 && s_reportedTemplates.TryAdd(templateId, 0)) {
-            Logger.Debug("Template {0} requires {1}, which Imlight cannot award, so that part of its purchase requirement is not enforced.",
-                Logger.Args(templateId, string.Join(", ", unearnable)));
+        var unearnableNames = badgeNames.Where(name => !catalog.IsEarnable(StringHash.Compute(name))).ToList();
+        ReportUnearnable(templateId, unearnableNames);
+
+        var hasEarnableBadge = unearnableNames.Count < badgeNames.Count;
+        if (!hasEarnableBadge) {
+            return false;
         }
 
-        return unearnable.Count < names.Count
-            && !RequirementDispatcher.EvaluateRequirements(requirements, new GateContext(requirements, playerRef, playerObj, wizard, zoneRef));
+        var context = new GateContext(requirements, playerRef, playerObj, wizard, zoneRef);
+
+        return !RequirementDispatcher.EvaluateRequirements(requirements, context);
+    }
+
+    private static List<string> GetBadgeNames(RequirementList requirements) {
+        var names = new List<string>();
+        CollectBadgeNames(requirements, names);
+
+        return [.. names.Distinct(StringComparer.Ordinal)];
+    }
+
+    private static void ReportUnearnable(ulong templateId, List<string> unearnableNames) {
+        if (unearnableNames.Count == 0 || !s_reportedTemplates.TryAdd(templateId, 0)) {
+            return;
+        }
+
+        Logger.Debug("Template {0} requires {1}, which Imlight cannot award, so that part of its purchase requirement is not enforced.",
+            Logger.Args(templateId, string.Join(", ", unearnableNames)));
     }
 
     private static void CollectBadgeNames(RequirementList requirements, List<string> names) {
