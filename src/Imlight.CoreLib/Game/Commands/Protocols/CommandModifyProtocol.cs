@@ -728,7 +728,7 @@ internal class CommandModifyProtocol : CommandProtocol {
     [Alias("crowns")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetCrownsCommand(string crowns) {
-        if (!int.TryParse(crowns, out var crownsAmount)) {
+        if (!int.TryParse(crowns, out var crownsAmount) || crownsAmount < 0) {
             InformSenderClient("Invalid Crowns amount.");
             return;
         }
