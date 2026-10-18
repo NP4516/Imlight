@@ -94,6 +94,9 @@ Imcodec relies on compile-time source generation to produce C# classes from game
    /submodule/Imcodec/src/Imcodec.MessageLayer/GeneratorInput/
    ```
 
+## Installer
+`installer/` builds `ImlightSetup.exe`, a Windows installer for people who just want to run a server. It asks for an admin account, the patch server address and the server mode, and adds Start menu shortcuts for the server, its settings, its logs and the ID lookup. See [installer/README.md](installer/README.md).
+
 ## Information
 * The Kronos teams' [Grimoire](https://kronos-project.github.io/grimoire/foreword.html).
 * Our [Documentation](https://revive101.github.io/Imlight-docs/) book.
