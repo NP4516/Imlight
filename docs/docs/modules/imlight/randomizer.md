@@ -88,15 +88,15 @@ More school pip settings, also in `[Battle]`:
 
 | Setting | Default | What it does |
 | ------- | ------- | ------------ |
-| `GainSchoolPips` | `false` | A wizard's new pip can come as a school pip instead, without needing any stats. |
-| `SchoolPipChance` | `25` | The chance (0 to 100) that a new pip is a school pip when `GainSchoolPips` is on. |
+| `GainSchoolPips` | `false` | A wizard's school pip gauge fills each round; once full, their next pip is a school pip. No stats needed. |
+| `SchoolPipChance` | `25` | How much the school pip gauge fills each round (0 to 100; 25 is a school pip every 4 rounds). |
 | `RandomSchoolPips` | `false` | School pips come in a random school instead of the wizard's own. |
 
-Shadow pips, also in `[Battle]` (`NaturalShadowPips` gives wizards shadow pips without the shadow pip rating stat, a 25% chance each round or `ShadowPipChance` if set):
+Shadow pips, also in `[Battle]` (`NaturalShadowPips` gives wizards shadow pips without the shadow pip rating stat, the gauge fills 25 each round, or `ShadowPipChance` if set):
 
 | Setting | Default | What it does |
 | ------- | ------- | ------------ |
-| `ShadowPips` | `true` | Wizards and creatures can get shadow pips, which shadow spells cost. They have their own slots. |
+| `ShadowPips` | `true` | Wizards and creatures can get shadow pips, which shadow spells cost. They have their own slots, and wizards get shadow magic unlocked so the slots and shadow gauge show. |
 | `PlayerShadowPipLimit` | `0` | The most shadow pips a wizard can hold. 0 means no limit. |
 | `CreatureShadowPipLimit` | `0` | The most shadow pips a creature can hold. 0 means no limit. |
-| `ShadowPipChance` | `0` | The chance (0 to 100) of a shadow pip each round. 0 uses each one's own shadow pip rating from level and gear. |
+| `ShadowPipChance` | `0` | How much the shadow gauge fills each round (0 to 100); a full gauge gives a shadow pip. 0 uses each one's own shadow pip rating from level and gear. |

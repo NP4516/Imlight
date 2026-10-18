@@ -281,7 +281,11 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
             m_questFinderEnabled = m_questFinderEnabled,
             m_buddyListLimit = m_buddyListLimit,
             m_dontAllowFriendFinderCodes = m_dontAllowFriendFinderCodes,
-            m_shadowMagicUnlocked = m_shadowMagicUnlocked,
+            // Shadow pips on ([Battle] ShadowPips) unlock shadow magic, which lays out the shadow pip slots.
+            m_shadowMagicUnlocked = m_shadowMagicUnlocked || CombatDuelSubCircle.ShadowPipsOn,
+            m_shadowPipMax = CombatDuelSubCircle.ShadowPipsOn
+                ? CombatDuelSubCircle.ShownPlayerShadowSlots
+                : m_shadowPipMax,
             m_fishingLevel = m_fishingLevel,
             m_fishingXP = m_fishingXP,
             m_subscriberBenefitFlags = m_subscriberBenefitFlags,
