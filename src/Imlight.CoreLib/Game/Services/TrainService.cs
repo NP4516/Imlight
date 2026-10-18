@@ -43,6 +43,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Game.Spells;
+using Imlight.CoreLib.Game.Randomization;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 
@@ -89,29 +90,32 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
         }
 
         var spellEntry = trainerComponent.SpellInventory[message.TrainingIndex];
-        var spellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(spellEntry.TemplateID);
+
+        // In randomizer mode the trainer offered this wizard's swapped spell; teach that one.
+        var spellId = Randomizer.MapSpell(wizard, (uint) spellEntry.TemplateID);
+        var spellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(spellId);
 
         // Determine if the wizard has enough training points to learn the spell.
         // Wizards that are of the same magic school as the spell they are training have a cost of 0.
         var spellCost = wizard.MagicSchoolBehavior.MagicSchool.ToString() == spellTemplate.m_sMagicSchoolName ? 0 : 1;
         if (wizard.MagicSchoolBehavior.TrainingPoints < spellCost) {
             Logger.Error("Wizard {0} attempted to train spell {1} but does not have enough training points.",
-                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID));
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellId));
 
             return;
         }
 
-        var spell = SpellFactory.GetSpell((uint) spellEntry.TemplateID);
+        var spell = SpellFactory.GetSpell(spellId);
         var spellLearnedSuccess = wizard.LearnSpell(spell);
         if (!spellLearnedSuccess) {
             Logger.Error("Wizard {0} attempted to train spell {1} but failed to learn it.",
-                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID));
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellId));
 
             return;
         }
 
         var addSpellMsg = new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK() {
-            SpellID = (int) spellEntry.TemplateID
+            SpellID = (int) spellId
         };
         SendToSocket(addSpellMsg);
 
@@ -124,7 +128,7 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
         SendToSocket(updateTrainingMsg);
 
         var trainCompleteMsg = new WIZARD_12_PROTOCOL.MSG_SPELLTRAINCOMPLETE() {
-            SpellID = spellEntry.TemplateID,
+            SpellID = spellId,
             DisplayText = "WizTraining_00000040",
             Success = 1
         };

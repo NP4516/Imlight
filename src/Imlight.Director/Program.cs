@@ -153,6 +153,7 @@ internal static class Program {
 
         // The ID lookup reads every template, so it builds in the background.
         Imlight.CoreLib.Shared.Resources.IdCatalog.StartBackgroundBuild();
+        Imlight.CoreLib.Game.Randomization.Randomizer.StartBackgroundBuild();
 
         // =============================================================
         // SERVERS

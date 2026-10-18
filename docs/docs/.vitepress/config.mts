@@ -35,6 +35,7 @@ export default defineConfig({
             { text: 'Imlight', link: '/imlight/index' },
             { text: 'Quickstart', link: '/imlight/quickstart.md' },
             { text: 'Commands', link: '/imlight/commands' },
+            { text: 'Randomizer Mode', link: '/imlight/randomizer' },
             { text: 'Todo', link: '/imlight/todo' },
           ]
         },

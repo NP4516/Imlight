@@ -41,6 +41,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Randomization;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Resources;
@@ -95,14 +96,22 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
         List<ServiceOptionBase> newServiceOptions = [];
 
         for (int i = 0; i < _serviceOptionBases.Count; i++) {
-            var spellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(SpellInventory[i].TemplateID);
+            // In randomizer mode the wizard learns a swapped spell, so the trainer offers that one instead.
+            var trainerSpellId = (uint) SpellInventory[i].TemplateID;
+            var spellId = Randomizer.MapSpell(wizard, trainerSpellId);
+            var spellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(spellId);
 
-            var hasSpell = wizard.SpellbookBehavior.HasSpell((uint) SpellInventory[i].TemplateID);
+            var hasSpell = wizard.SpellbookBehavior.HasSpell(spellId);
             if (hasSpell) {
                 continue;
             }
 
-            var newBase = (WizTrainingOption) _serviceOptionBases[i];
+            // Copy the shared option so one wizard's view never leaks into another's.
+            var newBase = (WizTrainingOption) _serviceOptionBases[i] with { };
+            if (spellId != trainerSpellId) {
+                newBase.m_spellName = spellTemplate.m_name;
+                newBase.m_displayKey = spellTemplate.m_displayName;
+            }
 
             // If a wizard is the same school as the spell, it is free to train.
             var schoolName = wizard.MagicSchoolBehavior.MagicSchool.ToString();
@@ -130,11 +139,16 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
                 newBase.m_failedRequirement = null;
             }
             else {
-                var hasReqSpell = wizard.SpellbookBehavior.HasSpell((uint) SpellInventory[i].RequiredSpellID);
+                // The required spell is swapped the same way, so a randomized chain still lines up.
+                var requiredSpellId = Randomizer.MapSpell(wizard, (uint) SpellInventory[i].RequiredSpellID);
+                var reqSpellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(requiredSpellId);
+                if (requiredSpellId != SpellInventory[i].RequiredSpellID) {
+                    newBase.m_requirements = HasSpellRequirement(reqSpellTemplate);
+                }
+
+                var hasReqSpell = wizard.SpellbookBehavior.HasSpell(requiredSpellId);
 
                 if (!hasReqSpell) {
-                    var reqSpellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(SpellInventory[i].RequiredSpellID);
-
                     newBase.m_bCanTrain = false;
                     newBase.m_failedRequirement = new ReqHasSpell() {
                         m_applyNOT = false,
@@ -191,17 +205,7 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
                     continue;
                 }
 
-                spellOption.m_requirements = new RequirementList() {
-                    m_applyNOT = false,
-                    m_operator = Operator.ROP_AND,
-                    m_requirements = new List<Requirement>() {
-                        new ReqHasSpell() {
-                            m_applyNOT = false,
-                            m_operator = Operator.ROP_AND,
-                            m_spellName = reqSpellTemplate.m_name,
-                        }
-                    }
-                };
+                spellOption.m_requirements = HasSpellRequirement(reqSpellTemplate);
             }
             else {
                 spellOption.m_requirements = null;
@@ -210,5 +214,18 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
             _serviceOptionBases.Add(spellOption);
         }
     }
+
+    private static RequirementList HasSpellRequirement(SpellTemplate requiredSpell)
+        => new() {
+            m_applyNOT = false,
+            m_operator = Operator.ROP_AND,
+            m_requirements = new List<Requirement>() {
+                new ReqHasSpell() {
+                    m_applyNOT = false,
+                    m_operator = Operator.ROP_AND,
+                    m_spellName = requiredSpell.m_name,
+                }
+            }
+        };
 
 }
