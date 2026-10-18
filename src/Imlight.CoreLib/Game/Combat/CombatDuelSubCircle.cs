@@ -565,7 +565,7 @@ public class CombatDuelSubCircle {
             ? genericPips + (powerPips * 2)
             : genericPips + powerPips;
 
-        return totalPips >= spellRank && HasSchoolPipsForSpell(spell);
+        return totalPips >= spellRank && HasSchoolPipsForSpell(spell) && HasManaForSpell(spell);
     }
 
     internal bool TryStun() {
@@ -625,22 +625,33 @@ public class CombatDuelSubCircle {
         }
     }
 
+    // [Battle] UnlimitedMana: spells cost no mana, and mana refills in the Commons.
+    internal static readonly bool UnlimitedMana = ConfigurationManager.GetValue("Battle.UnlimitedMana", false);
+
     internal void DeductMana(int mana) {
         // If the participant is a player, update their mana.
         // Creature's don't have mana.
-        if (_wizard is not null) {
-            var currentMana = ParticipantGameStats.m_currentMana;
-            var newMana = currentMana - mana;
-
-            // Make sure the mana doesn't go below 0.
-            if (newMana < 0) {
-                newMana = 0;
-            }
-
-            // Update the mana of the player.
-            _wizard.UpdateMana(newMana);
+        if (_wizard is null || UnlimitedMana || mana <= 0) {
+            return;
         }
+
+        var currentMana = ParticipantGameStats.m_currentMana;
+        var newMana = Math.Max(0, currentMana - mana);
+
+        // Update the mana of the player, and the mana globe on their screen.
+        _wizard.UpdateMana(newMana);
+        ParticipantActor.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEMANA {
+            Mana = newMana,
+            MaxMana = ParticipantGameStats.GetClientTypeAlternative().m_baseMana,
+            DisplayDiff = 1,
+        });
     }
+
+    /// <summary>
+    /// A wizard needs at least as much mana as the spell's pip cost to cast it (unless UnlimitedMana is on).
+    /// </summary>
+    private bool HasManaForSpell(Spell spell)
+        => _wizard is null || UnlimitedMana || ParticipantGameStats.m_currentMana >= spell.m_pipCost.m_spellRank;
 
     internal void DeductPips(MagicSchool school, byte spellRank, bool fullPipConserve = false) {
         var isMastered = HasSchoolMastery((uint) school);

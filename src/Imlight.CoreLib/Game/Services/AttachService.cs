@@ -65,6 +65,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
     // The official server sends MSG_LOGINCOMPLETE a median 390 ms after MSG_ATTACH.
     private const int PreLoginGapMs = 390;
+    private const string COMMONS_ZONE = "WizardCity/WC_Hub";
 
     // The services that answer MSG_PRELOGIN are other actors, and their messages have to reach the socket first.
     private const int PreLoginMinimumDelayMs = 100;
@@ -237,6 +238,12 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         SessionActor.ServerRef.Tell(new SERVICE_101_PROTOCOL.MSG_REMOVE_FALLBACK {
             RemoteIp = SessionActor.RemoteIp
         });
+
+        // [Battle] UnlimitedMana: arriving in the Commons fills mana back up.
+        if (Combat.CombatDuelSubCircle.UnlimitedMana && _wizard.Zone == COMMONS_ZONE
+                && _wizard.GameStats.m_currentMana < _wizard.GameStats.m_baseMana) {
+            _wizard.UpdateMana(_wizard.GameStats.m_baseMana);
+        }
 
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEMANA {
             Mana = _wizard.GameStats.m_currentMana,

@@ -75,6 +75,7 @@ The `[Battle]` section works with or without randomizer mode, with switches on t
 | Setting | Default | What it does |
 | ------- | ------- | ------------ |
 | `ManaOnFizzle` | `false` | A spell that fizzles still costs its mana, the same as if it had worked. |
+| `UnlimitedMana` | `false` | Spells never use up mana, and arriving in the Commons fills mana back to full. Otherwise spells cost mana equal to their pips and need that much to cast. |
 | `FullPipConserve` | `false` | A power pip only half used on a spell (a 3 pip spell paid with 2 power pips) always gives the spare pip back as a normal pip, like 100% pip conserve. |
 | `SchoolPips` | `true` | Once every pip slot is full, each round turns one power pip into a school pip of the wizard's own school. School pips pay for the school pip cost some higher level spells have. |
 
