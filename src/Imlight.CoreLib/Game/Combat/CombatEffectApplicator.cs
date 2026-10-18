@@ -462,7 +462,7 @@ internal static class CombatEffectApplicator {
             var genericPips = pipCount.m_genericPips;
             if (effect.m_effectParam >= 0) {
                 pipCount.m_genericPips = (byte) Math.Min(genericPips + effect.m_effectParam,
-                                                        CombatDuelSubCircle.MAX_PIP_COUNT - pipCount.m_powerPips);
+                                                        CombatDuelSubCircle.MAX_PIP_COUNT - (CombatDuelSubCircle.TotalPips(pipCount) - genericPips));
             }
             else {
                 pipCount.m_genericPips = (byte) Math.Max(genericPips + effect.m_effectParam, 0);

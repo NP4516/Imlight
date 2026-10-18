@@ -67,3 +67,12 @@ The `[Trainers]` section of `Imlight.ini` works with or without randomizer mode.
 | `TrainingPointPerLevel` | `false` | Every level gained also gives training points. |
 | `TrainingPointsPerLevel` | `1` | How many training points each level gives while `TrainingPointPerLevel` is on (0 to 100). |
 | `PlayersCanGainTrainingPoints` | `true` | Any player can type `.gaintp <amount>` (or `.trainingpoints <amount>`) to give themselves 1 to 100 training points. |
+
+## Battle
+
+The `[Battle]` section works with or without randomizer mode, with switches on the app's Server tab.
+
+| Setting | Default | What it does |
+| ------- | ------- | ------------ |
+| `ManaOnFizzle` | `false` | A spell that fizzles still costs its mana, the same as if it had worked. |
+| `SchoolPips` | `true` | Once every pip slot is full, each round turns one power pip into a school pip of the wizard's own school. School pips pay for the school pip cost some higher level spells have. |

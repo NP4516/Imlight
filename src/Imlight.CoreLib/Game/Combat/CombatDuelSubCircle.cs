@@ -80,6 +80,8 @@ public class CombatDuelSubCircle {
     
     private const float AGGRO_TIME_IN_SECONDS = 0.75f;
     internal const byte MAX_PIP_COUNT = 7;
+
+    private static readonly bool s_schoolPips = ConfigurationManager.GetValue("Battle.SchoolPips", true);
     private const byte PLAYER_HAND_SIZE = 7;
 
     internal string SlotName { get; set; }
@@ -257,10 +259,11 @@ public class CombatDuelSubCircle {
     }
 
     internal void DoPipGain() {
-        // If the participant has the maximum amount of pips, do not gain any more.
-        var genericPips = CombatParticipant.m_pipCount.m_genericPips;
-        var powerPips = CombatParticipant.m_pipCount.m_powerPips;
-        if (genericPips + powerPips >= MAX_PIP_COUNT) {
+        // If the participant has the maximum amount of pips, do not gain any more (but maybe convert one).
+        var pipCount = CombatParticipant.m_pipCount;
+        if (TotalPips(pipCount) >= MAX_PIP_COUNT) {
+            ConvertToSchoolPip();
+
             return;
         }
 
@@ -268,20 +271,108 @@ public class CombatDuelSubCircle {
         var gains = Randomization.Randomizer.RandomizePips ? Randomization.Randomizer.RollPipGain() : 1;
 
         // Never leave someone with no pips at all, or nothing in their hand can be cast.
-        if (gains == 0 && genericPips + powerPips == 0) {
+        if (gains == 0 && TotalPips(pipCount) == 0) {
             gains = 1;
         }
         for (var i = 0; i < gains; i++) {
-            if (CombatParticipant.m_pipCount.m_genericPips + CombatParticipant.m_pipCount.m_powerPips >= MAX_PIP_COUNT) {
+            if (TotalPips(pipCount) >= MAX_PIP_COUNT) {
                 return;
             }
 
             var gainedPowerPip = DeterminePowerPipGain(CombatParticipant);
             if (gainedPowerPip) {
-                CombatParticipant.m_pipCount.m_powerPips++;
+                pipCount.m_powerPips++;
             }
             else {
-                CombatParticipant.m_pipCount.m_genericPips++;
+                pipCount.m_genericPips++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every pip slot in use: generic, power and school pips.
+    /// </summary>
+    internal static int TotalPips(PipCount pips)
+        => pips.m_genericPips + pips.m_powerPips + pips.m_balancePips + pips.m_deathPips + pips.m_firePips
+           + pips.m_icePips + pips.m_lifePips + pips.m_mythPips + pips.m_stormPips;
+
+    /// <summary>
+    /// [Battle] SchoolPips: with every pip slot full, a round turns one power pip into a school pip of the
+    /// participant's own school. School pips pay for the school pip cost some spells have.
+    /// </summary>
+    private void ConvertToSchoolPip() {
+        var pipCount = CombatParticipant.m_pipCount;
+        if (!s_schoolPips || pipCount.m_powerPips == 0) {
+            return;
+        }
+
+        var school = (MagicSchool) ParticipantGameStats.m_schoolID;
+        var current = SchoolPips(pipCount, school);
+        if (current is null) {
+            return;
+        }
+
+        pipCount.m_powerPips--;
+        SetSchoolPips(pipCount, school, (byte) (current.Value + 1));
+    }
+
+    private static readonly MagicSchool[] s_pipSchools = [
+        MagicSchool.Balance, MagicSchool.Death, MagicSchool.Fire, MagicSchool.Ice,
+        MagicSchool.Life, MagicSchool.Myth, MagicSchool.Storm,
+    ];
+
+    private static byte? SchoolPips(PipCount pips, MagicSchool school) => school switch {
+        MagicSchool.Balance => pips.m_balancePips,
+        MagicSchool.Death   => pips.m_deathPips,
+        MagicSchool.Fire    => pips.m_firePips,
+        MagicSchool.Ice     => pips.m_icePips,
+        MagicSchool.Life    => pips.m_lifePips,
+        MagicSchool.Myth    => pips.m_mythPips,
+        MagicSchool.Storm   => pips.m_stormPips,
+        _ => null,
+    };
+
+    private static void SetSchoolPips(PipCount pips, MagicSchool school, byte value) {
+        switch (school) {
+            case MagicSchool.Balance: pips.m_balancePips = value; break;
+            case MagicSchool.Death:   pips.m_deathPips = value; break;
+            case MagicSchool.Fire:    pips.m_firePips = value; break;
+            case MagicSchool.Ice:     pips.m_icePips = value; break;
+            case MagicSchool.Life:    pips.m_lifePips = value; break;
+            case MagicSchool.Myth:    pips.m_mythPips = value; break;
+            case MagicSchool.Storm:   pips.m_stormPips = value; break;
+        }
+    }
+
+    // The school pips a spell costs, school by school.
+    private static IEnumerable<(MagicSchool School, byte Cost)> SchoolPipCosts(SpellRank rank) {
+        if (rank is null) {
+            yield break;
+        }
+
+        yield return (MagicSchool.Balance, rank.m_balancePips);
+        yield return (MagicSchool.Death, rank.m_deathPips);
+        yield return (MagicSchool.Fire, rank.m_firePips);
+        yield return (MagicSchool.Ice, rank.m_icePips);
+        yield return (MagicSchool.Life, rank.m_lifePips);
+        yield return (MagicSchool.Myth, rank.m_mythPips);
+        yield return (MagicSchool.Storm, rank.m_stormPips);
+    }
+
+    /// <summary>
+    /// Whether the participant has the school pips a spell costs.
+    /// </summary>
+    internal bool HasSchoolPipsForSpell(Spell spell)
+        => SchoolPipCosts(spell.m_pipCost).All(c => c.Cost == 0 || (SchoolPips(CombatParticipant.m_pipCount, c.School) ?? 0) >= c.Cost);
+
+    /// <summary>
+    /// Spends the school pips a spell costs.
+    /// </summary>
+    internal void DeductSchoolPips(Spell spell) {
+        var pipCount = CombatParticipant.m_pipCount;
+        foreach (var (school, cost) in SchoolPipCosts(spell.m_pipCost)) {
+            if (cost > 0 && SchoolPips(pipCount, school) is { } have) {
+                SetSchoolPips(pipCount, school, (byte) Math.Max(0, have - cost));
             }
         }
     }
@@ -348,7 +439,7 @@ public class CombatDuelSubCircle {
             ? genericPips + (powerPips * 2)
             : genericPips + powerPips;
 
-        return totalPips >= spellRank;
+        return totalPips >= spellRank && HasSchoolPipsForSpell(spell);
     }
 
     internal bool TryStun() {
@@ -454,6 +545,9 @@ public class CombatDuelSubCircle {
         var ourPipCount = CombatParticipant.m_pipCount;
         ourPipCount.m_powerPips = 0;
         ourPipCount.m_genericPips = 0;
+        foreach (var school in s_pipSchools) {
+            SetSchoolPips(ourPipCount, school, 0);
+        }
     }
 
     internal void Reshuffle() => _combatDeck.Reshuffle();

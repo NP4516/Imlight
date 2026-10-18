@@ -88,6 +88,11 @@ internal sealed class ManagerWindow : Window {
         ("TrainingPointPerLevel", "Training points for every level gained", new() { OnContent = "On", OffContent = "Off" }),
         ("PlayersCanGainTrainingPoints", "Players can type .gaintp <amount> to get training points", new() { OnContent = "On", OffContent = "Off" }),
     ];
+    private readonly Border _battleCard;
+    private readonly List<(string Key, string Name, ToggleSwitch Switch)> _battleSwitches = [
+        ("ManaOnFizzle", "Reduce mana even if fizzle", new() { OnContent = "On", OffContent = "Off" }),
+        ("SchoolPips", "School pips", new() { OnContent = "On", OffContent = "Off" }),
+    ];
     private readonly NumericUpDown _pointsPerLevel = new() { Minimum = 0, Maximum = 100, Increment = 1, FormatString = "0", Width = 130 };
 
     // Settings.
@@ -174,6 +179,25 @@ internal sealed class ManagerWindow : Window {
         });
         _trainersCard = Card(trainerRows);
         _trainersCard.IsVisible = false;
+        var battleRows = new StackPanel {
+            Spacing = 6,
+            Children = {
+                Heading("Battle"),
+                Sub("School pips: once every pip slot is full, each round turns a power pip into a school pip of your own school, " +
+                    "for spells that cost school pips."),
+            },
+        };
+        foreach (var (key, name, toggle) in _battleSwitches) {
+            battleRows.Children.Add(new DockPanel {
+                Children = {
+                    WithDock(toggle, Dock.Right),
+                    new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center },
+                },
+            });
+        }
+
+        _battleCard = Card(battleRows);
+        _battleCard.IsVisible = false;
         _logScroll = new ScrollViewer {
             Height = 440,
             Background = LOG_BACK,
@@ -331,6 +355,14 @@ internal sealed class ManagerWindow : Window {
             };
         }
 
+        foreach (var (key, name, toggle) in _battleSwitches) {
+            toggle.IsCheckedChanged += async (_, _) => {
+                if (!_updatingRandomizer) {
+                    await Guard(() => SetSwitchAsync("Battle", key, name, toggle.IsChecked == true));
+                }
+            };
+        }
+
         _pointsPerLevel.ValueChanged += async (_, _) => {
             if (!_updatingRandomizer && _pointsPerLevel.Value is { } value) {
                 await Guard(() => SetPointsPerLevelAsync((int) value));
@@ -351,6 +383,7 @@ internal sealed class ManagerWindow : Window {
             }),
             _randomizerCard,
             _dieDeleteCard,
+            _battleCard,
             _trainersCard,
             Card(new StackPanel {
                 Children = {
@@ -466,6 +499,11 @@ internal sealed class ManagerWindow : Window {
             toggle.IsChecked = _manager.GetSwitch("Trainers", key);
         }
 
+        _battleCard.IsVisible = _manager.IsInstalled && _manager.HasSetting("Battle", "ManaOnFizzle");
+        foreach (var (key, _, toggle) in _battleSwitches) {
+            toggle.IsChecked = _manager.GetSwitch("Battle", key);
+        }
+
         if (!_pointsPerLevel.IsFocused) {
             _pointsPerLevel.Value = int.TryParse(_manager.GetSetting("Trainers", "TrainingPointsPerLevel"), out var points) ? points : 1;
         }
@@ -525,8 +563,10 @@ internal sealed class ManagerWindow : Window {
         }
     }
 
-    private async Task SetTrainerSwitchAsync(string key, string name, bool on) {
-        var restart = _manager.SaveSettings([new Setting("Trainers", key, on ? "true" : "false", "")]);
+    private Task SetTrainerSwitchAsync(string key, string name, bool on) => SetSwitchAsync("Trainers", key, name, on);
+
+    private async Task SetSwitchAsync(string section, string key, string name, bool on) {
+        var restart = _manager.SaveSettings([new Setting(section, key, on ? "true" : "false", "")]);
         _settings = [];
         Say($"{name} is now {(on ? "on" : "off")}.");
         if (restart && await ConfirmAsync($"{name} is now {(on ? "on" : "off")}. Restart the server now to use it?")) {

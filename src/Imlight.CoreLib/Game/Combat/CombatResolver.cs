@@ -87,6 +87,9 @@ public class QueuedCombatAction {
 public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     
     private const int SPELL_FIZZLE_TIME = 4;
+
+    // [Battle] ManaOnFizzle: a fizzled spell still costs its mana.
+    private static readonly bool s_manaOnFizzle = ConfigurationManager.GetValue("Battle.ManaOnFizzle", false);
     private const int SPELL_PASS_TIME = 1;
     private const float SPELL_CAST_TIME = 5.0f;
     private const float HANGING_EFFECT_CONSUME_TIME = 1.0f;
@@ -269,6 +272,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
 
                 // Increase pips used counter by 1, even if the spell fizzled.
                 action.SpellCaster._usedPipsForExperienceGain++;
+
+                if (s_manaOnFizzle && action.Spell is not null) {
+                    action.SpellCaster.DeductMana(action.Spell.m_pipCost.m_spellRank);
+                }
             }
             else {
                 // Record when this caster's cinematic begins so a summoned minion appears with its cast.
@@ -513,6 +520,9 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         else {
             caster.DiscardCard(action.m_spell);
         }
+
+        // Spend any school pips the spell costs.
+        caster.DeductSchoolPips(action.m_spell);
 
         // Deduce the players mana by the rank of the spell.
         caster.DeductMana(action.m_spell.m_pipCost.m_spellRank);
