@@ -88,6 +88,6 @@ Shadow pips, also in `[Battle]`:
 | Setting | Default | What it does |
 | ------- | ------- | ------------ |
 | `ShadowPips` | `true` | Wizards and creatures can get shadow pips, which shadow spells cost. They have their own slots. |
-| `PlayerMaxShadowPips` | `2` | The most shadow pips a wizard can hold. |
-| `CreatureMaxShadowPips` | `5` | The most shadow pips a creature can hold. |
+| `PlayerShadowPipLimit` | `0` | The most shadow pips a wizard can hold. 0 means no limit. |
+| `CreatureShadowPipLimit` | `0` | The most shadow pips a creature can hold. 0 means no limit. |
 | `ShadowPipChance` | `0` | The chance (0 to 100) of a shadow pip each round. 0 uses each one's own shadow pip rating from level and gear. |
