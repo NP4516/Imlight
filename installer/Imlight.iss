@@ -1,5 +1,6 @@
 ; Imlight server installer (Inno Setup 6).
-; Build it with build-installer.ps1, which publishes the server into .\publish first.
+; Build it with build-installer.ps1, which publishes the launcher into .\publish\launcher
+; and the server into .\publish\server first. The release workflow does the same.
 
 #define AppName "Imlight Server"
 #ifndef AppVersion
@@ -14,7 +15,7 @@ AppPublisher=Revive101
 AppPublisherURL=https://github.com/Revive101/Imlight
 ; Installed per user so the server can write its logs, cache and database without admin rights.
 PrivilegesRequired=lowest
-DefaultDirName={localappdata}\Imlight\Server
+DefaultDirName={localappdata}\Imlight
 DefaultGroupName=Imlight
 DisableProgramGroupPage=yes
 OutputDir=output
@@ -27,35 +28,38 @@ ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile=..\LICENSE
 
 [Files]
-Source: "publish\*"; DestDir: "{app}"; Excludes: "Config\Imlight.ini"; Flags: recursesubdirs ignoreversion
+Source: "publish\launcher\ImlightLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The launcher keeps itself and the server up to date from GitHub; keep the owner's launcher settings.
+Source: "publish\launcher\launcher.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "publish\server\*"; DestDir: "{app}\Server"; Excludes: "Config\Imlight.ini"; Flags: recursesubdirs ignoreversion
 ; Never replace a configuration the owner has already edited.
-Source: "publish\Config\Imlight.ini"; DestDir: "{app}\Config"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "publish\server\Config\Imlight.ini"; DestDir: "{app}\Server\Config"; Flags: onlyifdoesntexist uninsneveruninstall
 Source: "README.md"; DestDir: "{app}"; DestName: "Getting Started.md"; Flags: ignoreversion
 
 [INI]
-Filename: "{app}\Config\Imlight.ini"; Section: "Database"; Key: "AdminAccountUsername"; String: "{code:GetAdminUser}"
-Filename: "{app}\Config\Imlight.ini"; Section: "Database"; Key: "AdminAccountPassword"; String: "{code:GetAdminPassword}"
-Filename: "{app}\Config\Imlight.ini"; Section: "Patch Server"; Key: "PatchServerInternalUrl"; String: "{code:GetPatchUrl}"
-Filename: "{app}\Config\Imlight.ini"; Section: "Randomizer"; Key: "Enabled"; String: "{code:GetRandomizerEnabled}"
+Filename: "{app}\Server\Config\Imlight.ini"; Section: "Database"; Key: "AdminAccountUsername"; String: "{code:GetAdminUser}"
+Filename: "{app}\Server\Config\Imlight.ini"; Section: "Database"; Key: "AdminAccountPassword"; String: "{code:GetAdminPassword}"
+Filename: "{app}\Server\Config\Imlight.ini"; Section: "Patch Server"; Key: "PatchServerInternalUrl"; String: "{code:GetPatchUrl}"
+Filename: "{app}\Server\Config\Imlight.ini"; Section: "Randomizer"; Key: "Enabled"; String: "{code:GetRandomizerEnabled}"
 
 [Dirs]
-Name: "{app}\logs"
-Name: "{app}\id-lookup"
+Name: "{app}\Server\logs"
+Name: "{app}\Server\id-lookup"
 
 [Icons]
-Name: "{group}\Start Imlight Server"; Filename: "{app}\Imlight.Director.exe"; WorkingDir: "{app}"
-Name: "{group}\ID Lookup (items, spells, mobs)"; Filename: "{app}\id-lookup\index.html"
-Name: "{group}\Server Settings"; Filename: "notepad.exe"; Parameters: """{app}\Config\Imlight.ini"""
-Name: "{group}\Server Logs"; Filename: "{app}\logs"
+Name: "{group}\Start Imlight Server"; Filename: "{app}\ImlightLauncher.exe"; WorkingDir: "{app}"
+Name: "{group}\ID Lookup (items, spells, mobs)"; Filename: "{app}\Server\id-lookup\index.html"
+Name: "{group}\Server Settings"; Filename: "notepad.exe"; Parameters: """{app}\Server\Config\Imlight.ini"""
+Name: "{group}\Server Logs"; Filename: "{app}\Server\logs"
 Name: "{group}\Getting Started"; Filename: "notepad.exe"; Parameters: """{app}\Getting Started.md"""
 Name: "{group}\Uninstall Imlight Server"; Filename: "{uninstallexe}"
-Name: "{userdesktop}\Start Imlight Server"; Filename: "{app}\Imlight.Director.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{userdesktop}\Start Imlight Server"; Filename: "{app}\ImlightLauncher.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Run]
-Filename: "{app}\Imlight.Director.exe"; WorkingDir: "{app}"; Description: "Start the Imlight server now"; Flags: postinstall nowait skipifsilent unchecked
+Filename: "{app}\ImlightLauncher.exe"; WorkingDir: "{app}"; Description: "Start the Imlight server now"; Flags: postinstall nowait skipifsilent unchecked
 
 [Code]
 var
@@ -65,7 +69,7 @@ var
 
 function ExistingSetting(const Section, Key, Default: String): String;
 begin
-  Result := GetIniString(Section, Key, Default, ExpandConstant('{app}\Config\Imlight.ini'));
+  Result := GetIniString(Section, Key, Default, ExpandConstant('{app}\Server\Config\Imlight.ini'));
 end;
 
 procedure InitializeWizard;

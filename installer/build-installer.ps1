@@ -18,12 +18,22 @@ $installerDir = $PSScriptRoot
 $repoRoot = Split-Path $installerDir -Parent
 $publishDir = Join-Path $installerDir "publish"
 
-Write-Host "Publishing the server.."
 if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
+
+Write-Host "Publishing the launcher.."
+dotnet publish (Join-Path $repoRoot "src\Imlight.Launcher\Imlight.Launcher.csproj") `
+    -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:Version=$Version `
+    -o (Join-Path $publishDir "launcher")
+if ($LASTEXITCODE -ne 0) { throw "Publishing the launcher failed." }
+
+Write-Host "Publishing the server.."
 # Self-contained, so the people installing it do not need .NET.
+$serverDir = Join-Path $publishDir "server"
 dotnet publish (Join-Path $repoRoot "src\Imlight.Director\Imlight.Director.csproj") `
-    -c Release -r win-x64 --self-contained true -o $publishDir
-if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed." }
+    -c Release -r win-x64 --self-contained true -p:Version=$Version -o $serverDir
+if ($LASTEXITCODE -ne 0) { throw "Publishing the server failed." }
+# The launcher reads this to know which release is installed.
+Set-Content -Path (Join-Path $serverDir "version.txt") -Value $Version -NoNewline
 
 $iscc = @(
     "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",

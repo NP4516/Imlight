@@ -13,6 +13,12 @@
 
 Leave the server window open while you play. Closing it stops the server.
 
+## Updates
+
+**Start Imlight Server** opens the Imlight Launcher. Each time it starts, it checks the project's GitHub releases, updates itself and the server if a newer release is out, then starts the server. Your settings are always kept. While the server runs, the launcher checks again every 30 minutes and tells you when an update is waiting; it installs the next time you start it.
+
+To change this, edit `launcher.json` in the Imlight folder (`%LOCALAPPDATA%\Imlight`). Setting `RestartServerForUpdates` to `true` makes the launcher restart the server as soon as an update comes out. That disconnects anyone playing, which is why it is off by default.
+
 ## Finding item, spell and mob IDs
 
 The first time the server starts, it builds a list of every item, spell, mob and NPC with its ID. This takes a few minutes and only happens again when the game updates.
@@ -34,7 +40,7 @@ Click **Server Logs** in the Imlight Start menu folder and open the newest file.
 
 ---
 
-## For developers: building this installer
+## For developers: building and releasing
 
 On Windows, with the .NET 10 SDK, [Inno Setup 6](https://jrsoftware.org/isinfo.php), and the Imcodec generator inputs from the main README in place, run:
 
@@ -43,3 +49,9 @@ powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1 -Version 
 ```
 
 The installer is written to `installer\output\ImlightSetup.exe`.
+
+### Releasing an update
+
+Push a version tag, for example `git tag v1.2.0 && git push origin v1.2.0`. The Release workflow (`.github/workflows/release.yml`) builds the launcher and publishes the GitHub release, and every installed launcher picks it up on its next start.
+
+The server can only be built in GitHub Actions if the `IMCODEC_GENERATOR_INPUTS` repository secret is set; the top of the workflow file explains what goes in it. Without it, the release holds only the launcher, and you attach `ImlightServer-win-x64.zip` yourself: zip the contents of `installer\publish\server` after running the build script above.
