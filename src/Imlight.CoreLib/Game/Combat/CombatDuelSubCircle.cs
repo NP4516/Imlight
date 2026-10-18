@@ -282,6 +282,14 @@ public class CombatDuelSubCircle {
                 return;
             }
 
+            // GainSchoolPips: a wizard's pip sometimes comes as a school pip, no stats needed.
+            if (s_gainSchoolPips && _wizard is not null && Random.Shared.Next(100) < s_schoolPipChance
+                    && SchoolPipTarget() is { } gainSchool) {
+                SetSchoolPips(pipCount, gainSchool, (byte) (SchoolPips(pipCount, gainSchool)!.Value + 1));
+
+                continue;
+            }
+
             var gainedPowerPip = DeterminePowerPipGain(CombatParticipant);
             if (gainedPowerPip) {
                 pipCount.m_powerPips++;
@@ -309,14 +317,36 @@ public class CombatDuelSubCircle {
             return;
         }
 
-        var school = (MagicSchool) ParticipantGameStats.m_schoolID;
-        var current = SchoolPips(pipCount, school);
-        if (current is null) {
+        if (SchoolPipTarget() is not { } school) {
             return;
         }
 
         pipCount.m_powerPips--;
-        SetSchoolPips(pipCount, school, (byte) (current.Value + 1));
+        SetSchoolPips(pipCount, school, (byte) (SchoolPips(pipCount, school)!.Value + 1));
+    }
+
+    // [Battle] GainSchoolPips: a wizard's new pip can come as a school pip (SchoolPipChance %), no stats needed.
+    private static readonly bool s_gainSchoolPips = ConfigurationManager.GetValue("Battle.GainSchoolPips", false);
+    private static readonly int s_schoolPipChance
+        = Math.Clamp(ConfigurationManager.GetValue("Battle.SchoolPipChance", 25), 0, 100);
+    // [Battle] RandomSchoolPips: school pips come in a random school instead of the participant's own.
+    private static readonly bool s_randomSchoolPips = ConfigurationManager.GetValue("Battle.RandomSchoolPips", false);
+    // [Battle] NaturalShadowPips: wizards get shadow pips without the shadow pip rating stat.
+    private static readonly bool s_naturalShadowPips = ConfigurationManager.GetValue("Battle.NaturalShadowPips", false);
+    private const int NATURAL_SHADOW_PIP_CHANCE = 25;
+
+    /// <summary>
+    /// The school a new school pip goes to: a random one with RandomSchoolPips, else the participant's own
+    /// (null when they have no primary school).
+    /// </summary>
+    private MagicSchool? SchoolPipTarget() {
+        if (s_randomSchoolPips) {
+            return s_pipSchools[Random.Shared.Next(s_pipSchools.Length)];
+        }
+
+        var school = (MagicSchool) ParticipantGameStats.m_schoolID;
+
+        return SchoolPips(CombatParticipant.m_pipCount, school) is null ? null : school;
     }
 
     // [Battle] ShadowPips: shadow pips, which shadow spells cost, kept in their own slots.
@@ -346,6 +376,9 @@ public class CombatDuelSubCircle {
         var chance = s_shadowPipChance > 0
             ? s_shadowPipChance
             : (int) Math.Round(ParticipantGameStats.m_shadowPipRating + ParticipantGameStats.m_bonusShadowPipRating);
+        if (s_naturalShadowPips && _wizard is not null && chance <= 0) {
+            chance = NATURAL_SHADOW_PIP_CHANCE;
+        }
         if (chance > 0 && Random.Shared.Next(100) < Math.Min(chance, 100)) {
             pipCount.m_shadowPips++;
         }
