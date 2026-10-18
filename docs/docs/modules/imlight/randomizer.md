@@ -53,3 +53,17 @@ Within a group the swap is a shuffle, so two different spells never turn into th
 | `LevelRange` | `10` | How many levels wide each gear and creature level range is. |
 
 The admin commands `.sb learn` and `.mod additem` are never shuffled; they always give exactly the ID you type. Use `.lookup` to find IDs.
+
+## Spell trainers and training points
+
+The `[Trainers]` section of `Imlight.ini` works with or without randomizer mode. The app has a switch for each one on the Server tab.
+
+| Setting | Default | What it does |
+| ------- | ------- | ------------ |
+| `RandomizeSpellRequirements` | `false` | Each spell that needs another spell first needs a different, random one instead, picked from the same trainer's lower level spells, so every spell can still be reached. |
+| `NoSpellRequirements` | `false` | No spell needs another spell first. Overrides `RandomizeSpellRequirements`. |
+| `NoLevelRequirements` | `false` | Any level can train any spell. |
+| `FreeTraining` | `false` | Training costs no training points, even for other schools' spells. |
+| `TrainingPointPerLevel` | `false` | Every level gained also gives training points. |
+| `TrainingPointsPerLevel` | `1` | How many training points each level gives while `TrainingPointPerLevel` is on (0 to 100). |
+| `PlayersCanGainTrainingPoints` | `true` | Any player can type `.gaintp <amount>` (or `.trainingpoints <amount>`) to give themselves 1 to 100 training points. |

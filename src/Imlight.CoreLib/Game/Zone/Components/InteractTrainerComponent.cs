@@ -113,19 +113,17 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
                 newBase.m_displayKey = spellTemplate.m_displayName;
             }
 
-            // If a wizard is the same school as the spell, it is free to train.
-            var schoolName = wizard.MagicSchoolBehavior.MagicSchool.ToString();
-            if (spellTemplate.m_sMagicSchoolName == schoolName) {
-                newBase.m_trainingCost = 0;
-            }
-            else {
-                newBase.m_trainingCost = 1;
-            }
+            // Training costs nothing for the wizard's own school (or for everyone with FreeTraining), else one point.
+            newBase.m_trainingCost = TrainingCost(wizard, spellTemplate);
+
+            // NoLevelRequirements lets any level train any spell.
+            var requiredLevel = Randomizer.NoLevelRequirements ? 1 : SpellInventory[i].Level;
+            newBase.m_requiredLevel = requiredLevel;
 
             // Check if wizard has enough training points to train the spell, and if the
             // wizard is high enough level to train the spell.
             if (wizard.MagicSchoolBehavior.TrainingPoints < newBase.m_trainingCost
-                    || wizard.MagicSchoolBehavior.Level < SpellInventory[i].Level) {
+                    || wizard.MagicSchoolBehavior.Level < requiredLevel) {
                 newBase.m_bCanTrain = false;
                 newBase.m_failedRequirement = null;
 
@@ -134,13 +132,15 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
             }
 
             // If the spell has no required spell, it can be trained, else check if the wizard has the required spell.
-            if (SpellInventory[i].RequiredSpellID == 0) {
+            var originalRequiredId = RequiredSpellFor(wizard, SpellInventory[i]);
+            if (originalRequiredId == 0) {
                 newBase.m_bCanTrain = true;
                 newBase.m_failedRequirement = null;
+                newBase.m_requirements = null;
             }
             else {
                 // The required spell is swapped the same way, so a randomized chain still lines up.
-                var requiredSpellId = Randomizer.MapSpell(wizard, (uint) SpellInventory[i].RequiredSpellID);
+                var requiredSpellId = Randomizer.MapSpell(wizard, (uint) originalRequiredId);
                 var reqSpellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(requiredSpellId);
                 if (requiredSpellId != SpellInventory[i].RequiredSpellID) {
                     newBase.m_requirements = HasSpellRequirement(reqSpellTemplate);
@@ -169,6 +169,42 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
     }
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) { }
+
+    /// <summary>
+    /// How many training points a spell costs this wizard: none for their own school or with FreeTraining, else one.
+    /// </summary>
+    internal static int TrainingCost(Wizard wizard, SpellTemplate spellTemplate) {
+        if (Randomizer.FreeTraining) {
+            return 0;
+        }
+
+        string school = spellTemplate.m_sMagicSchoolName;
+
+        return school == wizard.MagicSchoolBehavior.MagicSchool.ToString() ? 0 : 1;
+    }
+
+    /// <summary>
+    /// The spell (before randomizer swaps) a wizard must know to train this entry, or 0 for none.
+    /// NoSpellRequirements removes them all. RandomizeSpellRequirements gives each spell that has one a
+    /// requirement picked from this trainer's lower level spells, so every chain can still be finished.
+    /// </summary>
+    private ulong RequiredSpellFor(Wizard wizard, NPCSpellEntry entry) {
+        if (Randomizer.NoSpellRequirements || entry.RequiredSpellID == 0) {
+            return 0;
+        }
+
+        if (!Randomizer.RandomizeSpellRequirements) {
+            return entry.RequiredSpellID;
+        }
+
+        var lower = SpellInventory
+            .Where(other => other.Level < entry.Level && other.TemplateID != entry.TemplateID)
+            .Select(other => other.TemplateID)
+            .OrderBy(id => id)
+            .ToArray();
+
+        return lower.Length == 0 ? 0 : lower[Randomizer.PickIndex(wizard, "requirements", entry.TemplateID, lower.Length)];
+    }
 
     private void InitializeServiceBases() {
         // Foreach spell in the inventory, create a service option. This method serves to initialize defaults.

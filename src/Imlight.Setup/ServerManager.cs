@@ -75,6 +75,16 @@ internal sealed partial class ServerManager(string installFolder) {
             GameClient.ClientExe(InstallFolder) is not null);
     }
 
+    /// <summary>
+    /// Whether an on/off setting in Imlight.ini is on. A missing setting counts as off.
+    /// </summary>
+    internal bool GetSwitch(string section, string key)
+        => IniFile.Get(ConfigFile, section, key)?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
+
+    internal bool HasSetting(string section, string key) => IniFile.Get(ConfigFile, section, key) is not null;
+
+    internal string? GetSetting(string section, string key) => IniFile.Get(ConfigFile, section, key);
+
     internal string StartServer() {
         if (InstalledCommands.IsServerRunning(InstallFolder)) {
             return "The server is already running.";
@@ -339,6 +349,24 @@ internal sealed partial class ServerManager(string installFolder) {
             UseShellExecute = true,
         })?.Dispose();
     }
+
+    /// <summary>
+    /// Whether the app updates Imlight by itself when it opens. On unless the marker file says off.
+    /// </summary>
+    internal bool AutoUpdate {
+        get => !File.Exists(Path.Combine(InstallFolder, AUTO_UPDATE_OFF_FILE));
+        set {
+            var path = Path.Combine(InstallFolder, AUTO_UPDATE_OFF_FILE);
+            if (value) {
+                File.Delete(path);
+            }
+            else {
+                File.WriteAllText(path, "Imlight does not update by itself while this file exists. The Tools tab in the app changes it.");
+            }
+        }
+    }
+
+    private const string AUTO_UPDATE_OFF_FILE = "auto-update-off.txt";
 
     internal string LogFolder => Path.Combine(ServerFolder, "logs");
 

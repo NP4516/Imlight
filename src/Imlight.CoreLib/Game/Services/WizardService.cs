@@ -59,6 +59,12 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
 
     private const float ORIENTATION_TOLERANCE = 1.035f;
 
+    // [Trainers] TrainingPointPerLevel: every level gained also gives TrainingPointsPerLevel training points.
+    private static readonly int s_trainingPointsPerLevel
+        = ConfigurationManager.GetValue("Trainers.TrainingPointPerLevel", false)
+            ? Math.Clamp(ConfigurationManager.GetValue("Trainers.TrainingPointsPerLevel", 1), 0, 100)
+            : 0;
+
     private Wizard _activeWizard;
     private CoreObject _activeWizardGameObject;
 
@@ -100,10 +106,13 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_LEVELUP))]
     private void ReceiveSetLevel(CHARACTER_103_PROTOCOL.MSG_LEVELUP message) {
         // This is the internal level up message. It most likely happened due to a developer command.
+        var beforeLevel = _activeWizard.MagicSchoolBehavior.Level;
         var levelUpSuccess = _activeWizard.SetLevel(message.NewLevel);
         if (!levelUpSuccess) {
             return;
         }
+
+        GiveLevelTrainingPoints(_activeWizard.MagicSchoolBehavior.Level - beforeLevel);
 
         var levelUpMessage = new WIZARD_12_PROTOCOL.MSG_LEVELUP {
             GlobalID = _activeWizard.GameObjectID,
@@ -150,6 +159,21 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         AnnounceLevelChange();
     }
 
+    /// <summary>
+    /// Gives the training points [Trainers] TrainingPointPerLevel grants for the levels just gained.
+    /// </summary>
+    private void GiveLevelTrainingPoints(int levelsGained) {
+        if (s_trainingPointsPerLevel <= 0 || levelsGained <= 0) {
+            return;
+        }
+
+        var newTrainingPoints = _activeWizard.MagicSchoolBehavior.TrainingPoints + (levelsGained * s_trainingPointsPerLevel);
+        _activeWizard.UpdateTrainingPoints(newTrainingPoints);
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATETRAINING() {
+            TrainingPoints = newTrainingPoints
+        });
+    }
+
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_GAINXP))]
     private void ReceiveGainXP(CHARACTER_103_PROTOCOL.MSG_GAINXP message) {
         var beforeLevel = _activeWizard.MagicSchoolBehavior.Level;
@@ -160,6 +184,8 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         var afterLevel = _activeWizard.MagicSchoolBehavior.Level;
 
         if (beforeLevel != afterLevel) {
+            GiveLevelTrainingPoints(afterLevel - beforeLevel);
+
             // The player leveled up. AddExperiencePoints already called SetLevel internally,
             // so we just need to broadcast the level-up and send stat updates to the client.
             var levelUpMessage = new WIZARD_12_PROTOCOL.MSG_LEVELUP {

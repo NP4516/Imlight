@@ -101,6 +101,33 @@ internal static class SelfUpdate {
         }
     }
 
+    /// <summary>
+    /// The newest released version if it is newer than this one, else null (also when offline or on a local build).
+    /// </summary>
+    internal static async Task<Version?> NewerReleaseAsync() {
+        if (CurrentVersion == new Version(0, 0, 0)) {
+            return null;
+        }
+
+        try {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ImlightSetup", CurrentVersion.ToString()));
+            http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+
+            using var document = JsonDocument.Parse(await http.GetStringAsync($"https://api.github.com/repos/{RELEASE_REPOSITORY}/releases/latest"));
+            var release = document.RootElement;
+            var version = ParseVersion(release.GetProperty("tag_name").GetString());
+            var hasAsset = release.GetProperty("assets").EnumerateArray()
+                .Any(a => string.Equals(a.GetProperty("name").GetString(), ASSET, StringComparison.OrdinalIgnoreCase));
+
+            return version is not null && version > CurrentVersion && hasAsset ? version : null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException
+                                       or KeyNotFoundException or InvalidOperationException) {
+            return null;
+        }
+    }
+
     internal static Version? ParseVersion(string? text) {
         if (string.IsNullOrWhiteSpace(text)) {
             return null;
