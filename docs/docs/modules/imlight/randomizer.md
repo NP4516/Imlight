@@ -82,3 +82,12 @@ The `[Battle]` section works with or without randomizer mode, with switches on t
 | Setting | Default | What it does |
 | ------- | ------- | ------------ |
 | `OpenAllDoors` | `false` | Every door and teleport works without the quest, level or event it normally needs, such as the Nightside door in the Commons. |
+
+Shadow pips, also in `[Battle]`:
+
+| Setting | Default | What it does |
+| ------- | ------- | ------------ |
+| `ShadowPips` | `true` | Wizards and creatures can get shadow pips, which shadow spells cost. They have their own slots. |
+| `PlayerMaxShadowPips` | `2` | The most shadow pips a wizard can hold. |
+| `CreatureMaxShadowPips` | `5` | The most shadow pips a creature can hold. |
+| `ShadowPipChance` | `0` | The chance (0 to 100) of a shadow pip each round. 0 uses each one's own shadow pip rating from level and gear. |
