@@ -21,7 +21,7 @@
  * 
  * PURPOSE:
  * Loads the league templates, the season templates and the Elo rank table from the PvP directory of the
- * Root.wad, and looks leagues and seasons up by name or by the hash the client sends.
+ * game data, and looks leagues and seasons up by name or by the hash the client sends.
  * 
  * USAGE EXAMPLE:
  * if (PvPLeagueFactory.TryGetLeague(message.LeagueID, out var league)) { }
@@ -34,12 +34,13 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/18/2026
  */
 
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Imcodec.Cryptography;
 using Imcodec.ObjectProperty;
@@ -58,6 +59,8 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
     private static Dictionary<string, PvPSeasonEntry> s_seasonsByName = new(StringComparer.Ordinal);
     private static Dictionary<uint, PvPSeasonEntry> s_seasonsById = [];
     private static EloConfig s_eloConfig;
+    private static PvPRankTable s_defaultRankTable;
+    private static Dictionary<string, PvPRankTable> s_rankTablesByLeagueType = new(StringComparer.OrdinalIgnoreCase);
 
     [GeneratedRegex(@"/Seasons(?<year>\d{4})/", RegexOptions.CultureInvariant)]
     private static partial Regex SeasonYearPattern();
@@ -107,11 +110,71 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
         s_seasonsByName = seasonsByName;
         s_seasonsById = seasonsById;
         s_eloConfig = eloConfig;
+        BuildRankTables(eloConfig, leaguesByName.Keys);
 
         Logger.Information("Loaded {LeagueCount} PvP leagues and {SeasonCount} seasons.", 
             Logger.Args(leaguesByName.Count, seasonsByName.Count));
         if (eloConfig is null) {
-            Logger.Error("The PvP Elo config is missing from the Root.wad.");
+            Logger.Error("The PvP Elo config is missing from the game data.");
+        }
+
+        LogSeasonSelection(leaguesByName.Values);
+    }
+
+    private static void BuildRankTables(EloConfig eloConfig, IEnumerable<string> leagueTypes) {
+        var byLeagueType = new Dictionary<string, PvPRankTable>(StringComparer.OrdinalIgnoreCase);
+        s_defaultRankTable = null;
+        if (eloConfig is null) {
+            s_rankTablesByLeagueType = byLeagueType;
+
+            return;
+        }
+
+        s_defaultRankTable = CreateRankTable(eloConfig.m_defaultRatingsTable);
+        foreach (var template in eloConfig.m_perLeagueRatingsTables ?? []) {
+            var table = CreateRankTable(template);
+            if (!byLeagueType.TryAdd(table.LeagueType, table)) {
+                Logger.Error("The Elo config has two rating tables for the league type {LeagueType}.", Logger.Args(table.LeagueType));
+            }
+        }
+
+        s_rankTablesByLeagueType = byLeagueType;
+        LogRankTables(leagueTypes);
+    }
+
+    private static PvPRankTable CreateRankTable(EloRatingsTable template) {
+        var ranks = (template.m_ranks ?? []).Select((rank, index) => new PvPRankTable.Rank(
+            Index: index,
+            Down: rank.m_eloRankDown,
+            Up: rank.m_eloRankUp,
+            KFactor: rank.m_kFactor,
+            Carryover: rank.m_carryoverElo,
+            NameKey: rank.m_rankName.ToString(),
+            BadgeName: rank.m_badgeName.ToString()));
+
+        return new PvPRankTable(template.m_leagueType.ToString(), template.m_startingElo, template.m_minElo, ranks);
+    }
+
+    private static void LogRankTables(IEnumerable<string> leagueTypes) {
+        var leagues = leagueTypes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var table in s_rankTablesByLeagueType.Values) {
+            Logger.Information("PvP rating table for league type {LeagueType}: {RankCount} ranks, start {Start}, floor {Floor}, rated {IsRated}, league exists {LeagueExists}.",
+                Logger.Args(table.LeagueType, table.RankCount, table.StartingElo, table.MinElo, table.IsRated, leagues.Contains(table.LeagueType)));
+        }
+
+        var withoutTable = leagues.Where(league => !s_rankTablesByLeagueType.ContainsKey(league)).ToList();
+        if (withoutTable.Count > 0) {
+            Logger.Information("PvP leagues without their own rating table, which use the default one: {Leagues}.", Logger.Args(string.Join(", ", withoutTable)));
+        }
+    }
+
+    private static void LogSeasonSelection(IEnumerable<PvPLeagueTemplate> leagues) {
+        int open = leagues.Count(PvPSeasonClock.IsLeagueOpen);
+        Logger.Information("PvP season selection: index {Index}, clock {Clock}, offset {Offset} days, {OpenCount} of {LeagueCount} leagues open.",
+            Logger.Args(PvPSettings.SeasonIndex?.ToString() ?? "by time", PvPSettings.SeasonNow is null ? "real" : "pinned",
+                PvPSettings.SeasonOffsetDays, open, leagues.Count()));
+        if (PvPSettings.ShiftClientClock) {
+            Logger.Warning("PvP.Season.ShiftClientClock is on: the login time sent to every client follows the PvP season clock. Test only.");
         }
     }
 
@@ -144,7 +207,7 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
 
         var directoryYear = int.Parse(yearMatch.Groups["year"].Value, CultureInfo.InvariantCulture);
 
-        // The name carries the month the season starts in, so PvP_2026_01 starts in late December of 2025.
+        // The name carries the month the season starts in, so a season named for January starts in late December of the year before.
         var monthMatch = SeasonNameMonthPattern().Match(season.m_seasonName.ToString());
         if (monthMatch.Success && season.m_startMonth - int.Parse(monthMatch.Groups["month"].Value, CultureInfo.InvariantCulture) > 6) {
             return directoryYear - 1;
@@ -176,6 +239,23 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
 
         return eloConfig is not null;
     }
+
+    internal static bool TryGetRankTable(string leagueType, out PvPRankTable table) {
+        table = null;
+        if (leagueType is not null && s_rankTablesByLeagueType.TryGetValue(leagueType, out table)) {
+            return true;
+        }
+
+        table = s_defaultRankTable;
+
+        return table is not null;
+    }
+
+    internal static IReadOnlyCollection<PvPRankTable> GetRankTables()
+        => s_rankTablesByLeagueType.Values;
+
+    internal static PvPRankTable GetDefaultRankTable()
+        => s_defaultRankTable;
 
     internal static IReadOnlyCollection<PvPLeagueTemplate> GetLeagues()
         => s_leaguesByName.Values;
