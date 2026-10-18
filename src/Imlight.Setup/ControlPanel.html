@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{EDITION}} Control Panel</title>
+<title>{{EDITION}}</title>
 <style>
   :root {
     --bg: #f5f6f8; --panel: #ffffff; --text: #1d2330; --muted: #5f6b7d; --line: #dfe3ea;
@@ -65,6 +65,13 @@
   #toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; display: none; max-width: 90vw; z-index: 10; }
   #toast.error { background: var(--bad); color: #fff; }
   .muted { color: var(--muted); }
+  .play-hero { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  button.btn.big { padding: 12px 22px; font-size: 16px; }
+  #commandText { flex: 1; min-width: 220px; font-family: ui-monospace, Consolas, monospace; }
+  #commandHistory { list-style: none; margin: 12px 0 0; padding: 0; }
+  #commandHistory li { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--line); }
+  #commandHistory code { font: 13px ui-monospace, Consolas, monospace; cursor: pointer; }
+  #commandHistory .ok { color: var(--good); } #commandHistory .fail { color: var(--bad); }
   a { color: var(--accent); }
   @media (max-width: 640px) {
     header { padding: 12px 16px; } nav { margin-left: 0; width: 100%; }
@@ -77,7 +84,8 @@
   <h1>{{EDITION}}</h1>
   <div class="status"><span id="dot" class="dot"></span><span id="statusText">Checking…</span></div>
   <nav>
-    <button data-tab="server" class="active">Server</button>
+    <button data-tab="play" class="active">Play</button>
+    <button data-tab="server">Server</button>
     <button data-tab="settings">Settings</button>
     <button data-tab="accounts">Accounts</button>
     <button data-tab="tools">Tools</button>
@@ -85,7 +93,45 @@
 </header>
 <div id="toast"></div>
 <main>
-  <section id="server" class="tab active">
+  <section id="play" class="tab active">
+    <div class="card">
+      <div class="play-hero">
+        <div>
+          <h2>Play on my server</h2>
+          <p class="sub" style="margin:0" id="playHelp">Starts Wizard101 connected to the server on this computer. If the server is off, it starts it first.</p>
+        </div>
+        <button class="btn primary big" id="playBtn">Play Wizard101</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Command box</h2>
+      <p class="sub">Paste an in-game command here instead of typing it in game. It runs for the character that account has logged in, with that account's permissions, and the reply shows in game.</p>
+      <form id="commandForm" class="row">
+        <select id="commandAccount" aria-label="Account"></select>
+        <input id="commandText" placeholder=".mod additem 1317127" autocomplete="off" spellcheck="false">
+        <button class="btn primary" type="submit">Run</button>
+      </form>
+      <ul id="commandHistory"></ul>
+    </div>
+    <div class="card">
+      <h2>Other servers</h2>
+      <p class="sub">Play on someone else's private server with your Wizard101. The live game is blocked, so these only work for private servers.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Address</th><th>Port</th><th></th></tr></thead>
+          <tbody id="serverRows"></tbody>
+        </table>
+      </div>
+      <form id="serverForm" class="row" style="margin-top:12px">
+        <input name="name" placeholder="Name (optional)" autocomplete="off">
+        <input name="host" placeholder="Address, such as play.example.com" autocomplete="off" required style="flex:1; min-width:200px">
+        <input name="port" type="number" min="1" max="65535" placeholder="Port" required style="width:110px">
+        <button class="btn" type="submit">Save server</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="server" class="tab">
     <div class="card">
       <h2>Server</h2>
       <p class="sub" id="serverHelp">Start the server here. It gets the game files from your Wizard101 folder by itself.</p>
@@ -200,6 +246,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x === b));
   document.querySelectorAll("section.tab").forEach(s => s.classList.toggle("active", s.id === b.dataset.tab));
   if (b.dataset.tab === "accounts") loadAccounts();
+  if (b.dataset.tab === "play") loadPlay();
   if (b.dataset.tab === "settings" && !settings.length) loadSettings();
 });
 
@@ -213,6 +260,8 @@ async function refreshStatus() {
   if (status.randomizer !== null && !pending.size) $("#randomizerToggle").checked = status.randomizer;
   $("#idLink").hidden = !status.idLookup;
   $("#dbLink").href = status.databaseUrl;
+  $("#playBtn").disabled = status.clientFound === false;
+  if (status.clientFound === false) $("#playHelp").textContent = "Wizard101 could not be found. Run \"Update Imlight\" from the Start menu once.";
   $("#aboutText").textContent = `${status.edition} ${status.version}, installed in ${status.installFolder}.`;
 }
 
@@ -359,7 +408,64 @@ $("#createForm").onsubmit = async e => {
 };
 document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => act(() => api("/api/open", { what: b.dataset.open })));
 
-refreshStatus(); refreshLog();
+$("#playBtn").onclick = () => act(() => api("/api/play", {})).then(refreshStatus);
+
+async function loadPlay() {
+  try {
+    const data = await api("/api/servers");
+    $("#serverRows").replaceChildren(...(data.servers.length ? data.servers.map(serverRow) : [emptyRow("No other servers saved yet.", 4)]));
+  } catch (e) { toast(e.message, true); }
+  try {
+    const data = await api("/api/accounts");
+    const sel = $("#commandAccount"), keep = sel.value;
+    sel.replaceChildren(...data.accounts.map(a => new Option(a.username, a.username)));
+    if (keep) sel.value = keep;
+  } catch {
+    if (!$("#commandAccount").options.length) $("#commandAccount").add(new Option("Start the server to pick an account", ""));
+  }
+}
+
+function emptyRow(text, span) {
+  const tr = document.createElement("tr"), td = document.createElement("td");
+  td.colSpan = span; td.className = "muted"; td.textContent = text; tr.appendChild(td); return tr;
+}
+
+function serverRow(s) {
+  const tr = document.createElement("tr");
+  const cell = (text) => { const td = document.createElement("td"); td.textContent = text; return td; };
+  const actions = document.createElement("td"); actions.className = "row";
+  const play = document.createElement("button"); play.className = "btn primary"; play.textContent = "Play";
+  play.onclick = () => act(() => api("/api/servers/play", { name: s.name }));
+  const remove = document.createElement("button"); remove.className = "btn danger"; remove.textContent = "Remove";
+  remove.onclick = () => confirm(`Remove ${s.name}?`) && act(() => api("/api/servers/remove", { name: s.name })).then(loadPlay);
+  actions.append(play, remove);
+  tr.append(cell(s.name), cell(s.host), cell(String(s.port)), actions);
+  return tr;
+}
+
+$("#serverForm").onsubmit = async e => {
+  e.preventDefault(); const f = e.target;
+  const r = await act(() => api("/api/servers", { name: f.name.value, host: f.host.value, port: f.port.value }));
+  if (r) { f.reset(); loadPlay(); }
+};
+
+$("#commandForm").onsubmit = async e => {
+  e.preventDefault();
+  const command = $("#commandText").value.trim(), username = $("#commandAccount").value;
+  if (!command) return;
+  const li = document.createElement("li");
+  const code = document.createElement("code"); code.textContent = command; code.title = "Use again";
+  code.onclick = () => { $("#commandText").value = command; $("#commandText").focus(); };
+  const result = document.createElement("span"); result.className = "muted"; result.textContent = "Sending…";
+  li.append(code, result); $("#commandHistory").prepend(li);
+  while ($("#commandHistory").children.length > 20) $("#commandHistory").lastChild.remove();
+  try {
+    const r = await api("/api/command", { username, command });
+    result.className = "ok"; result.textContent = r.message; $("#commandText").value = "";
+  } catch (err) { result.className = "fail"; result.textContent = err.message; }
+};
+
+refreshStatus(); refreshLog(); loadPlay();
 setInterval(refreshStatus, 3000); setInterval(refreshLog, 2000);
 </script>
 </body>

@@ -35,6 +35,7 @@ internal static class InstalledCommands {
 
     internal const string INSTALLED_EXE = "Imlight.exe";
     internal const string SHORTCUT_FOLDER = Edition.NAME;
+    internal const string APP_SHORTCUT = Edition.NAME + ".lnk";
     internal const string START_SHORTCUT = "Start " + Edition.NAME + ".lnk";
     internal const string PLAY_SHORTCUT = "Play Wizard101 on " + Edition.NAME + ".lnk";
     internal const string PANEL_SHORTCUT = Edition.NAME + " Control Panel.lnk";
@@ -253,7 +254,7 @@ internal static class InstalledCommands {
                 Directory.Delete(startMenu, recursive: true);
             }
 
-            foreach (var name in new[] { START_SHORTCUT, PLAY_SHORTCUT, PANEL_SHORTCUT }) {
+            foreach (var name in new[] { APP_SHORTCUT, START_SHORTCUT, PLAY_SHORTCUT, PANEL_SHORTCUT }) {
                 File.Delete(Path.Combine(desktop, name));
             }
         }

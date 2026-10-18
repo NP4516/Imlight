@@ -26,9 +26,10 @@
  * needs out of their own game client, builds the server and adds shortcuts.
  * Running it again updates the server and keeps its settings and data.
  *
- * The installed copy, Imlight.exe, also starts the server with the game
- * files from the person's own Wizard101 folder (so no separate patch server
- * is needed), starts Wizard101 connected to it, and uninstalls.
+ * The installed copy, Imlight.exe, is the app: it runs the server with the
+ * game files from the person's own Wizard101 folder (so no separate patch
+ * server is needed), plays Wizard101 on it or on another private server
+ * (never the live game), sends in-game commands, and uninstalls.
  *
  * NOTE:
  * Nothing copyrighted is downloaded or shipped: the game files come from
@@ -36,6 +37,7 @@
  */
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 
@@ -125,15 +127,28 @@ internal static class Program {
 
         SetupLog.Info("");
         SetupLog.Info("Imlight is installed. Everything it needs is set up, including the game files from your Wizard101.");
-        SetupLog.Info($"1. Double-click \"{Edition.NAME} Control Panel\" on your desktop and click Start server.");
-        SetupLog.Info($"   (Or double-click \"Start {Edition.NAME}\" to run it in a window.) Wait for \"Imlight may now be connected to.\"");
-        SetupLog.Info($"2. Double-click \"Play Wizard101 on {Edition.NAME}\" and log in with your admin account.");
-        SetupLog.Info("The control panel also changes settings, manages accounts and shows the log.");
+        SetupLog.Info($"Open \"{Edition.NAME}\" on your desktop any time. From there you can start the server, play Wizard101 on it");
+        SetupLog.Info("or on another private server, send in-game commands, change settings and manage accounts.");
         SetupLog.Info("To update later, use \"Update Imlight\" in the Start menu. To remove it, use \"Uninstall Imlight\" there,");
         SetupLog.Info($"or uninstall \"{Edition.NAME}\" from Settings > Apps.");
+        if (!options.Unattended && OperatingSystem.IsWindows()) {
+            OpenApp(options.InstallFolder);
+            SetupLog.Info($"{Edition.NAME} is opening now.");
+        }
+
         WaitForKey(options);
 
         return 0;
+    }
+
+    private static void OpenApp(string installFolder) {
+        try {
+            var exe = Path.Combine(installFolder, InstalledCommands.INSTALLED_EXE);
+            Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = installFolder, UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex) {
+            SetupLog.Detail($"The app could not be opened: {ex.Message}");
+        }
     }
 
     private static void WaitForKey(SetupOptions options) {

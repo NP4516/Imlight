@@ -175,6 +175,9 @@ internal static class Program {
             return;
         }
 
+        // Lets the Imlight app on this computer send in-game commands for a player.
+        global::Imlight.CoreLib.Game.Commands.CommandInbox.Start(s_imlightSystem, Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "command-inbox"));
+
         // Keep program busy with a while loop.
         Logger.Information("Imlight may now be connected to.");
         while (true) {
