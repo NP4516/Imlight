@@ -419,16 +419,19 @@ internal sealed class SetupSteps : IDisposable {
         Directory.CreateDirectory(startMenu);
         Directory.CreateDirectory(Path.Combine(ServerFolder, "logs"));
 
+        // Shortcuts from earlier versions; the app replaces them.
+        foreach (var old in new[] { InstalledCommands.PANEL_SHORTCUT, InstalledCommands.START_SHORTCUT, InstalledCommands.PLAY_SHORTCUT }) {
+            File.Delete(Path.Combine(desktop, old));
+            File.Delete(Path.Combine(startMenu, old));
+        }
+
         var shortcuts = new List<(string Path, string Target, string Arguments)> {
-            (Path.Combine(startMenu, InstalledCommands.PANEL_SHORTCUT), exe, "--panel"),
-            (Path.Combine(desktop, InstalledCommands.PANEL_SHORTCUT), exe, "--panel"),
+            (Path.Combine(desktop, InstalledCommands.APP_SHORTCUT), exe, ""),
+            (Path.Combine(startMenu, InstalledCommands.APP_SHORTCUT), exe, ""),
             (Path.Combine(startMenu, InstalledCommands.START_SHORTCUT), exe, "--start"),
-            (Path.Combine(desktop, InstalledCommands.START_SHORTCUT), exe, "--start"),
-            (Path.Combine(startMenu, InstalledCommands.PLAY_SHORTCUT), exe, "--play"),
-            (Path.Combine(desktop, InstalledCommands.PLAY_SHORTCUT), exe, "--play"),
             (Path.Combine(startMenu, "Server Settings.lnk"), "notepad.exe", $"\"{ConfigFile}\""),
             (Path.Combine(startMenu, "Server Logs.lnk"), Path.Combine(ServerFolder, "logs"), ""),
-            (Path.Combine(startMenu, "Update Imlight.lnk"), exe, ""),
+            (Path.Combine(startMenu, "Update Imlight.lnk"), exe, "--update"),
             (Path.Combine(startMenu, "Uninstall Imlight.lnk"), exe, "--uninstall"),
             (Path.Combine(startMenu, "Setup Log.lnk"), "notepad.exe", $"\"{SetupLog.FilePath}\""),
         };
@@ -436,7 +439,9 @@ internal sealed class SetupSteps : IDisposable {
         // Windows has no .NET API for shortcuts; the shell's scripting object makes them.
         var script = string.Join("\n", shortcuts.Select(s =>
             $"$s = $shell.CreateShortcut('{Escape(s.Path)}'); $s.TargetPath = '{Escape(s.Target)}'; " +
-            $"$s.Arguments = '{Escape(s.Arguments)}'; $s.WorkingDirectory = '{Escape(_options.InstallFolder)}'; $s.Save()"));
+            $"$s.Arguments = '{Escape(s.Arguments)}'; $s.WorkingDirectory = '{Escape(_options.InstallFolder)}'; " +
+            // The app opens its own window, so its console starts minimized.
+            (s.Target == exe && s.Arguments.Length == 0 ? "$s.WindowStyle = 7; " : "") + "$s.Save()"));
         var exitCode = await ProcessRunner.RunAsync("powershell",
             ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$shell = New-Object -ComObject WScript.Shell\n" + script]);
         if (exitCode != 0) {

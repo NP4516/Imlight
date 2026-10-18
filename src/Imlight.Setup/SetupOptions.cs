@@ -31,8 +31,8 @@ internal enum SetupMode { Install, Start, Play, Uninstall, Panel }
 /// </summary>
 internal sealed class SetupOptions {
 
-    /// <summary>What to do. The shortcuts pass --start, --play or --uninstall.</summary>
-    public SetupMode Mode { get; private set; } = SetupMode.Install;
+    /// <summary>What to do. The shortcuts pass --start, --update or --uninstall; the installed Imlight.exe opens the app by default.</summary>
+    public SetupMode Mode { get; private set; } = IsInstalledCopy() ? SetupMode.Panel : SetupMode.Install;
 
     /// <summary>The GitHub repository (owner/repo) to build Imlight from.</summary>
     public string Repository { get; private set; } = Edition.DEFAULT_REPOSITORY;
@@ -70,10 +70,12 @@ internal sealed class SetupOptions {
           --yes                      Do not ask anything; use the defaults.
 
         The installed Imlight.exe also takes:
-          --start                    Start the server, with game files from your Wizard101 folder.
+          (nothing)                  Open the app: run the server, play, change settings and manage accounts.
+          --update                   Update Imlight, the same as running the setup again.
+          --start                    Start the server in a window, with game files from your Wizard101 folder.
           --play                     Start Wizard101 connected to the server on this computer.
           --uninstall                Remove Imlight from this computer.
-          --panel                    Open the control panel in your browser.
+          --panel                    Open the app (the same as no option).
         """;
 
     internal static SetupOptions Parse(string[] args) {
@@ -95,12 +97,24 @@ internal sealed class SetupOptions {
                 case "--play": options.Mode = SetupMode.Play; break;
                 case "--uninstall": options.Mode = SetupMode.Uninstall; break;
                 case "--panel": options.Mode = SetupMode.Panel; break;
+                case "--update": options.Mode = SetupMode.Install; break;
                 case "--no-wait": options.NoWait = true; break;
                 default: throw new SetupException($"Unknown option {args[i]}.\n\n{USAGE}");
             }
         }
 
         return options;
+    }
+
+    /// <summary>
+    /// True when this program is the Imlight.exe that setup installed, rather than the setup download.
+    /// </summary>
+    private static bool IsInstalledCopy() {
+        var self = Environment.ProcessPath;
+
+        return self is not null
+            && string.Equals(Path.GetFileName(self), InstalledCommands.INSTALLED_EXE, StringComparison.OrdinalIgnoreCase)
+            && File.Exists(Path.Combine(Path.GetDirectoryName(self)!, InstallInfo.FILE_NAME));
     }
 
     /// <summary>
