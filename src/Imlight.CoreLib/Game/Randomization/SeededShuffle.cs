@@ -74,6 +74,36 @@ internal sealed class SeededShuffle {
     }
 
     /// <summary>
+    /// Returns a random ID from the same bucket as <paramref name="id"/>, different every call,
+    /// or <paramref name="id"/> itself when it is not in any bucket.
+    /// </summary>
+    internal ulong Pick(ulong id, Random random) {
+        if (!_positions.TryGetValue(id, out var position)) {
+            return id;
+        }
+
+        var ids = _buckets[position.Bucket];
+
+        return ids[random.Next(ids.Length)];
+    }
+
+    /// <summary>
+    /// Returns a random ID from any bucket.
+    /// </summary>
+    internal ulong PickAny(Random random) {
+        var index = random.Next(_positions.Count);
+        foreach (var ids in _buckets.Values) {
+            if (index < ids.Length) {
+                return ids[index];
+            }
+
+            index -= ids.Length;
+        }
+
+        return 0;
+    }
+
+    /// <summary>
     /// A stable string hash. string.GetHashCode changes between runs, which would reshuffle everyone.
     /// </summary>
     internal static ulong Fnv1a(string value) {

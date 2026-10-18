@@ -22,7 +22,9 @@
  * PURPOSE:
  * An optional server mode, configured in the [Randomizer] section of
  * Imlight.ini, that shuffles a character's school, the spells they learn,
- * the loot they get and the creatures in the world.
+ * the loot they get and the creatures in the world. It can also roll
+ * creature decks, gear item cards and pip gain fresh every battle, and
+ * teach a random spell (any combat spell in the game) after a win.
  *
  * USAGE EXAMPLE:
  * var spellId = Randomizer.MapSpell(wizard, trainerSpellId);
@@ -37,6 +39,9 @@
  *   chains at trainers still line up.
  * - The pools are built in the background on boot; a swap asked for before
  *   then waits for them, so no character ever gets an unswapped spell.
+ * - The per-battle rolls (decks, item cards, pips) are truly random and
+ *   differ every time, but still trade within a bucket: a spell becomes
+ *   another spell of the same type and pip cost.
  *
  * TODO:
  *
@@ -85,6 +90,24 @@ public static class Randomizer {
         = Enabled && ConfigurationManager.GetValue("Randomizer.RandomizeDrops", true);
     internal static readonly bool RandomizeCreatures
         = Enabled && ConfigurationManager.GetValue("Randomizer.RandomizeCreatures", false);
+    private static readonly bool s_creaturesEverySpawn
+        = ConfigurationManager.GetValue("Randomizer.CreaturesChangeEverySpawn", true);
+    internal static readonly bool RandomizeCreatureDecks
+        = Enabled && ConfigurationManager.GetValue("Randomizer.RandomizeCreatureDecks", true);
+    internal static readonly bool RandomizeItemCards
+        = Enabled && ConfigurationManager.GetValue("Randomizer.RandomizeItemCards", true);
+    internal static readonly bool RandomizePips
+        = Enabled && ConfigurationManager.GetValue("Randomizer.RandomizePips", true);
+    private static readonly int s_startingSpells
+        = Enabled ? Math.Clamp(ConfigurationManager.GetValue("Randomizer.StartingSpells", 6), 0, 50) : 0;
+    private const int STARTER_MAX_PIPS = 3;
+    private static readonly int s_spellAfterBattleChance
+        = Enabled ? Math.Clamp(ConfigurationManager.GetValue("Randomizer.SpellAfterBattleChance", 100), 0, 100) : 0;
+
+    // Schools whose spells can be cast in battle. Gardening, fishing, cantrips and the like are left out.
+    private static readonly HashSet<string> s_combatSchools = new(StringComparer.OrdinalIgnoreCase) {
+        "Fire", "Ice", "Storm", "Myth", "Life", "Death", "Balance", "Star", "Sun", "Moon", "Shadow",
+    };
 
     private static readonly bool s_sameForEveryone
         = ConfigurationManager.GetValue("Randomizer.SameForEveryone", false);
@@ -96,6 +119,8 @@ public static class Randomizer {
     private static readonly Lazy<SeededShuffle> s_spells = new(BuildSpellPool, LazyThreadSafetyMode.ExecutionAndPublication);
     private static readonly Lazy<SeededShuffle> s_drops = new(BuildDropPool, LazyThreadSafetyMode.ExecutionAndPublication);
     private static readonly Lazy<SeededShuffle> s_creatures = new(BuildCreaturePool, LazyThreadSafetyMode.ExecutionAndPublication);
+    private static readonly Lazy<SeededShuffle> s_combatSpells = new(BuildCombatSpellPool, LazyThreadSafetyMode.ExecutionAndPublication);
+    private static readonly Lazy<uint[]> s_starterSpells = new(BuildStarterSpellPool, LazyThreadSafetyMode.ExecutionAndPublication);
 
     /// <summary>
     /// Builds the swap pools in the background so the first swap rarely has to wait for them.
@@ -107,6 +132,8 @@ public static class Randomizer {
 
         Logger.Information("Randomizer mode is on. School: {School}, spells: {Spells}, drops: {Drops}, creatures: {Creatures}.",
             Logger.Args(RandomizeSchool, RandomizeSpells, RandomizeDrops, RandomizeCreatures));
+        Logger.Information("Randomizer battles. Creature decks: {Decks}, item cards: {ItemCards}, pips: {Pips}, spell after a win: {Chance}%.",
+            Logger.Args(RandomizeCreatureDecks, RandomizeItemCards, RandomizePips, s_spellAfterBattleChance));
 
         _ = Task.Run(() => {
             try {
@@ -118,6 +145,9 @@ public static class Randomizer {
                 }
                 if (RandomizeCreatures) {
                     Logger.Information("Randomizer can swap {Count} creatures.", Logger.Args(s_creatures.Value.Count));
+                }
+                if (RandomizeCreatureDecks || RandomizeItemCards || s_spellAfterBattleChance > 0) {
+                    Logger.Information("Randomizer can use {Count} battle spells.", Logger.Args(s_combatSpells.Value.Count));
                 }
             }
             catch (Exception ex) {
@@ -151,12 +181,118 @@ public static class Randomizer {
             : templateId;
 
     /// <summary>
-    /// Returns the creature that spawns in place of <paramref name="templateId"/>. The same for every player.
+    /// Returns the creature that spawns in place of <paramref name="templateId"/>: a fresh pick of a similar
+    /// level every spawn, or (with CreaturesChangeEverySpawn off) the same swap every time, for every player.
     /// </summary>
-    internal static ulong MapCreature(ulong templateId)
-        => RandomizeCreatures
-            ? s_creatures.Value.Map(templateId, SeededShuffle.Mix(s_seed ^ SeededShuffle.Fnv1a("creatures")))
-            : templateId;
+    internal static ulong MapCreature(ulong templateId) {
+        if (!RandomizeCreatures) {
+            return templateId;
+        }
+
+        return s_creaturesEverySpawn
+            ? s_creatures.Value.Pick(templateId, Random.Shared)
+            : s_creatures.Value.Map(templateId, SeededShuffle.Mix(s_seed ^ SeededShuffle.Fnv1a("creatures")));
+    }
+
+    /// <summary>
+    /// Returns a random spell of the same type and pip cost for a creature's deck. Different every spawn.
+    /// </summary>
+    internal static uint RollCreatureSpell(uint spellTemplateId)
+        => RandomizeCreatureDecks ? RollSpell(spellTemplateId) : spellTemplateId;
+
+    /// <summary>
+    /// Returns a random spell of the same type and pip cost for a card a piece of gear gives. Different every battle.
+    /// </summary>
+    internal static uint RollItemCard(uint spellTemplateId)
+        => RandomizeItemCards ? RollSpell(spellTemplateId) : spellTemplateId;
+
+    /// <summary>
+    /// How many pips a participant gains this round: usually one, sometimes none, two or three.
+    /// </summary>
+    internal static int RollPipGain() {
+        var roll = Random.Shared.Next(100);
+
+        return roll switch {
+            < 15 => 0,
+            < 65 => 1,
+            < 93 => 2,
+            _ => 3,
+        };
+    }
+
+    /// <summary>
+    /// After a win, maybe picks a random battle spell the wizard does not know yet. Any combat spell in the game
+    /// can come up, including ones players normally never get. Returns null when nothing is taught this time.
+    /// </summary>
+    internal static (uint TemplateId, string Name)? PickSpellAfterBattle(Wizard wizard) {
+        if (s_spellAfterBattleChance == 0 || wizard is null || Random.Shared.Next(100) >= s_spellAfterBattleChance) {
+            return null;
+        }
+
+        var pool = s_combatSpells.Value;
+        if (pool.Count == 0) {
+            return null;
+        }
+
+        for (var attempt = 0; attempt < 25; attempt++) {
+            var id = (uint) pool.PickAny(Random.Shared);
+            if (id == 0 || wizard.SpellbookBehavior.HasSpell(id)) {
+                continue;
+            }
+
+            if (CoreObjectFactory.GetCoreTemplate(id) is SpellTemplate spell) {
+                string displayKey = spell.m_displayName;
+                string name = spell.m_name;
+                var english = string.IsNullOrEmpty(displayKey) ? "" : Locale.GetEnglishName(displayKey);
+
+                return (id, string.IsNullOrEmpty(english) ? name : english);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Teaches a new character random battle spells (StartingSpells of them, 6 by default) that cost
+    /// at most three pips, so every one can be cast early on. Called before the character is first saved.
+    /// </summary>
+    internal static void GiveStartingSpells(Wizard wizard) {
+        if (s_startingSpells == 0 || wizard is null) {
+            return;
+        }
+
+        try {
+            var pool = s_starterSpells.Value;
+            var picked = new HashSet<uint>();
+            for (var attempt = 0; picked.Count < Math.Min(s_startingSpells, pool.Length) && attempt < s_startingSpells * 20; attempt++) {
+                var id = pool[Random.Shared.Next(pool.Length)];
+                if (!picked.Add(id)) {
+                    continue;
+                }
+
+                if (Imlight.CoreLib.Game.Spells.SpellFactory.GetSpell(id) is { } spell) {
+                    wizard.SpellbookBehavior.AddSpellToBook(spell);
+                }
+                else {
+                    picked.Remove(id);
+                }
+            }
+        }
+        catch (Exception ex) {
+            Logger.Error("Randomizer could not pick starting spells. {Exception}", Logger.Args(ex));
+        }
+    }
+
+    private static uint RollSpell(uint spellTemplateId) {
+        try {
+            return (uint) s_combatSpells.Value.Pick(spellTemplateId, Random.Shared);
+        }
+        catch (Exception ex) {
+            Logger.Warning("Randomizer could not roll a spell for {Id}. {Message}", Logger.Args(spellTemplateId, ex.Message));
+
+            return spellTemplateId;
+        }
+    }
 
     private static ulong SeedFor(Wizard wizard, string what) {
         var seed = s_seed ^ SeededShuffle.Fnv1a(what);
@@ -235,6 +371,48 @@ public static class Randomizer {
         }
 
         return new SeededShuffle(entries);
+    }
+
+    private static SeededShuffle BuildCombatSpellPool()
+        => new(CombatSpells().Select(s => (s.Id, SpellBucket(s.Spell))));
+
+    private static uint[] BuildStarterSpellPool()
+        => [.. CombatSpells()
+            .Where(s => s.Spell.m_spellRank is { m_xPipSpell: false } rank && rank.m_spellRank <= STARTER_MAX_PIPS)
+            .Select(s => (uint) s.Id)];
+
+    /// <summary>
+    /// Every combat spell in the game files, trainer spells or not. Treasure cards are left out.
+    /// </summary>
+    private static List<(ulong Id, SpellTemplate Spell)> CombatSpells() {
+        var idsByPath = new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
+        foreach (var location in CoreObjectFactory.TemplateManifest.m_serializedTemplates) {
+            if (location is null) {
+                continue;
+            }
+
+            string path = location.m_filename;
+            if (!string.IsNullOrEmpty(path)) {
+                idsByPath.TryAdd(path, location.m_id);
+            }
+        }
+
+        var spells = new List<(ulong, SpellTemplate)>();
+        foreach (var (path, spell) in Imlight.CoreLib.Game.Spells.SpellFactory.AllSpellTemplates()) {
+            string name = spell.m_name;
+            string school = spell.m_sMagicSchoolName;
+            string type = spell.m_sTypeName;
+            if (spell.m_Treasure || name.EndsWith(" TC") || spell.m_spellRank is null
+                || string.IsNullOrEmpty(type) || string.IsNullOrEmpty(school) || !s_combatSchools.Contains(school)) {
+                continue;
+            }
+
+            if (idsByPath.TryGetValue(path, out var id) && id <= uint.MaxValue) {
+                spells.Add((id, spell));
+            }
+        }
+
+        return spells;
     }
 
     private static string SpellBucket(SpellTemplate spell) {

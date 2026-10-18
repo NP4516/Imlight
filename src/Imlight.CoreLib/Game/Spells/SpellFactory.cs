@@ -92,6 +92,20 @@ internal class SpellFactory : RootDirectoryResourceSingleton<SpellFactory>, IMem
     }
 
     /// <summary>
+    /// Every spell template the game has, with the file it came from.
+    /// </summary>
+    internal static List<(string Path, SpellTemplate Template)> AllSpellTemplates() {
+        _ = Instance;
+
+        var templates = new List<(string Path, SpellTemplate Template)>(s_spellTemplates.Count);
+        foreach (var (hash, template) in s_spellTemplates) {
+            templates.Add((s_spellTemplatePaths[hash], template));
+        }
+
+        return templates;
+    }
+
+    /// <summary>
     /// Retrieves a spell by its name.
     /// </summary>
     /// <param name="spellName">The name of the spell.</param>
