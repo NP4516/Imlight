@@ -117,6 +117,8 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
         public byte MoveType;
         public byte SpellSelection;
         public uint SpellTarget;
+        // SpellTarget as the client sent it, before it was turned from a bit into an index.
+        public uint RawSpellTarget;
         public int TimeLeft;
 
     }

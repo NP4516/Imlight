@@ -101,3 +101,7 @@ Shadow pips, also in `[Battle]` (`NaturalShadowPips` gives wizards shadow pips w
 | `PlayerShadowPipLimit` | `0` | The most shadow pips a wizard can hold. 0 means no limit. |
 | `CreatureShadowPipLimit` | `0` | The most shadow pips a creature can hold. 0 means no limit. |
 | `ShadowPipChance` | `0` | How much the shadow gauge fills each round (0 to 100); a full gauge gives a shadow pip. 0 uses each one's own shadow pip rating from level and gear. |
+
+## Enchantments and test shops
+
+Enchantment cards (Epic, Sharpen Blade, Potent Trap and the rest) can be played onto another card in your hand in battle. The enchanted card keeps the change until it is cast. For testing, Elik Silverfist in the Commons sells every treasure card in the game and Abner K. Doodle sells every enchantment, each for 1 to 200 gold, and they never run out.

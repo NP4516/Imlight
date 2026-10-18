@@ -420,7 +420,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
                 HandlePassMove(caster);
                 break;
             case CombatMoveType.Attack:
-                HandleAttackMove(caster, message.SpellSelection, message.SpellTarget);
+                HandleAttackMove(caster, message.SpellSelection, message.SpellTarget, message.RawSpellTarget);
                 break;
             case CombatMoveType.Flee:
                 HandleFleeAction(caster);
@@ -429,8 +429,13 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
                 HandleChangeMindAction(caster);
                 break;
             default:
-                Logger.Warning("Duel {0} | Slot {1} | Invalid combat move type: {2}",
-                    Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, moveType));
+                // An enchantment played onto a card may come as its own move type.
+                if (TryEnchantMove(caster, message.SpellSelection, message.SpellTarget, message.RawSpellTarget)) {
+                    return;
+                }
+
+                Logger.Warning("Duel {0} | Slot {1} | Invalid combat move type: {2} (card {3}, target {4})",
+                    Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, moveType, message.SpellSelection, message.RawSpellTarget));
                 break;
         }
 
@@ -1171,7 +1176,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         }
     }
 
-    private void HandleAttackMove(CombatDuelSubCircle caster, int spellSelection, uint spellTarget) {
+    private void HandleAttackMove(CombatDuelSubCircle caster, int spellSelection, uint spellTarget, uint rawSpellTarget) {
         var spell = caster.GetSpellFromLastHand((byte) spellSelection);
         if (spell is null) {
             Logger.Warning("Duel {0} | Slot {1} | Attack received for an empty hand slot ({2}).",
@@ -1182,11 +1187,21 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // An enchantment is played onto another card in the hand, not cast.
+        if (CoreObjectFactory.GetCoreTemplate(spell.m_templateID) is SpellTemplate template
+                && CombatEnchantments.IsEnchantment(template)) {
+            TryEnchantMove(caster, spellSelection, spellTarget, rawSpellTarget);
+
+            return;
+        }
+
         if (!caster.HasPipsForSpell(spell)) {
-            Logger.Warning("Duel {0} | Slot {1} | Participant does not have enough pips for spell {2}",
+            Logger.Warning("Duel {0} | Slot {1} | Participant does not have enough pips or mana for spell {2}",
                 Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, spell.m_templateID));
 
             CombatResolver.AddCombatMove(CombatMoveType.Pass, caster, null, null);
+
+            return;
         }
 
         // Find the target sub circle. Valid targets are 1-8.
@@ -1204,6 +1219,48 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         if (!caster.IsSummonedMinion && caster.OccupiedTeam == CombatTeam.Player) {
             SendCombatMoveSelection(caster.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack, spell, (byte) spellTarget);
         }
+    }
+
+    /// <summary>
+    /// Plays an enchantment card onto another card in the caster's hand. The target card may come as a bit
+    /// (1 << index, like spell targets) or as a plain index; whichever names another card is used. The turn
+    /// is not used up: the player picks a card to cast afterwards.
+    /// </summary>
+    private bool TryEnchantMove(CombatDuelSubCircle caster, int spellSelection, uint spellTarget, uint rawSpellTarget) {
+        var enchantment = caster.GetSpellFromLastHand((byte) spellSelection);
+        if (enchantment is null
+            || CoreObjectFactory.GetCoreTemplate(enchantment.m_templateID) is not SpellTemplate enchantTemplate
+            || !CombatEnchantments.IsEnchantment(enchantTemplate)) {
+            return false;
+        }
+
+        // A value that is not a single bit can only be a plain index.
+        var isBit = rawSpellTarget != 0 && (rawSpellTarget & (rawSpellTarget - 1)) == 0;
+        var candidates = isBit ? new[] { spellTarget, rawSpellTarget } : new[] { rawSpellTarget };
+
+        Spell target = null;
+        foreach (var index in candidates) {
+            if (index != (uint) spellSelection && index < byte.MaxValue
+                && caster.GetSpellFromLastHand((byte) index) is { } card && card != enchantment) {
+                target = card;
+                break;
+            }
+        }
+
+        Logger.Information("Duel {0} | Slot {1} | Enchant: card {2} ({3}) onto target {4} (sent as {5}): {6}",
+            Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, spellSelection, enchantTemplate.m_name.ToString(),
+                        spellTarget, rawSpellTarget, target is null ? "no such card" : target.m_templateID.ToString()));
+
+        if (target is null || !CombatEnchantments.Enchant(target, enchantment)) {
+            SendCurrentCombatHand(caster);
+
+            return true;
+        }
+
+        CombatResolver.UseUpCard(caster, enchantment);
+        SendCurrentCombatHand(caster);
+
+        return true;
     }
 
     private void HandleChangeMindAction(CombatDuelSubCircle caster) {

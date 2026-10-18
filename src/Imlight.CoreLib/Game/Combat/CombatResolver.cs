@@ -157,6 +157,11 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                     Logger.Args(_duel.m_duelID.Full, caster.SlotIndex, spell.m_templateID));
                 return;
             }
+
+            // An enchanted card casts with the enchantment's changes.
+            if (spell.m_enchantment != 0 && CoreObjectFactory.GetCoreTemplate(spell.m_enchantment) is SpellTemplate enchantment) {
+                spellTemplate = CombatEnchantments.Apply(spellTemplate, enchantment, out _);
+            }
         }
 
         var queuedAction = new QueuedCombatAction {
@@ -483,15 +488,13 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         return hitChance <= spellAccuracy;
     }
 
-    private static void DoSpellCastConsequences(CombatDuelSubCircle caster, CombatAction action) {
-        if (action.m_spell is null) {
-            return;
-        }
-
-        // Treasure cards are permanently consumed on successful cast.
-        // Regular spells are discarded and return to the deck on reshuffle.
-        if (action.m_spell.m_treasureCard) {
-            var consumedTemplateId = caster.ConsumeFromVault(action.m_spell);
+    /// <summary>
+    /// Takes a played card out of the hand: a treasure card is used up for good (and leaves the deck), any
+    /// other card is discarded and comes back on reshuffle.
+    /// </summary>
+    internal static void UseUpCard(CombatDuelSubCircle caster, Spell spell) {
+        if (spell.m_treasureCard) {
+            var consumedTemplateId = caster.ConsumeFromVault(spell);
             if (consumedTemplateId != 0 && caster._wizard != null) {
                 // Persist the removal from the player's treasure card book.
                 caster._wizard.SpellbookBehavior.RemoveTreasureCard(consumedTemplateId);
@@ -521,8 +524,18 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             }
         }
         else {
-            caster.DiscardCard(action.m_spell);
+            caster.DiscardCard(spell);
         }
+    }
+
+    private static void DoSpellCastConsequences(CombatDuelSubCircle caster, CombatAction action) {
+        if (action.m_spell is null) {
+            return;
+        }
+
+        // Treasure cards are permanently consumed on successful cast.
+        // Regular spells are discarded and return to the deck on reshuffle.
+        UseUpCard(caster, action.m_spell);
 
         // FullPipConserve: like a 100% pip conserve stat, a half-used power pip comes back as a normal pip.
         var conservePips = s_fullPipConserve && caster._wizard is not null;
