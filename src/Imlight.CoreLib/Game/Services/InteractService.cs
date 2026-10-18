@@ -50,8 +50,32 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class InteractService(SessionActor sessionActor) : MessageService(sessionActor) {
 
+    private const string DIALOG_ENTRY_EVENT_COMPLETION = "ENTRY";
+
+    // The NPC the player last used, so its options can be sent again once its dialog or shop closes.
+    private IActorRef _lastInteractedNpc;
+
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new InteractService(parentActor));
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_COMPLETEDIALOG))]
+    private void ReceiveCompleteDialog(WIZARD_12_PROTOCOL.MSG_COMPLETEDIALOG message) {
+        // "ENTRY" reports an event part way through a dialog; anything else means the dialog closed.
+        string completionType = message.CompletionType;
+        if (!string.Equals(completionType, DIALOG_ENTRY_EVENT_COMPLETION, StringComparison.OrdinalIgnoreCase)) {
+            RefreshLastInteractedNpc();
+        }
+    }
+
+    [MessageHandler(typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEPERSONA))]
+    private void ReceiveCompletePersona(QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEPERSONA message)
+        => RefreshLastInteractedNpc();
+
+    private void RefreshLastInteractedNpc() {
+        _lastInteractedNpc?.Tell(new ZONE_102_PROTOCOL.MSG_REFRESHSERVICEOPTIONS {
+            PlayerActor = SessionActor.ActorRef,
+        });
+    }
 
     [MessageHandler(typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_INTERACTNPC))]
     private void ReceiveNpcInteract(QUEST_MESSAGES_52_PROTOCOL.MSG_INTERACTNPC message) {
@@ -60,6 +84,7 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
         // A player is closing their shop
         if (message.ServiceName == "") {
             CloseShop(wizard.GameObjectID);
+            RefreshLastInteractedNpc();
             return;
         }
 
@@ -104,6 +129,7 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
             PlayerObject = gameObj
         };
         serviceMementoComponent.ActorRef.Tell(msg);
+        _lastInteractedNpc = serviceMementoComponent.ActorRef;
     }
 
     private void CloseShop(ulong gameObjectId) {

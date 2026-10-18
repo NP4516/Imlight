@@ -1229,4 +1229,17 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Sent to an NPC when a player closes its dialog or shop: the NPC sends its options again, so the
+    /// player can talk to it again without walking away and back.
+    /// </summary>
+    public sealed class MSG_REFRESHSERVICEOPTIONS : IServerMessage {
+
+        public byte MessageOrder { get; } = 79;
+        public byte ServiceID { get; } = 102;
+
+        public IActorRef PlayerActor;
+
+    }
+
 }
