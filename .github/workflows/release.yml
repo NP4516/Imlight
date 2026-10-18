@@ -1,7 +1,7 @@
 # Publishes a GitHub release when a version tag (v1.2.3) is pushed.
 #
-# ImlightSetup.exe is always built and attached. It installs original Imlight
-# (Revive101/Imlight) on anyone's PC, building it from their own Wizard101 files.
+# ImlightManager.exe is always built and attached. It installs this fork on a PC, building it
+# from that PC's own Wizard101 files, and adds the Control Panel.
 #
 # The launcher is always built and attached. Installed launchers pick up new releases from here,
 # so a release is how an update reaches every server owner.
@@ -60,16 +60,8 @@ jobs:
           New-Item -ItemType Directory -Force release | Out-Null
           Compress-Archive -Path installer/publish/launcher/* -DestinationPath release/ImlightLauncher-win-x64.zip
 
-      - name: Build ImlightSetup.exe
-        # Builds original Imlight on the player's own PC from their own game files, so it needs no secret.
-        shell: pwsh
-        run: |
-          dotnet publish src/Imlight.Setup/Imlight.Setup.csproj -c Release -r win-x64 --self-contained true `
-            -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -o out/setup
-          Copy-Item out/setup/ImlightSetup.exe release/
-
       - name: Build ImlightManager.exe
-        # The same program, set up to install this fork (randomizer, ID lookup) instead of original Imlight.
+        # Builds this fork on the player's own PC from their own game files, so it needs no secret.
         shell: pwsh
         run: |
           dotnet publish src/Imlight.Setup/Imlight.Setup.csproj -c Release -r win-x64 --self-contained true `
@@ -110,6 +102,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ steps.version.outputs.tag }}"
-          $notes = if ($env:GENERATOR_INPUTS) { "ImlightSetup.exe installs original Imlight. ImlightLauncherSetup.exe installs this build; existing installs update through the launcher." } `
-                   else { "ImlightSetup.exe installs original Imlight. Launcher only for this build: attach ImlightServer-win-x64.zip so launchers can update the server." }
+          $notes = if ($env:GENERATOR_INPUTS) { "ImlightManager.exe installs this build with its Control Panel. ImlightLauncherSetup.exe installs this build; existing installs update through the launcher." } `
+                   else { "ImlightManager.exe installs this build with its Control Panel. Launcher only for this build: attach ImlightServer-win-x64.zip so launchers can update the server." }
           gh release create $tag (Get-ChildItem release/*).FullName --title $tag --notes $notes --target "${{ github.sha }}"

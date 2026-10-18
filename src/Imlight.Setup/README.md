@@ -55,4 +55,4 @@ ImlightSetup --dir <folder>          Install somewhere else.
 
 ## Building it
 
-`dotnet publish src/Imlight.Setup -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`. Add `-p:ImlightEdition=Manager` for ImlightManager.exe. It only uses Imcodec's archive reader, so it needs no game files to build. The Release workflow attaches it to every release.
+`dotnet publish src/Imlight.Setup -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`. Add `-p:ImlightEdition=Manager` for ImlightManager.exe. It only uses Imcodec's archive reader, so it needs no game files to build. The Release workflow attaches ImlightManager.exe to every release; ImlightSetup.exe is only built by hand.
