@@ -22,9 +22,17 @@ using System.IO;
 namespace Imlight.Setup;
 
 /// <summary>
+/// What the program was asked to do. Install also updates an existing install.
+/// </summary>
+internal enum SetupMode { Install, Start, Play, Uninstall }
+
+/// <summary>
 /// What setup installs and where, from the command line. The defaults install original Imlight.
 /// </summary>
 internal sealed class SetupOptions {
+
+    /// <summary>What to do. The shortcuts pass --start, --play or --uninstall.</summary>
+    public SetupMode Mode { get; private set; } = SetupMode.Install;
 
     /// <summary>The GitHub repository (owner/repo) to build Imlight from.</summary>
     public string Repository { get; private set; } = "Revive101/Imlight";
@@ -33,8 +41,7 @@ internal sealed class SetupOptions {
     public string Branch { get; private set; } = "quality-assurance";
 
     /// <summary>Where Imlight is installed.</summary>
-    public string InstallFolder { get; private set; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ImlightServer");
+    public string InstallFolder { get; private set; } = DefaultInstallFolder();
 
     /// <summary>The Wizard101 folder, when the person names it.</summary>
     public string? GameFolder { get; private set; }
@@ -58,6 +65,11 @@ internal sealed class SetupOptions {
           --branch <name>            Build another branch. Default: quality-assurance
           --admin-password <text>    The admin password, for --yes installs.
           --yes                      Do not ask anything; use the defaults.
+
+        The installed Imlight.exe also takes:
+          --start                    Start the server, with game files from your Wizard101 folder.
+          --play                     Start Wizard101 connected to the server on this computer.
+          --uninstall                Remove Imlight from this computer.
         """;
 
     internal static SetupOptions Parse(string[] args) {
@@ -75,11 +87,26 @@ internal sealed class SetupOptions {
                 case "--branch": options.Branch = Next(); break;
                 case "--admin-password": options.AdminPassword = Next(); break;
                 case "--yes": options.Unattended = true; break;
+                case "--start": options.Mode = SetupMode.Start; break;
+                case "--play": options.Mode = SetupMode.Play; break;
+                case "--uninstall": options.Mode = SetupMode.Uninstall; break;
                 default: throw new SetupException($"Unknown option {args[i]}.\n\n{USAGE}");
             }
         }
 
         return options;
+    }
+
+    /// <summary>
+    /// The folder this program runs from when it is an installed Imlight.exe, otherwise %LOCALAPPDATA%\ImlightServer.
+    /// </summary>
+    private static string DefaultInstallFolder() {
+        var ownFolder = Environment.ProcessPath is { } self ? Path.GetDirectoryName(self) : null;
+        if (ownFolder is not null && File.Exists(Path.Combine(ownFolder, InstallInfo.FILE_NAME))) {
+            return ownFolder;
+        }
+
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ImlightServer");
     }
 
 }

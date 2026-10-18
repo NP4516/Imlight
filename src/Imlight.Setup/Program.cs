@@ -26,6 +26,10 @@
  * needs out of their own game client, builds the server and adds shortcuts.
  * Running it again updates the server and keeps its settings and data.
  *
+ * The installed copy, Imlight.exe, also starts the server with the game
+ * files from the person's own Wizard101 folder (so no separate patch server
+ * is needed), starts Wizard101 connected to it, and uninstalls.
+ *
  * NOTE:
  * Nothing copyrighted is downloaded or shipped: the game files come from
  * the person's own Wizard101 install. Everything is logged to setup-log.txt.
@@ -42,7 +46,6 @@ internal static class Program {
     private const int STEPS = 7;
 
     private static async Task<int> Main(string[] args) {
-        Console.Title = "Imlight Setup";
         SetupOptions options;
         try {
             options = SetupOptions.Parse(args);
@@ -53,6 +56,20 @@ internal static class Program {
             return 2;
         }
 
+        switch (options.Mode) {
+            case SetupMode.Start:
+                return await InstalledCommands.StartAsync(options.InstallFolder);
+            case SetupMode.Play:
+                return InstalledCommands.Play(options.InstallFolder);
+            case SetupMode.Uninstall:
+                return InstalledCommands.Uninstall(options.InstallFolder, options.Unattended);
+        }
+
+        Console.Title = "Imlight Setup";
+        if (await SelfUpdate.TryRunNewerAsync(args)) {
+            return 0;
+        }
+
         Console.WriteLine("Imlight Setup");
         Console.WriteLine($"This installs an Imlight server from github.com/{options.Repository} into {options.InstallFolder}.");
         Console.WriteLine("If Imlight is already there, it is updated and your settings and characters are kept.");
@@ -60,8 +77,15 @@ internal static class Program {
             return 0;
         }
 
+        if (InstalledCommands.IsServerRunning(options.InstallFolder)) {
+            Console.WriteLine("The Imlight server is running. Close its window, then run setup again.");
+            WaitForKey(options);
+
+            return 1;
+        }
+
         SetupLog.Open(options.InstallFolder);
-        SetupLog.Detail($"Options: repo={options.Repository} branch={options.Branch} dir={options.InstallFolder}");
+        SetupLog.Detail($"Setup {SelfUpdate.CurrentVersion}. Options: repo={options.Repository} branch={options.Branch} dir={options.InstallFolder}");
         using var steps = new SetupSteps(options);
 
         try {
@@ -98,11 +122,11 @@ internal static class Program {
         }
 
         SetupLog.Info("");
-        SetupLog.Info("Imlight is installed.");
-        SetupLog.Info("1. Start your patch server (Aurorium: https://github.com/Revive101/Aurorium).");
-        SetupLog.Info("2. Double-click \"Start Imlight Server\" on your desktop and wait for \"Imlight may now be connected to.\"");
-        SetupLog.Info("3. Start Wizard101 with the launch option -L 127.0.0.1 12000 and log in with your admin account.");
-        SetupLog.Info("To update later, run \"Update Imlight\" from the Start menu.");
+        SetupLog.Info("Imlight is installed. Everything it needs is set up, including the game files from your Wizard101.");
+        SetupLog.Info("1. Double-click \"Start Imlight Server\" on your desktop and wait for \"Imlight may now be connected to.\"");
+        SetupLog.Info("2. Double-click \"Play Wizard101 on Imlight\" and log in with your admin account.");
+        SetupLog.Info("To update later, use \"Update Imlight\" in the Start menu. To remove it, use \"Uninstall Imlight\" there,");
+        SetupLog.Info("or uninstall \"Imlight Server\" from Settings > Apps.");
         WaitForKey(options);
 
         return 0;

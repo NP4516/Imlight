@@ -9,10 +9,23 @@ A one-click installer for **original Imlight** ([Revive101/Imlight](https://gith
 3. **Downloads the latest Imlight** and the exact Imcodec version it uses from GitHub. Git is not needed.
 4. **Reads the game files Imcodec needs** (`*Messages*.xml`) straight out of the player's own `Root.wad`, and uses the type dump Imcodec ships. Nothing copyrighted is downloaded or shared.
 5. **Builds the server** into `%LOCALAPPDATA%\ImlightServer\Server`.
-6. **Asks for an admin account and the patch server address** on a first install.
-7. **Adds shortcuts**: Start Imlight Server (desktop and Start menu), Server Settings, Server Logs, Setup Log and Update Imlight.
+6. **Asks for an admin account** on a first install.
+7. **Installs `Imlight.exe` and adds shortcuts**: Start Imlight Server and Play Wizard101 on Imlight (desktop and Start menu), plus Server Settings, Server Logs, Setup Log, Update Imlight and Uninstall Imlight in the Start menu. Imlight Server is also listed under **Settings > Apps**, so it can be uninstalled from there.
 
-Running it again, or clicking **Update Imlight**, downloads the latest Imlight and rebuilds. `Config\Imlight.ini`, the logs and the player database are kept.
+## No patch server needed
+
+Imlight reads game files from a patch server. On a home computer, **Start Imlight Server** runs a small one built into `Imlight.exe` that hands the server the files from the player's own Wizard101 folder (`Data\GameData`), then starts the server. Nothing is downloaded and nothing leaves the computer. If something else (such as Aurorium) already uses the patch server port, Imlight uses that instead.
+
+If the server asks for an area's file that the player's game hasn't downloaded yet, the window says so. Visiting that area once in the real game downloads it.
+
+## Shortcuts
+
+| Shortcut | What it does |
+| --- | --- |
+| Start Imlight Server | Serves the game files and runs the server. Close the window to stop it. |
+| Play Wizard101 on Imlight | Starts Wizard101 connected to the server on this computer (`-L 127.0.0.1 12000`). |
+| Update Imlight | Gets the newest setup if there is one, downloads the latest Imlight and rebuilds. `Config\Imlight.ini`, the logs and the player database are kept. |
+| Uninstall Imlight | Removes Imlight, its shortcuts and its Apps entry. It asks before deleting accounts and characters. Wizard101 is not touched. |
 
 Everything it does is written to `setup-log.txt` in the install folder. If setup fails, that file says why. Share it when asking for help.
 
