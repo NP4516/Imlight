@@ -24,7 +24,7 @@
  * which chest, which player, which game, and where the player returns to afterwards.
  *
  * USAGE EXAMPLE:
- * var context = new ChestGameContext(Self, templateId, charId, "Shockalock", zone, location, false);
+ * var context = new ChestGameContext(Self, templateId, tables, 1, charId, gameName, zone, location, false);
  *
  * NOTE:
  * ReturnLocation is a compact location string as Util.GetCompactStringFromVector writes it.
@@ -36,6 +36,7 @@
  * Last Updated: 10/14/2026
  */
 
+using System.Collections.Generic;
 using Akka.Actor;
 
 namespace Imlight.CoreLib.Game.Minigames;
@@ -43,8 +44,10 @@ namespace Imlight.CoreLib.Game.Minigames;
 /// <summary>
 /// One silver chest game: the chest that offered it, the player, the game and the return point.
 /// </summary>
-/// <param name="ChestRef">The chest component that is told how the game went.</param>
-/// <param name="ChestTemplateId">The template id of the chest, which names its loot.</param>
+/// <param name="ChestRef">The chest component that is told how the game went, null when the result ran without a chest.</param>
+/// <param name="ChestTemplateId">The template id of the chest, 0 without one.</param>
+/// <param name="LootTables">The resolved drop table names the loot is rolled from.</param>
+/// <param name="SuccessScore">The score from which the game counts as won.</param>
 /// <param name="CharId">The character playing the game.</param>
 /// <param name="MinigameName">The name of the minigame in the minigame configuration.</param>
 /// <param name="ReturnZone">The zone the player returns to when the game ends.</param>
@@ -53,6 +56,8 @@ namespace Imlight.CoreLib.Game.Minigames;
 internal sealed record ChestGameContext(
     IActorRef ChestRef,
     ulong ChestTemplateId,
+    IReadOnlyList<string> LootTables,
+    int SuccessScore,
     ulong CharId,
     string MinigameName,
     string ReturnZone,

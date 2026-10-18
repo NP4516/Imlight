@@ -20,16 +20,18 @@
  * ========================================================================
  *
  * PURPOSE:
- * Finds and rolls the loot of a chest from the NpcDropTable of its template id, the same data mobs use.
+ * Finds and rolls the loot of a chest from the drop tables its minigame result names, or else from the
+ * NpcDropTable of its template id, the same data mobs use.
  *
  * USAGE EXAMPLE:
- * if (ChestLootRoller.HasLootTable(templateId)) {
- *     var rolled = ChestLootRoller.Roll(templateId, playerRef, playerObject, wizard);
+ * var tables = ChestLootRoller.ResolveTableNames(namedTables, templateId);
+ * if (tables is not null) {
+ *     var rolled = ChestLootRoller.Roll(tables, playerRef, playerObject, wizard);
  * }
  *
  * NOTE:
- * A chest without a complete loot table is inert. A table name that is not in the drop tables is
- * reported once per name.
+ * Tables that do not resolve are skipped; a chest with none pays no loot. A table name that is not in the drop tables is
+ * reported once per chest template and name.
  *
  * TODO:
  *
@@ -38,51 +40,56 @@
  * Last Updated: 10/14/2026
  */
 
-using System.Collections.Concurrent;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.WizardData.Models.World;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 
 namespace Imlight.CoreLib.Game.DropTables;
 
 /// <summary>
-/// Rolls the loot of a chest template through its NpcDropTable.
+/// Rolls the loot of a chest from named drop tables or its template's NpcDropTable.
 /// </summary>
 internal static class ChestLootRoller {
 
-    private static readonly ConcurrentDictionary<string, byte> s_reportedTableNames = new();
+    private static readonly ConcurrentDictionary<(ulong, string), byte> s_reportedTableNames = new();
 
-    internal static bool HasLootTable(ulong chestTemplateId) {
-        if (!NpcDropTableCollection.TryGetDropTable(chestTemplateId, out var npcDropTable)
-            || npcDropTable.DropTableNames is not { Count: > 0 } tableNames) {
-            return false;
+    internal static IReadOnlyList<string> ResolveTableNames(IReadOnlyList<string> namedTables, ulong chestTemplateId) {
+        var resolved = ResolvingNames(namedTables, chestTemplateId);
+        if (resolved.Count > 0) {
+            return resolved;
         }
 
-        var allResolve = true;
-        foreach (var tableName in tableNames) {
+        return NpcDropTableCollection.TryGetDropTable(chestTemplateId, out var npcDropTable)
+            ? ResolvingNames(npcDropTable.DropTableNames, chestTemplateId)
+            : [];
+    }
+
+    internal static DropTableResult Roll(IReadOnlyList<string> tableNames, IActorRef playerRef, CoreObject playerObj, Wizard wizard)
+        => tableNames.Count == 0
+            ? new DropTableResult()
+            : DropTableRoller.Roll([.. tableNames], playerRef, playerObj, wizard);
+
+    private static List<string> ResolvingNames(IReadOnlyList<string> tableNames, ulong chestTemplateId) {
+        var resolved = new List<string>();
+        foreach (var tableName in tableNames ?? []) {
             if (!string.IsNullOrWhiteSpace(tableName) && DropTableCollection.GetDropTable(tableName) is not null) {
+                resolved.Add(tableName);
+
                 continue;
             }
 
-            allResolve = false;
-            if (s_reportedTableNames.TryAdd(tableName ?? "", 0)) {
+            if (s_reportedTableNames.TryAdd((chestTemplateId, tableName ?? ""), 0)) {
                 Logger.Warning("Chest {Template} names the drop table {Table}, which is not in the drop tables",
                     Logger.Args(chestTemplateId, tableName));
             }
         }
 
-        return allResolve;
-    }
-
-    internal static DropTableResult Roll(ulong chestTemplateId, IActorRef playerRef, CoreObject playerObj, Wizard wizard) {
-        if (!NpcDropTableCollection.TryGetDropTable(chestTemplateId, out var npcDropTable)) {
-            return new DropTableResult();
-        }
-
-        return DropTableRoller.Roll([.. npcDropTable.DropTableNames], playerRef, playerObj, wizard);
+        return resolved;
     }
 
 }

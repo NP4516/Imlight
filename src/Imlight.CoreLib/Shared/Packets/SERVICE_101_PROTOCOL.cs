@@ -235,7 +235,7 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
     }
 
     /// <summary>
-    /// Sent by a silver chest to the session of the player who opened it, asking the minigame service to take
+    /// Sent by ResMinigameHandler to the session of the player who opened it, asking the minigame service to take
     /// the player into the chest game described by <see cref="Context"/>.
     /// </summary>
     public class MSG_START_CHEST_MINIGAME : IServerMessage {

@@ -31,8 +31,9 @@
  * Utilizes Akka.NET actor system for process management.
  * A score settles once per round: the client opens a round, then reports one score.
  * A kiosk round grants its rewards before the window reply is sent.
- * A silver chest round (a chest game context is set) is won by reporting 1, pays out of the chest loot, and
- * ends the process right after the reply, because the chest game scripts never end themselves.
+ * A silver chest round (a chest game context is set) is won by reporting at least the success score of the
+ * chest's minigame result, pays out of the chest loot, and ends the process right after the reply, because
+ * the chest game scripts never end themselves.
  * A chest that refuses the game (another player holds it) makes the round pay nothing.
  * 
  * TODO:
@@ -64,7 +65,6 @@ internal sealed class MinigameProcess : Process {
 
     private const uint QUERY_WIZARD_TIMEOUT_IN_MS = 5000;
     private const long LoggedScoreCapMultiplier = 100;
-    private const int CHEST_GAME_WIN_SCORE = 1;
 
     private bool IsMinigameActive { get; set; }
     private bool _roundOpen;
@@ -93,13 +93,13 @@ internal sealed class MinigameProcess : Process {
     protected override void PreStart() {
         base.PreStart();
 
-        _chestGame?.ChestRef.Tell(new ZONE_102_PROTOCOL.MSG_CHEST_GAME_STARTED { CharId = _chestGame.CharId }, Self);
+        _chestGame?.ChestRef?.Tell(new ZONE_102_PROTOCOL.MSG_CHEST_GAME_STARTED { CharId = _chestGame.CharId }, Self);
     }
 
     protected override void PostStop() {
         // A chest game that ended without a result (pre-game exit, disconnect, idle kill) frees the chest.
         if (_chestGame is not null && !_chestSettled && !_chestRefused) {
-            _chestGame.ChestRef.Tell(new ZONE_102_PROTOCOL.MSG_CHEST_GAME_ABORTED { CharId = _chestGame.CharId }, Self);
+            _chestGame.ChestRef?.Tell(new ZONE_102_PROTOCOL.MSG_CHEST_GAME_ABORTED { CharId = _chestGame.CharId }, Self);
         }
 
         base.PostStop();
@@ -180,8 +180,8 @@ internal sealed class MinigameProcess : Process {
         SettleKioskRound(score, character, leaderboard);
     }
 
-    internal static bool IsChestGameWon(int score)
-        => score >= CHEST_GAME_WIN_SCORE;
+    private bool IsChestGameWon(int score)
+        => score > 0 && score >= _chestGame.SuccessScore;
 
     private void SettleChestRound(int score, CHARACTER_103_PROTOCOL.MSG_CHARACTER character, ScoreTrackingList leaderboard) {
         var won = !_chestRefused && IsChestGameWon(score);
@@ -190,7 +190,7 @@ internal sealed class MinigameProcess : Process {
 
         if (won) {
             try {
-                reward = ChestRewardGranter.Grant(Sender, character, _chestGame.ChestTemplateId);
+                reward = ChestRewardGranter.Grant(Sender, character, _chestGame.ChestTemplateId, _chestGame.LootTables);
             } catch (Exception ex) {
                 Logger.Error("{Process} failed to grant the loot of chest {Template}: {Reason}",
                     Logger.Args(ProcessName, _chestGame.ChestTemplateId, ex.GetBaseException().Message));
@@ -199,7 +199,7 @@ internal sealed class MinigameProcess : Process {
 
         SendRewardsReply(score, leaderboard, reward);
         if (!_chestRefused) {
-            _chestGame.ChestRef.Tell(new ZONE_102_PROTOCOL.MSG_CHEST_GAME_RESULT { CharId = _chestGame.CharId, Won = won }, Self);
+            _chestGame.ChestRef?.Tell(new ZONE_102_PROTOCOL.MSG_CHEST_GAME_RESULT { CharId = _chestGame.CharId, Won = won }, Self);
         }
 
         // The chest game scripts never end themselves after a report, so the session ends here.

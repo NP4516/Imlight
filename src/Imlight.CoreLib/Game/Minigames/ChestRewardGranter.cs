@@ -24,7 +24,7 @@
  * rewards window shows for it.
  *
  * USAGE EXAMPLE:
- * var reward = ChestRewardGranter.Grant(playerActor, character, chestTemplateId);
+ * var reward = ChestRewardGranter.Grant(playerActor, character, chestTemplateId, lootTables);
  *
  * NOTE:
  * The window draws at most 4 slots, and the gold always takes the second one. Only items and treasure
@@ -39,6 +39,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
@@ -59,9 +60,10 @@ internal static class ChestRewardGranter {
 
     internal static MinigameRewardResult Grant(IActorRef playerActor,
                                                CHARACTER_103_PROTOCOL.MSG_CHARACTER character,
-                                               ulong chestTemplateId) {
+                                               ulong chestTemplateId,
+                                               IReadOnlyList<string> lootTables) {
         var wizard = character.Wizard;
-        var rolled = ChestLootRoller.Roll(chestTemplateId, playerActor, character.WizardGameObject, wizard);
+        var rolled = ChestLootRoller.Roll(lootTables, playerActor, character.WizardGameObject, wizard);
         FitGoldToPouch(rolled, wizard);
 
         var granted = LootGranter.Grant(playerActor, wizard, rolled);

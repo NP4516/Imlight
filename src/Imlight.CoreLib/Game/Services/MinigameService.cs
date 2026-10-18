@@ -196,7 +196,7 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
 
     private void AbortChestGame(ChestGameContext chest) {
         var aborted = new ZONE_102_PROTOCOL.MSG_CHEST_GAME_ABORTED { CharId = chest.CharId };
-        chest.ChestRef.Tell(aborted, SessionActor.ActorRef);
+        chest.ChestRef?.Tell(aborted, SessionActor.ActorRef);
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_MESSAGE_PROCESS))]

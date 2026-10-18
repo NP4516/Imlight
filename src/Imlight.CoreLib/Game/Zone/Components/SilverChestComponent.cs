@@ -20,18 +20,19 @@
  * ========================================================================
  *
  * PURPOSE:
- * Makes a silver chest an interactable that sends the player into a lock puzzle minigame (Shock A Lock or
- * Catch A Key). The chest is used up when the game is played to the end, won or lost, and the spawner
- * brings a new one later.
+ * Keeps the chest-side state of a chest whose interact option runs a ResMinigame result: which player holds
+ * the chest while the game runs, and consuming the chest when the game is played to the end, won or lost.
+ * The spawner brings a new one later.
  *
  * USAGE EXAMPLE:
- * Attached by the component registry to every chest template named "Silver Chest" whose template id has a
- * loot table (an NpcDropTable in SpiralDB). A chest without a loot table stays inert.
+ * Attached by the component registry to every template whose interact options hold a ResMinigame result.
+ * The click itself is the result list's: ResMinigameHandler starts the game and names this chest in the
+ * game's context.
  *
  * NOTE:
- * One player at a time holds the chest: Idle, Pending (sent to the game, lease running), InGame, Consumed.
- * The state is world state and is not persisted. The minigame process reports STARTED, RESULT and ABORTED;
- * a STARTED for a chest that another player holds is answered with a refusal and that process pays nothing.
+ * One player at a time holds the chest: Idle, InGame, Consumed. The state is world state and is not persisted.
+ * The minigame process reports STARTED, RESULT and ABORTED; a STARTED for a chest that another player holds is
+ * answered with a refusal and that process pays nothing.
  *
  * TODO:
  *
@@ -40,35 +41,20 @@
  * Last Updated: 10/14/2026
  */
 
-using System;
-using System.Collections.Generic;
-using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
-using Imlight.CoreLib.Game.DropTables;
-using Imlight.CoreLib.Game.Minigames;
-using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
-using Imlight.CoreLib.Shared.Resources;
-using Imlight.CoreLib.WizardData.Models.Player;
+using System.Linq;
 
 namespace Imlight.CoreLib.Game.Zone.Components;
 
 internal sealed class SilverChestComponent(ZoneEntity entity)
-    : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory, IWithTimers {
-
-    private const string SILVER_CHEST_NAME_KEY = "WizardGameObjects_00000055";
-    private const string CHEST_TEXT_KEY = "GUI_ChestInteract";
-    private const string LEASE_TIMER_KEY = "chest-lease";
-
-    private static readonly TimeSpan ReservationLease = PendingChestGames.s_arrivalWindow;
-    private static readonly string[] s_minigameNames = ["Shockalock", "CatchAKey"];
+    : ZoneEntityComponent(entity), IComponentFactory {
 
     private enum ChestState {
         Idle,
-        Pending,
         InGame,
         Consumed,
     }
@@ -76,81 +62,13 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
     private ChestState _state = ChestState.Idle;
     private ulong _playerCharId;
 
-    public string ServiceName => "Interact";
-    public string NpcIcon => (Entity.Template as GameObjectTemplate)?.m_sIcon;
-    public string NpcNameKey => (Entity.Template as GameObjectTemplate)?.m_displayName;
-    public string NpcTextKey => CHEST_TEXT_KEY;
-    public WizBangs WizBang => WizBangs.None;
-    public string StateName => "";
-    public string InteractWizBang => "";
-    public string DisplayKey => "";
-
-    public ITimerScheduler Timers { get; set; }
-
     public static bool ShouldAttachToEntity(CoreTemplate template)
         => template is GameObjectTemplate go
-            && go.m_displayName == SILVER_CHEST_NAME_KEY
-            && ChestLootRoller.HasLootTable(go.m_templateID);
-
-    public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard _)
-        => [
-            new ServiceOptionBase() {
-                m_displayKey = DisplayKey,
-                m_forceInteract = false,
-                m_iconKey = NpcIcon,
-                m_serviceName = ServiceName,
-                m_serviceIndex = 0
-            }
-        ];
-
-    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
-        if (_state != ChestState.Idle) {
-            Logger.Debug("{Wizard} clicked a silver chest that is {State}",
-                Logger.Args(playerCharacter.PlayerNameBehavior.GetWizardName(), _state));
-
-            return;
-        }
-
-        var radius = ((IServiceComponent) this).DEFAULT_INTERACTION_RADIUS;
-        if (playerCharacter.IsInDuel || !IsInHorizontalRadius(playerObject, radius)) {
-            Logger.Debug("{Wizard} clicked a silver chest while in a duel or out of reach",
-                Logger.Args(playerCharacter.PlayerNameBehavior.GetWizardName()));
-
-            return;
-        }
-
-        var templateId = ((GameObjectTemplate) Entity.Template).m_templateID;
-        if (!ChestLootRoller.HasLootTable(templateId)) {
-            return;
-        }
-
-        var minigameName = s_minigameNames[Random.Shared.Next(s_minigameNames.Length)];
-        if (!Imlight.CoreLib.Game.Minigames.MinigameConfig.TryGetMinigameByName(minigameName, out _)) {
-            Logger.Error("The silver chest game {Minigame} is not in the minigame configuration",
-                Logger.Args(minigameName));
-
-            return;
-        }
-
-        _state = ChestState.Pending;
-        _playerCharId = playerCharacter.CharId;
-        Timers.StartSingleTimer(LEASE_TIMER_KEY, new ZONE_102_PROTOCOL.MSG_CHEST_LEASE_EXPIRED(), ReservationLease);
-
-        var context = new ChestGameContext(
-            ChestRef: Self,
-            ChestTemplateId: templateId,
-            CharId: playerCharacter.CharId,
-            MinigameName: minigameName,
-            ReturnZone: playerCharacter.Zone,
-            ReturnLocation: Util.GetCompactStringFromVector(playerObject.m_location, playerObject.m_orientation),
-            ReturnPrivate: Entity.Zone.IsInstance);
-        playerActor.Tell(new SERVICE_101_PROTOCOL.MSG_START_CHEST_MINIGAME { Context = context }, Self);
-    }
+            && InteractObjectStateComponent.GetResults(go).OfType<ResMinigame>().Any();
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_CHEST_GAME_STARTED))]
     private void ReceiveChestGameStarted(ZONE_102_PROTOCOL.MSG_CHEST_GAME_STARTED message) {
-        // A start that outlived its lease still holds the chest if nobody else does.
-        var heldByPlayer = (_state is ChestState.Pending or ChestState.InGame) && _playerCharId == message.CharId;
+        var heldByPlayer = _state == ChestState.InGame && _playerCharId == message.CharId;
         if (!heldByPlayer && _state != ChestState.Idle) {
             Logger.Warning("A silver chest game of {CharId} started on a chest that is {State}",
                 Logger.Args(message.CharId, _state));
@@ -161,7 +79,6 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
 
         _state = ChestState.InGame;
         _playerCharId = message.CharId;
-        Timers.Cancel(LEASE_TIMER_KEY);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_CHEST_GAME_RESULT))]
@@ -176,25 +93,12 @@ internal sealed class SilverChestComponent(ZoneEntity entity)
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_CHEST_GAME_ABORTED))]
     private void ReceiveChestGameAborted(ZONE_102_PROTOCOL.MSG_CHEST_GAME_ABORTED message) {
-        if ((_state is ChestState.Pending or ChestState.InGame) && _playerCharId == message.CharId) {
-            Release();
-        }
-    }
-
-    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_CHEST_LEASE_EXPIRED))]
-    private void ReceiveChestLeaseExpired(ZONE_102_PROTOCOL.MSG_CHEST_LEASE_EXPIRED _) {
-        if (_state != ChestState.Pending) {
+        if (_state != ChestState.InGame || _playerCharId != message.CharId) {
             return;
         }
 
-        Logger.Information("A silver chest was released, {CharId} never reached the game", Logger.Args(_playerCharId));
-        Release();
-    }
-
-    private void Release() {
         _state = ChestState.Idle;
         _playerCharId = 0;
-        Timers.Cancel(LEASE_TIMER_KEY);
     }
 
 }
