@@ -396,8 +396,8 @@ internal sealed class SetupSteps : IDisposable {
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Installs Imlight.exe (this program, which starts, plays, updates and uninstalls), adds Start menu and
-    /// desktop shortcuts to it, and lists Imlight under Settings, Apps.
+    /// Installs Imlight.exe (this program, which starts, plays, updates and uninstalls), adds its desktop
+    /// shortcut, and lists Imlight under Settings, Apps.
     /// </summary>
     internal async Task CreateShortcutsAsync() {
         var exe = Path.Combine(_options.InstallFolder, InstalledCommands.INSTALLED_EXE);
@@ -416,24 +416,25 @@ internal sealed class SetupSteps : IDisposable {
 
         var startMenu = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), InstalledCommands.SHORTCUT_FOLDER);
         var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-        Directory.CreateDirectory(startMenu);
         Directory.CreateDirectory(Path.Combine(ServerFolder, "logs"));
 
-        // Shortcuts from earlier versions; the app replaces them.
+        // The app holds everything, so its desktop shortcut is the only one. Earlier versions added a
+        // Start menu folder and more shortcuts; they are removed.
         foreach (var old in new[] { InstalledCommands.PANEL_SHORTCUT, InstalledCommands.START_SHORTCUT, InstalledCommands.PLAY_SHORTCUT }) {
             File.Delete(Path.Combine(desktop, old));
-            File.Delete(Path.Combine(startMenu, old));
+        }
+
+        try {
+            if (Directory.Exists(startMenu)) {
+                Directory.Delete(startMenu, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            SetupLog.Detail($"The old Start menu folder could not be removed: {ex.Message}");
         }
 
         var shortcuts = new List<(string Path, string Target, string Arguments)> {
             (Path.Combine(desktop, InstalledCommands.APP_SHORTCUT), exe, ""),
-            (Path.Combine(startMenu, InstalledCommands.APP_SHORTCUT), exe, ""),
-            (Path.Combine(startMenu, InstalledCommands.START_SHORTCUT), exe, "--start"),
-            (Path.Combine(startMenu, "Server Settings.lnk"), "notepad.exe", $"\"{ConfigFile}\""),
-            (Path.Combine(startMenu, "Server Logs.lnk"), Path.Combine(ServerFolder, "logs"), ""),
-            (Path.Combine(startMenu, "Update Imlight.lnk"), exe, "--update"),
-            (Path.Combine(startMenu, "Uninstall Imlight.lnk"), exe, "--uninstall"),
-            (Path.Combine(startMenu, "Setup Log.lnk"), "notepad.exe", $"\"{SetupLog.FilePath}\""),
         };
 
         // Windows has no .NET API for shortcuts; the shell's scripting object makes them.
@@ -445,7 +446,7 @@ internal sealed class SetupSteps : IDisposable {
         var exitCode = await ProcessRunner.RunAsync("powershell",
             ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$shell = New-Object -ComObject WScript.Shell\n" + script]);
         if (exitCode != 0) {
-            SetupLog.Info($"Shortcuts could not be created. Start the server with \"{exe}\" --start instead.");
+            SetupLog.Info($"The desktop shortcut could not be created. Open \"{exe}\" instead.");
         }
 
         static string Escape(string value) => value.Replace("'", "''");

@@ -18,11 +18,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -30,11 +32,12 @@ using Avalonia.Threading;
 namespace Imlight.Setup;
 
 /// <summary>
-/// The app's window: Play (this server, other private servers, the command box), Server (start, stop,
-/// randomizer, log), Settings, Accounts and Tools.
+/// The app's window: Play (this server, other private servers), Lookup (every command and ID), Server
+/// (start, stop, randomizer, log), Settings, Accounts and Tools.
 /// </summary>
 internal sealed class ManagerWindow : Window {
 
+    private static readonly IBrush BACKGROUND = new SolidColorBrush(Color.FromRgb(24, 27, 33));
     private static readonly IBrush CARD = new SolidColorBrush(Color.FromArgb(20, 128, 128, 128));
     private static readonly IBrush LINE = new SolidColorBrush(Color.FromArgb(50, 128, 128, 128));
     private static readonly IBrush GOOD = new SolidColorBrush(Color.FromRgb(46, 160, 92));
@@ -57,9 +60,6 @@ internal sealed class ManagerWindow : Window {
     // Play.
     private readonly Button _playButton = Primary("Play Wizard101");
     private readonly TextBlock _playHelp = Sub("Starts Wizard101 connected to the server on this computer. If the server is off, it starts it first.");
-    private readonly ComboBox _commandAccount = new() { MinWidth = 200, PlaceholderText = "Account" };
-    private readonly TextBox _commandText = new() { Watermark = ".mod additem 1317127", FontFamily = MONO };
-    private readonly StackPanel _commandHistory = new() { Spacing = 4, Margin = new Thickness(0, 10, 0, 0) };
     private readonly StackPanel _serverRows = new() { Spacing = 6 };
     private readonly TextBox _newServerName = new() { Watermark = "Name (optional)", Width = 160 };
     private readonly TextBox _newServerHost = new() { Watermark = "Address, such as play.example.com", MinWidth = 260 };
@@ -93,14 +93,21 @@ internal sealed class ManagerWindow : Window {
     private readonly StackPanel _accountRows = new() { Spacing = 6 };
     private readonly TextBlock _accountsNote = Sub("");
 
-    // Tools.
-    private readonly Button _idButton = Plain("Spell, item and creature IDs");
+    // Lookup.
+    private readonly TextBox _lookupSearch = new() { Watermark = "Search by name, ID or what it does, such as gold, Fire Cat or 1317127" };
+    private readonly ComboBox _lookupKind = new() { ItemsSource = Lookup.KINDS, SelectedIndex = 0, Width = 150 };
+    private readonly TextBlock _lookupCount = Sub("");
+    private readonly ListBox _lookupResults = new() { Background = Brushes.Transparent };
+    private readonly DispatcherTimer _lookupDelay = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    private Lookup? _lookup;
+    private DateTime _lookupLoadedFrom;
 
     internal ManagerWindow(ServerManager manager) {
         _manager = manager;
         Title = Edition.NAME;
         Width = 1120;
         Height = 820;
+        Background = BACKGROUND;
         MinWidth = 640;
         MinHeight = 480;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -127,6 +134,7 @@ internal sealed class ManagerWindow : Window {
             Padding = new Thickness(0),
             ItemsSource = new[] {
                 Tab("Play", PlayTab()),
+                Tab("Lookup", LookupTab()),
                 Tab("Server", ServerTab()),
                 Tab("Settings", SettingsTab()),
                 Tab("Accounts", AccountsTab()),
@@ -136,6 +144,7 @@ internal sealed class ManagerWindow : Window {
         tabs.SelectionChanged += async (_, _) => {
             switch ((tabs.SelectedItem as TabItem)?.Header as string) {
                 case "Play": await LoadPlayAsync(); break;
+                case "Lookup": await LoadLookupAsync(); break;
                 case "Settings" when _settings.Count == 0: LoadSettings(); break;
                 case "Accounts": await LoadAccountsAsync(); break;
             }
@@ -186,35 +195,11 @@ internal sealed class ManagerWindow : Window {
         _playButton.FontSize = 16;
         _playButton.Padding = new Thickness(22, 12);
 
-        var run = Action(Primary("Run"), RunCommandAsync);
-        _commandText.KeyDown += async (_, e) => {
-            if (e.Key == Avalonia.Input.Key.Enter) {
-                e.Handled = true;
-                await Guard(RunCommandAsync);
-            }
-        };
-
         return Page(
             Card(new DockPanel {
                 Children = {
                     WithDock(WithCenter(_playButton), Dock.Right),
                     new StackPanel { Margin = new Thickness(0, 0, 16, 0), Children = { Heading("Play on my server"), _playHelp } },
-                },
-            }),
-            Card(new StackPanel {
-                Children = {
-                    Heading("Command box"),
-                    Sub("Paste an in-game command here instead of typing it in game. It runs for the character that account has logged in, " +
-                        "with that account's permissions, and the reply shows in game."),
-                    new DockPanel {
-                        Margin = new Thickness(0, 10, 0, 0),
-                        Children = {
-                            WithDock(_commandAccount, Dock.Left),
-                            WithDock(run, Dock.Right),
-                            WithMargin(_commandText, new Thickness(8, 0)),
-                        },
-                    },
-                    _commandHistory,
                 },
             }),
             Card(new StackPanel {
@@ -230,6 +215,38 @@ internal sealed class ManagerWindow : Window {
                     },
                 },
             }));
+    }
+
+    private Control LookupTab() {
+        _lookupDelay.Tick += (_, _) => {
+            _lookupDelay.Stop();
+            RenderLookup();
+        };
+        _lookupSearch.TextChanged += (_, _) => {
+            _lookupDelay.Stop();
+            _lookupDelay.Start();
+        };
+        _lookupKind.SelectionChanged += (_, _) => RenderLookup();
+        _lookupResults.ItemTemplate = new FuncDataTemplate<LookupEntry>((entry, _) => entry is null ? new Panel() : LookupRow(entry));
+
+        return new DockPanel {
+            Margin = new Thickness(24, 12, 24, 16),
+            Children = {
+                WithDock(Card(new StackPanel {
+                    Children = {
+                        Heading("Commands and IDs"),
+                        Sub("Every in-game command, item, spell, creature, NPC, zone and quest. Type commands in the game's chat, " +
+                            "starting with the dot. Copy puts the text on your clipboard."),
+                        new DockPanel {
+                            Margin = new Thickness(0, 10, 0, 6),
+                            Children = { WithDock(WithMargin(_lookupKind, new Thickness(8, 0, 0, 0)), Dock.Right), _lookupSearch },
+                        },
+                        _lookupCount,
+                    },
+                }), Dock.Top),
+                WithMargin(_lookupResults, new Thickness(0, 10, 0, 0)),
+            },
+        };
     }
 
     private Control ServerTab() {
@@ -321,16 +338,14 @@ internal sealed class ManagerWindow : Window {
     }
 
     private Control ToolsTab() {
-        Action(_idButton, () => Open(_manager.Status().IdLookupPage
-            ?? throw new PanelException("The ID list is not ready yet. Start the server and give it a minute to build the list.")));
-
         return Page(Card(new StackPanel {
             Children = {
                 Heading("Tools"),
-                Sub("Shortcuts to the server's files."),
+                Sub("Update or remove Imlight, or open the server's files."),
                 WithMargin(new WrapPanel {
                     Children = {
-                        Spaced(_idButton),
+                        Spaced(Action(Primary("Update Imlight"), UpdateAsync)),
+                        Spaced(Danger(Action(Plain("Uninstall Imlight"), UninstallAsync))),
                         Spaced(Action(Plain("Open log folder"), () => Open(_manager.LogFolder))),
                         Spaced(Action(Plain("Open settings folder"), () => Open(_manager.ConfigFolder))),
                         Spaced(Action(Plain("Open install folder"), () => Open(_manager.InstallFolder))),
@@ -354,7 +369,7 @@ internal sealed class ManagerWindow : Window {
         _restartButton.IsEnabled = status.Running;
         _playButton.IsEnabled = status.ClientFound;
         if (!status.ClientFound) {
-            _playHelp.Text = "Wizard101 could not be found. Run \"Update Imlight\" from the Start menu once.";
+            _playHelp.Text = "Wizard101 could not be found. Click \"Update Imlight\" on the Tools tab of the app once.";
         }
 
         _randomizerCard.IsVisible = status.Randomizer is not null;
@@ -419,20 +434,10 @@ internal sealed class ManagerWindow : Window {
     // Play
     // ---------------------------------------------------------------------
 
-    private async Task LoadPlayAsync() {
+    private Task LoadPlayAsync() {
         RenderServers();
-        try {
-            using var accounts = _manager.Accounts();
-            var names = (await accounts.ListAsync()).Select(a => a.Username).ToList();
-            var keep = _commandAccount.SelectedItem as string;
-            _commandAccount.ItemsSource = names;
-            _commandAccount.SelectedItem = keep is not null && names.Contains(keep) ? keep : names.FirstOrDefault();
-            _commandAccount.PlaceholderText = "Account";
-        }
-        catch (Exception ex) when (ex is AccountException or PanelException) {
-            _commandAccount.ItemsSource = null;
-            _commandAccount.PlaceholderText = "Start the server to pick an account";
-        }
+
+        return Task.CompletedTask;
     }
 
     private void RenderServers() {
@@ -475,28 +480,111 @@ internal sealed class ManagerWindow : Window {
         Say($"{saved.Name} was saved.");
     }
 
-    private async Task RunCommandAsync() {
-        var command = _commandText.Text?.Trim() ?? "";
-        if (command.Length == 0) {
+    // ---------------------------------------------------------------------
+    // Lookup
+    // ---------------------------------------------------------------------
+
+    private async Task LoadLookupAsync() {
+        var folder = _manager.IdLookupFolder;
+        var changed = new[] { "ids.csv", "zones.txt", "quests.csv" }
+            .Select(name => Path.Combine(folder, name))
+            .Where(File.Exists)
+            .Select(File.GetLastWriteTimeUtc)
+            .DefaultIfEmpty(DateTime.MinValue)
+            .Max();
+        if (_lookup is not null && changed <= _lookupLoadedFrom) {
             return;
         }
 
-        var result = new TextBlock { Text = "Sending…", Foreground = MUTED, TextWrapping = TextWrapping.Wrap };
-        var reuse = new Button { Content = command, FontFamily = MONO, Background = Brushes.Transparent, Padding = new Thickness(4, 2) };
-        reuse.Click += (_, _) => _commandText.Text = command;
-        _commandHistory.Children.Insert(0, new DockPanel { Children = { WithDock(reuse, Dock.Left), WithCenter(result) } });
-        while (_commandHistory.Children.Count > 20) {
-            _commandHistory.Children.RemoveAt(_commandHistory.Children.Count - 1);
+        _lookupCount.Text = "Loading…";
+        try {
+            _lookup = await Task.Run(() => Lookup.Load(folder));
+            _lookupLoadedFrom = changed;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            _lookup = Lookup.Load("");
         }
 
-        try {
-            result.Text = await _manager.SendCommandAsync(_commandAccount.SelectedItem as string ?? "", command);
-            result.Foreground = GOOD;
-            _commandText.Text = "";
+        RenderLookup();
+    }
+
+    private void RenderLookup() {
+        if (_lookup is null) {
+            return;
         }
-        catch (PanelException ex) {
-            result.Text = ex.Message;
-            result.Foreground = BAD;
+
+        const int MAX = 300;
+        var kind = _lookupKind.SelectedItem as string ?? Lookup.EVERYTHING;
+        var query = _lookupSearch.Text ?? "";
+        var results = _lookup.Search(kind, query, MAX, out var total);
+        _lookupResults.ItemsSource = results;
+
+        var count = query.Trim().Length == 0 && kind == Lookup.EVERYTHING
+            ? $"Showing all {total} commands. Type to search everything ({_lookup.Count:N0} entries)."
+            : total == 0 ? "Nothing matches." : total > MAX ? $"{total:N0} matches. Showing the best {MAX}; add words to narrow it down." : $"{total:N0} matches.";
+        _lookupCount.Text = _lookup.Missing is null ? count : $"{count} {_lookup.Missing}";
+    }
+
+    private Control LookupRow(LookupEntry entry) {
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        if (entry.Typed is not null) {
+            buttons.Children.Add(Action(Plain("Copy command"), () => CopyAsync(entry.Typed)));
+        }
+
+        if (entry.Id.Length > 0) {
+            buttons.Children.Add(Action(Plain("Copy ID"), () => CopyAsync(entry.Id)));
+        }
+
+        var details = new StackPanel { Spacing = 2, Margin = new Thickness(0, 0, 12, 0) };
+        details.Children.Add(new StackPanel {
+            Orientation = Orientation.Horizontal, Spacing = 10,
+            Children = {
+                new SelectableTextBlock { Text = entry.Name, FontWeight = FontWeight.SemiBold, FontSize = 15 },
+                WithCenter(new TextBlock {
+                    Text = string.Join("  ·  ", new[] { entry.Kind, entry.Id.Length > 0 ? $"ID {entry.Id}" : "", entry.Detail }.Where(t => t.Length > 0)),
+                    Foreground = MUTED,
+                }),
+            },
+        });
+        if (entry.Typed is not null) {
+            details.Children.Add(new SelectableTextBlock { Text = entry.Typed, FontFamily = MONO, Foreground = GOOD });
+        }
+
+        if (entry.Help.Length > 0) {
+            details.Children.Add(Sub(entry.Help));
+        }
+
+        return new Border {
+            Padding = new Thickness(4, 6),
+            BorderBrush = LINE,
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Child = new DockPanel { Children = { WithDock(buttons, Dock.Right), details } },
+        };
+    }
+
+    private async Task CopyAsync(string text) {
+        var clipboard = GetTopLevel(this)?.Clipboard ?? throw new PanelException("The clipboard is not available.");
+        await clipboard.SetTextAsync(text);
+        Say($"Copied {text}");
+    }
+
+    // ---------------------------------------------------------------------
+    // Tools
+    // ---------------------------------------------------------------------
+
+    private async Task UpdateAsync() {
+        if (await ConfirmAsync("Update Imlight now? The server stops, this app closes, and the update opens in its own window. " +
+                "Your settings, accounts and characters are kept.")) {
+            _manager.RunInstaller("--update");
+            Close();
+        }
+    }
+
+    private async Task UninstallAsync() {
+        if (await ConfirmAsync("Uninstall Imlight? The server stops, this app closes, and the uninstaller opens in its own window. " +
+                "It asks whether to keep your accounts and characters. Wizard101 itself is not touched.")) {
+            _manager.RunInstaller("--uninstall");
+            Close();
         }
     }
 
@@ -748,7 +836,7 @@ internal sealed class ManagerWindow : Window {
 
     private static Window Dialog(string question, Control? input, out Button ok) {
         var dialog = new Window {
-            Title = Edition.NAME, Width = 420, SizeToContent = SizeToContent.Height, CanResize = false,
+            Title = Edition.NAME, Width = 420, SizeToContent = SizeToContent.Height, CanResize = false, Background = BACKGROUND,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
         };
         ok = Primary("OK");
