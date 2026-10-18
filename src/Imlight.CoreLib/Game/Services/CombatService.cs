@@ -63,6 +63,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     private const uint NO_AGGRO_EFFECT_STRINGID = 1618528611;
     private const uint NO_AGGRO_EFFECT_DURATION_IN_SECONDS = 3;
 
+    /// <summary>
+    /// Die = Delete mode: a character that is still dead when its battle ends is deleted.
+    /// </summary>
+    private static readonly bool s_dieDelete = ConfigurationManager.GetValue("Die Delete.Enabled", false);
+
     private readonly CoreObjectSerializer _effectSerializer = new(
         behaviors: SerializerFlags.None
     );
@@ -117,8 +122,22 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]
     private void ReceiveCombatDefeat(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) {
-        GetActiveWizard().IsInDuel = false;
+        var wizard = GetActiveWizard();
+        wizard.IsInDuel = false;
         _currentDuelActor = null;
+
+        if (s_dieDelete && message.DiedInDuel && GetActiveAccount() is { } account) {
+            var name = wizard.PlayerNameBehavior?.GetWizardName() ?? wizard.CharId.ToString();
+            Logger.Information("Die = Delete: {Name} died in battle and will be deleted.", Logger.Args(name));
+            SessionActor.ServerRef.Tell(new SERVER_100_PROTOCOL.MSG_DIEDELETE {
+                AccountID = account.AccountId,
+                CharacterID = wizard.CharId,
+                CharacterName = name,
+            });
+
+            return;
+        }
+
         EquipMountSubtle();
 
         // We've fled or have been defeated in this duel. Send us back to the world hub.

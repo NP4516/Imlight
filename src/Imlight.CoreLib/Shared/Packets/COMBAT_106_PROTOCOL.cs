@@ -162,6 +162,11 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
         public byte MessageOrder => 15;
         public byte ServiceID => 106;
 
+        /// <summary>
+        /// True when the player was still dead as the duel ended, as opposed to fleeing.
+        /// </summary>
+        public bool DiedInDuel;
+
     }
 
     public sealed class MSG_COMBATWIN : IServerMessage {

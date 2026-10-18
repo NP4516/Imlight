@@ -31,7 +31,7 @@ using System.Threading.Tasks;
 namespace Imlight.Setup;
 
 /// <summary>What the app shows about the server.</summary>
-internal sealed record ServerStatus(bool Running, bool Ready, bool? Randomizer, bool ClientFound);
+internal sealed record ServerStatus(bool Running, bool Ready, bool? Randomizer, bool? DieDelete, bool ClientFound);
 
 /// <summary>One setting in Imlight.ini, with the comment above it as help.</summary>
 internal sealed record Setting(string Section, string Key, string Value, string Help);
@@ -65,11 +65,13 @@ internal sealed partial class ServerManager(string installFolder) {
     internal ServerStatus Status() {
         var running = InstalledCommands.IsServerRunning(InstallFolder);
         var randomizer = IniFile.Get(ConfigFile, "Randomizer", "Enabled");
+        var dieDelete = IniFile.Get(ConfigFile, "Die Delete", "Enabled");
 
         return new ServerStatus(
             running,
             running && IsListening(LoginPort),
             randomizer is null ? null : randomizer.Equals("true", StringComparison.OrdinalIgnoreCase),
+            dieDelete is null ? null : dieDelete.Equals("true", StringComparison.OrdinalIgnoreCase),
             GameClient.ClientExe(InstallFolder) is not null);
     }
 

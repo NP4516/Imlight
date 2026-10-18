@@ -218,6 +218,39 @@ public class GameServer : Server {
         session.Dispose();
     }
 
+    [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_DIEDELETE))]
+    private void ReceiveDieDelete(SERVER_100_PROTOCOL.MSG_DIEDELETE message) {
+        var session = ActiveSessions.FirstOrDefault(s => s.GetAssociatedAccount()?.AccountId == message.AccountID);
+        if (session is not null) {
+            session.ActorRef.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE {
+                Message = $"{message.CharacterName} died in battle. Die = Delete is on, so this wizard is gone for good.",
+                Modal = 1
+            });
+            session.Dispose();
+        }
+
+        // The session saves the character as it closes. Deleting afterwards keeps those saves from leaving pieces behind.
+        Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromSeconds(3), Self, new SERVER_100_PROTOCOL.MSG_DIEDELETENOW {
+            AccountID = message.AccountID,
+            CharacterID = message.CharacterID,
+            CharacterName = message.CharacterName,
+        }, Self);
+    }
+
+    [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_DIEDELETENOW))]
+    private void ReceiveDieDeleteNow(SERVER_100_PROTOCOL.MSG_DIEDELETENOW message) {
+        try {
+            var deletedCharacter = WizardCollection.DeleteCharacter(message.CharacterID);
+            var removedFromAccount = AccountCollection.DeleteCharacterFromAccount(message.AccountID, message.CharacterID);
+            Logger.Information("Die = Delete: deleted {Name} (character {CharacterId}). Character removed: {Deleted}, account updated: {Updated}.",
+                Logger.Args(message.CharacterName, message.CharacterID, deletedCharacter, removedFromAccount));
+        }
+        catch (Exception ex) {
+            Logger.Error("Die = Delete: could not delete {Name} (character {CharacterId}). {Exception}",
+                Logger.Args(message.CharacterName, message.CharacterID, ex));
+        }
+    }
+
     [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_KICKSESSION))]
     private void ReceiveKickSession(SERVER_100_PROTOCOL.MSG_KICKSESSION message) {
         var session = ActiveSessions.FirstOrDefault(s => s.SessionID == message.SessionID);
