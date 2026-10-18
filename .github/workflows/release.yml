@@ -68,6 +68,14 @@ jobs:
             -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -o out/setup
           Copy-Item out/setup/ImlightSetup.exe release/
 
+      - name: Build ImlightManager.exe
+        # The same program, set up to install this fork (randomizer, ID lookup) instead of original Imlight.
+        shell: pwsh
+        run: |
+          dotnet publish src/Imlight.Setup/Imlight.Setup.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -p:ImlightEdition=Manager -o out/manager
+          Copy-Item out/manager/ImlightManager.exe release/
+
       - name: Add the generator inputs
         if: env.GENERATOR_INPUTS != ''
         shell: pwsh

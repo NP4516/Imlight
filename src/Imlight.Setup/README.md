@@ -2,6 +2,8 @@
 
 A one-click installer for **original Imlight** ([Revive101/Imlight](https://github.com/Revive101/Imlight)), for people with no development tools.
 
+The same program also builds as **ImlightManager.exe**, which installs this fork (randomizer mode, ID lookup) into `%LOCALAPPDATA%\ImlightManager` instead. The two can be installed side by side.
+
 ## What it does
 
 1. **Finds Wizard101** in the usual places (KingsIsle or Steam). If it can't, it asks for the folder.
@@ -18,11 +20,21 @@ Imlight reads game files from a patch server. On a home computer, **Start Imligh
 
 If the server asks for an area's file that the player's game hasn't downloaded yet, the window says so. Visiting that area once in the real game downloads it.
 
+## Control Panel
+
+**Imlight Control Panel** opens a page in the browser (only reachable from this computer) to:
+
+- start, stop and restart the server, and switch randomizer mode on or off when the server has it;
+- read the server log with repeated lines folded into one (`×30`) and debug lines hidden;
+- change any setting in `Config\Imlight.ini`, with each setting's help text;
+- list player accounts, create them, change their level or password, and lock or unlock them (the server must be running).
+
 ## Shortcuts
 
 | Shortcut | What it does |
 | --- | --- |
 | Start Imlight Server | Serves the game files and runs the server. Close the window to stop it. |
+| Imlight Control Panel | Opens the Control Panel described above. |
 | Play Wizard101 on Imlight | Starts Wizard101 connected to the server on this computer (`-L 127.0.0.1 12000`). |
 | Update Imlight | Gets the newest setup if there is one, downloads the latest Imlight and rebuilds. `Config\Imlight.ini`, the logs and the player database are kept. |
 | Uninstall Imlight | Removes Imlight, its shortcuts and its Apps entry. It asks before deleting accounts and characters. Wizard101 is not touched. |
@@ -38,8 +50,9 @@ ImlightSetup --dir <folder>          Install somewhere else.
              --repo <owner/repo>     Build a different GitHub repository.
              --branch <name>         Build a different branch.
              --yes --admin-password <text>   Install without asking anything.
+             --panel                 Open the Control Panel.
 ```
 
 ## Building it
 
-`dotnet publish src/Imlight.Setup -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`. It only uses Imcodec's archive reader, so it needs no game files to build. The Release workflow attaches it to every release.
+`dotnet publish src/Imlight.Setup -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true`. Add `-p:ImlightEdition=Manager` for ImlightManager.exe. It only uses Imcodec's archive reader, so it needs no game files to build. The Release workflow attaches it to every release.

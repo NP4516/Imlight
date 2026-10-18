@@ -39,7 +39,7 @@ internal static class SelfUpdate {
     /// <summary>Where ImlightSetup.exe is released.</summary>
     internal const string RELEASE_REPOSITORY = "Niduus/Imlight";
 
-    private const string ASSET = "ImlightSetup.exe";
+    private const string ASSET = Edition.RELEASE_ASSET;
 
     internal static Version CurrentVersion { get; } = ParseVersion(typeof(SelfUpdate).Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion) ?? new Version(0, 0, 0);
@@ -68,7 +68,7 @@ internal static class SelfUpdate {
             }
 
             Console.WriteLine($"Getting the newer Imlight Setup {version}..");
-            var path = Path.Combine(Path.GetTempPath(), $"ImlightSetup-{version}.exe");
+            var path = Path.Combine(Path.GetTempPath(), $"{Path.GetFileNameWithoutExtension(ASSET)}-{version}.exe");
             var bytes = await http.GetByteArrayAsync(asset.GetProperty("browser_download_url").GetString());
             if (asset.TryGetProperty("digest", out var digest) && digest.GetString() is { } sha
                 && sha.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)

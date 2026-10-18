@@ -49,7 +49,7 @@ internal sealed class SetupSteps : IDisposable {
     internal SetupSteps(SetupOptions options) {
         _options = options;
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(15) };
-        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ImlightSetup", "1.0"));
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ImlightSetup", SelfUpdate.CurrentVersion.ToString()));
     }
 
     internal string SourceFolder => Path.Combine(_options.InstallFolder, "Source");
@@ -420,6 +420,8 @@ internal sealed class SetupSteps : IDisposable {
         Directory.CreateDirectory(Path.Combine(ServerFolder, "logs"));
 
         var shortcuts = new List<(string Path, string Target, string Arguments)> {
+            (Path.Combine(startMenu, InstalledCommands.PANEL_SHORTCUT), exe, "--panel"),
+            (Path.Combine(desktop, InstalledCommands.PANEL_SHORTCUT), exe, "--panel"),
             (Path.Combine(startMenu, InstalledCommands.START_SHORTCUT), exe, "--start"),
             (Path.Combine(desktop, InstalledCommands.START_SHORTCUT), exe, "--start"),
             (Path.Combine(startMenu, InstalledCommands.PLAY_SHORTCUT), exe, "--play"),
