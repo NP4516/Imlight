@@ -94,6 +94,12 @@ Imcodec relies on compile-time source generation to produce C# classes from game
    /submodule/Imcodec/src/Imcodec.MessageLayer/GeneratorInput/
    ```
 
+## Setup for original Imlight
+`ImlightSetup.exe` (`src/Imlight.Setup`) installs original Imlight on any Windows PC with no tools needed. It finds Wizard101, installs .NET if needed, downloads the latest source, reads the files Imcodec needs from the player's own game, builds the server and adds shortcuts. Running it again updates the server. See [src/Imlight.Setup/README.md](src/Imlight.Setup/README.md).
+
+## Installer
+`installer/` builds `ImlightLauncherSetup.exe`, a Windows installer for people who just want to run a server. It asks for an admin account, the patch server address and the server mode, and adds Start menu shortcuts for the server, its settings, its logs and the ID lookup. The Start shortcut runs the Imlight Launcher, which updates itself and the server from this repository's GitHub releases before starting it. Pushing a `v*` tag publishes a release. See [installer/README.md](installer/README.md).
+
 ## Information
 * The Kronos teams' [Grimoire](https://kronos-project.github.io/grimoire/foreword.html).
 * Our [Documentation](https://revive101.github.io/Imlight-docs/) book.

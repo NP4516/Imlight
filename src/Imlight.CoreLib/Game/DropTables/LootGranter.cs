@@ -163,6 +163,14 @@ public static class LootGranter {
                 continue;
             }
 
+            // Randomizer mode may swap the drop; the loot popup then lists what was really granted.
+            var mappedGuid = Randomization.Randomizer.MapDrop(wizard, itemGuid);
+            if (mappedGuid != itemGuid) {
+                itemGuid = mappedGuid;
+                item.ItemId = mappedGuid.ToString();
+                item.ItemName = "";
+            }
+
             // A drop table entry may name an item, a spell or something else; resolve it first.
             switch (CoreObjectFactory.GetCoreTemplate(itemGuid)) {
                 case ItemTemplate:

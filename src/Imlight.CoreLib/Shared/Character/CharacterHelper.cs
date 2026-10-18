@@ -48,6 +48,7 @@ using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.Game.Randomization;
 
 namespace Imlight.CoreLib.Shared.Character;
 
@@ -102,7 +103,7 @@ internal static class CharacterHelper {
     /// <returns>The created Wizard character.</returns>
     public static Wizard CreateCharacterFromCreationInfo(WizardCharacterCreationInfo creationInfo) {
         // This method is used to create a character from the character creation screen.
-        var school = (MagicSchool) creationInfo.m_schoolOfFocus;
+        var school = Randomizer.PickSchool((MagicSchool) creationInfo.m_schoolOfFocus);
         var wizardAvatar = creationInfo.m_avatarBehavior;
         var nameIndices = creationInfo.m_nameIndices;
         var character = new Wizard(school, wizardAvatar, nameIndices);

@@ -151,6 +151,10 @@ internal static class Program {
         Logger.Information($"Resource loading completed in {0} ms.",
             Logger.Args(stopwatch.ElapsedMilliseconds));
 
+        // The ID lookup reads every template, so it builds in the background.
+        Imlight.CoreLib.Shared.Resources.IdCatalog.StartBackgroundBuild();
+        Imlight.CoreLib.Game.Randomization.Randomizer.StartBackgroundBuild();
+
         // =============================================================
         // SERVERS
         // =============================================================

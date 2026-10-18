@@ -145,6 +145,22 @@ These act on your own group, with your own rights: `kick`, `leader` and `disband
 :::
 
 
+## Lookup Commands
+These search the ID lookup, a list of every item, spell, creature and NPC ID the server builds from your game data. It is controlled by the `[ID Lookup]` section of `Imlight.ini`, built in the background once per `GameRevision`, and written to `OutputPath` (`./id-lookup` by default). Open `index.html` there in a browser to search everything with copy-ready commands, or open `ids.csv` in a spreadsheet.
+
+| Command | Security | Syntax | Description |
+| ------- | -------- | ------ | ----------- |
+| item | Quality Assurance | `.lookup item $name` | Finds item IDs by name, for use with `.mod additem`. |
+| spell | Quality Assurance | `.lookup spell $name` | Finds spell IDs by name, for use with `.sb learn`. |
+| mob | Quality Assurance | `.lookup mob $name` | Finds creature IDs by name, with their level and school. Alias: `.lookup creature`. |
+| npc | Quality Assurance | `.lookup npc $name` | Finds NPC IDs by name. |
+| all | Quality Assurance | `.lookup all $name` | Searches every kind at once. |
+
+:::tip
+`$name` may contain spaces and is not case-sensitive; every word must appear in the name. An ID also works, to see what it belongs to.
+:::
+
+
 ## Debug Commands
 
 | Command | Security | Syntax | Description |

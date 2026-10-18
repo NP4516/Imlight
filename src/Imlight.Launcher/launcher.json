@@ -1,0 +1,9 @@
+{
+  "Repository": "Niduus/Imlight",
+  "IncludePrereleases": false,
+  "CheckForUpdatesOnStart": true,
+  "CheckIntervalMinutes": 30,
+  "RestartServerForUpdates": false,
+  "ServerFolder": "Server",
+  "ServerExecutable": "Imlight.Director.exe"
+}

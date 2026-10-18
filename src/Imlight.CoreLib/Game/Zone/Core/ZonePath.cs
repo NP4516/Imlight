@@ -56,6 +56,7 @@ using Imlight.CoreLib.Shared.Resources;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.Types;
+using Imlight.CoreLib.Game.Randomization;
 
 namespace Imlight.CoreLib.Game.Zone.Core;
 
@@ -281,6 +282,9 @@ public sealed class ZonePath : ZoneEntity {
         // If creatures are randomized, pick a random template ID.
         if (_randomizeCreatures) {
             spawnItemInfo.m_templateID = AprilFools.CreatureList.GetRandomCreatureTemplateID();
+        }
+        else if (Randomizer.RandomizeCreatures) {
+            spawnItemInfo.m_templateID = Randomizer.MapCreature(spawnItemInfo.m_templateID);
         }
 
         // Create the creature using the data we have.
