@@ -51,6 +51,9 @@ internal class LoginAFKService : MessageService {
     private readonly ushort _afkCheckInterval 
         = ConfigurationManager.Settings["Login Server.LoginAfkCheckInterval"].AsUShort();
 
+    // [Login Server] DisableIdleKick: nobody is ever disconnected for being idle.
+    private static readonly bool s_disableIdleKick = ConfigurationManager.GetValue("Login Server.DisableIdleKick", true);
+
     private const string AfkCheckTimerKey = "AfkCheck";
 
     private bool _halted;
@@ -97,7 +100,7 @@ internal class LoginAFKService : MessageService {
     }
 
     private void CheckAfk() {
-        if (_disposed || _halted) {
+        if (_disposed || _halted || s_disableIdleKick) {
             return;
         }
 
