@@ -106,6 +106,12 @@ internal sealed class PvPKioskComponent(ZoneEntity entity) : ZoneEntityComponent
             return;
         }
 
+        if (!PvPSeasonClock.IsLeagueOpen(league)) {
+            playerActor.Tell(PvPArenaErrors.Message(PvPArenaErrors.PLAYER_INELIGIBLE));
+
+            return;
+        }
+
         if (!PvPEligibility.MeetsLeagueRequirements(league, playerActor, playerObject, playerCharacter)) {
             playerActor.Tell(PvPArenaErrors.Message(PvPArenaErrors.NOT_IN_LEVEL_RANGE));
 
