@@ -91,8 +91,12 @@ internal sealed class ManagerWindow : Window {
     private readonly Border _battleCard;
     private readonly List<(string Section, string Key, string Name, ToggleSwitch Switch)> _battleSwitches = [
         ("Battle", "ManaOnFizzle", "Reduce mana even if fizzle", new() { OnContent = "On", OffContent = "Off" }),
+        ("Battle", "FullPipConserve", "100% pip conserve (casting never uses up pips)", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "SchoolPips", "School pips", new() { OnContent = "On", OffContent = "Off" }),
+        ("Battle", "GainSchoolPips", "Gain school pips without stats (chance under Settings, Battle)", new() { OnContent = "On", OffContent = "Off" }),
+        ("Battle", "RandomSchoolPips", "Random school pips", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "ShadowPips", "Shadow pips (max and chance under Settings, Battle)", new() { OnContent = "On", OffContent = "Off" }),
+        ("Battle", "NaturalShadowPips", "Gain shadow pips without stats", new() { OnContent = "On", OffContent = "Off" }),
         ("World", "OpenAllDoors", "Open every door (no quest or level needed, such as Nightside)", new() { OnContent = "On", OffContent = "Off" }),
     ];
     private readonly NumericUpDown _pointsPerLevel = new() { Minimum = 0, Maximum = 100, Increment = 1, FormatString = "0", Width = 130 };

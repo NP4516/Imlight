@@ -75,6 +75,7 @@ The `[Battle]` section works with or without randomizer mode, with switches on t
 | Setting | Default | What it does |
 | ------- | ------- | ------------ |
 | `ManaOnFizzle` | `false` | A spell that fizzles still costs its mana, the same as if it had worked. |
+| `FullPipConserve` | `false` | Wizards keep their pips when they cast, like having 100% pip conserve. |
 | `SchoolPips` | `true` | Once every pip slot is full, each round turns one power pip into a school pip of the wizard's own school. School pips pay for the school pip cost some higher level spells have. |
 
 ## World
@@ -83,7 +84,15 @@ The `[Battle]` section works with or without randomizer mode, with switches on t
 | ------- | ------- | ------------ |
 | `OpenAllDoors` | `false` | Every door and teleport works without the quest, level or event it normally needs, such as the Nightside door in the Commons. |
 
-Shadow pips, also in `[Battle]`:
+More school pip settings, also in `[Battle]`:
+
+| Setting | Default | What it does |
+| ------- | ------- | ------------ |
+| `GainSchoolPips` | `false` | A wizard's new pip can come as a school pip instead, without needing any stats. |
+| `SchoolPipChance` | `25` | The chance (0 to 100) that a new pip is a school pip when `GainSchoolPips` is on. |
+| `RandomSchoolPips` | `false` | School pips come in a random school instead of the wizard's own. |
+
+Shadow pips, also in `[Battle]` (`NaturalShadowPips` gives wizards shadow pips without the shadow pip rating stat, a 25% chance each round or `ShadowPipChance` if set):
 
 | Setting | Default | What it does |
 | ------- | ------- | ------------ |
