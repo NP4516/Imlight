@@ -30,11 +30,31 @@ internal static class SetupLog {
 
     internal static string? FilePath { get; private set; }
 
-    internal static void Open(string folder) {
+    /// <summary>
+    /// Starts a new log. False when another setup window still has it open.
+    /// </summary>
+    internal static bool Open(string folder) {
         Directory.CreateDirectory(folder);
         FilePath = Path.Combine(folder, "setup-log.txt");
-        s_file = new StreamWriter(FilePath, append: false) { AutoFlush = true };
+        try {
+            var stream = new FileStream(FilePath, FileMode.Create, FileAccess.Write, FileShare.Read);
+            s_file = new StreamWriter(stream) { AutoFlush = true };
+        }
+        catch (IOException) {
+            return false;
+        }
+
         s_file.WriteLine($"Imlight Setup log, {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+
+        return true;
+    }
+
+    /// <summary>
+    /// Lets go of the log, so a setup window left open does not keep the next setup from starting.
+    /// </summary>
+    internal static void Close() {
+        s_file?.Dispose();
+        s_file = null;
     }
 
     /// <summary>A line the person should read.</summary>

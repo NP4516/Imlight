@@ -88,7 +88,13 @@ internal static class Program {
             return 1;
         }
 
-        SetupLog.Open(options.InstallFolder);
+        if (!SetupLog.Open(options.InstallFolder)) {
+            Console.WriteLine("Another Imlight setup window is still open. Close every Imlight Setup window, then run setup again.");
+            WaitForKey(options);
+
+            return 1;
+        }
+
         SetupLog.Detail($"Setup {SelfUpdate.CurrentVersion}. Options: repo={options.Repository} branch={options.Branch} dir={options.InstallFolder}");
         using var steps = new SetupSteps(options);
 
@@ -120,6 +126,7 @@ internal static class Program {
             SetupLog.Error(ex is SetupException ? ex.Message : $"Setup stopped because of an unexpected problem: {ex.Message}");
             SetupLog.Detail(ex.ToString());
             SetupLog.Info($"The full log is at {SetupLog.FilePath}. Share it when asking for help.");
+            SetupLog.Close();
             WaitForKey(options);
 
             return 1;
@@ -136,6 +143,7 @@ internal static class Program {
             SetupLog.Info($"{Edition.NAME} is opening now.");
         }
 
+        SetupLog.Close();
         WaitForKey(options);
 
         return 0;
