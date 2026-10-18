@@ -266,6 +266,11 @@ public class CombatDuelSubCircle {
 
         // Randomizer mode rolls how many pips come this round; otherwise it is one.
         var gains = Randomization.Randomizer.RandomizePips ? Randomization.Randomizer.RollPipGain() : 1;
+
+        // Never leave someone with no pips at all, or nothing in their hand can be cast.
+        if (gains == 0 && genericPips + powerPips == 0) {
+            gains = 1;
+        }
         for (var i = 0; i < gains; i++) {
             if (CombatParticipant.m_pipCount.m_genericPips + CombatParticipant.m_pipCount.m_powerPips >= MAX_PIP_COUNT) {
                 return;
@@ -498,11 +503,13 @@ public class CombatDuelSubCircle {
                 var isTreasureCard = template is SpellTemplate spellTemplate
                     && (spellTemplate.m_Treasure || ((string)spellTemplate.m_name).EndsWith(" TC"));
 
-                // A deck entry the player hasn't learned can only be a treasure card (item cards live in
-                // TemporarySpells). Guarded on a populated list so an empty list can't misclassify the deck.
+                // A deck entry the player hasn't learned is a treasure card if they own it as one (item cards
+                // live in TemporarySpells). Spells a starter deck comes with are never learned, and must stay
+                // regular spells even once the player has learned others (such as randomizer starting spells).
                 if (!isTreasureCard
                     && _wizard.SpellbookBehavior.LearnedSpellTemplateIds is { Count: > 0 }
-                    && !_wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)) {
+                    && !_wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)
+                    && _wizard.SpellbookBehavior.TreasureCardCount(spell.m_templateID) > 0) {
                     isTreasureCard = true;
                 }
 

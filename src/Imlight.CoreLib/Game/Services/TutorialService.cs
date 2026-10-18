@@ -611,6 +611,7 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
         }
 
         var grantedItems = wizard.GrantStarterItems(templateIds);
+        Randomization.Randomizer.PutStartingSpellsInDeck(wizard, grantedItems);
         Logger.Information("Granted starter kit ({0} items) to {1}.",
             Logger.Args(grantedItems.Count, wizard.PlayerNameBehavior.GetWizardName()));
 
