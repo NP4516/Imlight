@@ -48,7 +48,7 @@ On Windows, with the .NET 10 SDK, [Inno Setup 6](https://jrsoftware.org/isinfo.p
 powershell -ExecutionPolicy Bypass -File installer\build-installer.ps1 -Version 1.0.0
 ```
 
-The installer is written to `installer\output\ImlightSetup.exe`.
+The installer is written to `installer\output\ImlightLauncherSetup.exe`.
 
 ### Releasing an update
 

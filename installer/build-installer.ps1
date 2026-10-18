@@ -1,4 +1,4 @@
-# Builds ImlightSetup.exe.
+# Builds ImlightLauncherSetup.exe.
 #
 # Needs, on Windows:
 #   - The .NET 10 SDK.
@@ -46,4 +46,4 @@ Write-Host "Building the installer.."
 & $iscc "/DAppVersion=$Version" (Join-Path $installerDir "Imlight.iss")
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed." }
 
-Write-Host "Done: $(Join-Path $installerDir 'output\ImlightSetup.exe')"
+Write-Host "Done: $(Join-Path $installerDir 'output\ImlightLauncherSetup.exe')"
