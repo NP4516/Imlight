@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
@@ -53,6 +54,15 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
                 continue;
             }
 
+            // The same NPC is often placed twice in one spot, once per quest stage (each copy has its own spawn
+            // requirements). Nothing here shows a copy to only some players, so keep just the first one.
+            if (IsDuplicatePlacement(objectInfo)) {
+                Logger.Debug("Skipped a second copy of {0} (template {1}) placed in the same spot.",
+                    Logger.Args(objectInfo.m_zoneTag, objectInfo.m_templateID.Full));
+
+                continue;
+            }
+
             var template = (GameObjectTemplate) CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID);
             if (template is null) {
                 Logger.Warning("Could not create {0} because template ID {1} was not found.",
@@ -80,6 +90,21 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
         }
 
         ReportLoadedWhenEntitiesLoad();
+    }
+
+    private const float DUPLICATE_DISTANCE = 15.0f;
+
+    private bool IsDuplicatePlacement(CoreObjectInfo objectInfo)
+        => objectInfo.m_spawnRequirements is not null
+           && _placed.Any(p => p.Info.m_templateID.Full == objectInfo.m_templateID.Full
+                               && Distance(p.Info.m_location, objectInfo.m_location) < DUPLICATE_DISTANCE);
+
+    private static float Distance(Vector3 a, Vector3 b) {
+        var x = a.X - b.X;
+        var y = a.Y - b.Y;
+        var z = a.Z - b.Z;
+
+        return MathF.Sqrt((x * x) + (y * y) + (z * z));
     }
 
     private static bool IsObjectEligibleForSpawn(CoreObjectInfo objectInfo) {

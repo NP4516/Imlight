@@ -76,3 +76,9 @@ The `[Battle]` section works with or without randomizer mode, with switches on t
 | ------- | ------- | ------------ |
 | `ManaOnFizzle` | `false` | A spell that fizzles still costs its mana, the same as if it had worked. |
 | `SchoolPips` | `true` | Once every pip slot is full, each round turns one power pip into a school pip of the wizard's own school. School pips pay for the school pip cost some higher level spells have. |
+
+## World
+
+| Setting | Default | What it does |
+| ------- | ------- | ------------ |
+| `OpenAllDoors` | `false` | Every door and teleport works without the quest, level or event it normally needs, such as the Nightside door in the Commons. |

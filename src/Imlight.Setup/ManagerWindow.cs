@@ -89,9 +89,10 @@ internal sealed class ManagerWindow : Window {
         ("PlayersCanGainTrainingPoints", "Players can type .gaintp <amount> to get training points", new() { OnContent = "On", OffContent = "Off" }),
     ];
     private readonly Border _battleCard;
-    private readonly List<(string Key, string Name, ToggleSwitch Switch)> _battleSwitches = [
-        ("ManaOnFizzle", "Reduce mana even if fizzle", new() { OnContent = "On", OffContent = "Off" }),
-        ("SchoolPips", "School pips", new() { OnContent = "On", OffContent = "Off" }),
+    private readonly List<(string Section, string Key, string Name, ToggleSwitch Switch)> _battleSwitches = [
+        ("Battle", "ManaOnFizzle", "Reduce mana even if fizzle", new() { OnContent = "On", OffContent = "Off" }),
+        ("Battle", "SchoolPips", "School pips", new() { OnContent = "On", OffContent = "Off" }),
+        ("World", "OpenAllDoors", "Open every door (no quest or level needed, such as Nightside)", new() { OnContent = "On", OffContent = "Off" }),
     ];
     private readonly NumericUpDown _pointsPerLevel = new() { Minimum = 0, Maximum = 100, Increment = 1, FormatString = "0", Width = 130 };
 
@@ -182,12 +183,12 @@ internal sealed class ManagerWindow : Window {
         var battleRows = new StackPanel {
             Spacing = 6,
             Children = {
-                Heading("Battle"),
+                Heading("Battle and world"),
                 Sub("School pips: once every pip slot is full, each round turns a power pip into a school pip of your own school, " +
                     "for spells that cost school pips."),
             },
         };
-        foreach (var (key, name, toggle) in _battleSwitches) {
+        foreach (var (_, key, name, toggle) in _battleSwitches) {
             battleRows.Children.Add(new DockPanel {
                 Children = {
                     WithDock(toggle, Dock.Right),
@@ -355,10 +356,10 @@ internal sealed class ManagerWindow : Window {
             };
         }
 
-        foreach (var (key, name, toggle) in _battleSwitches) {
+        foreach (var (section, key, name, toggle) in _battleSwitches) {
             toggle.IsCheckedChanged += async (_, _) => {
                 if (!_updatingRandomizer) {
-                    await Guard(() => SetSwitchAsync("Battle", key, name, toggle.IsChecked == true));
+                    await Guard(() => SetSwitchAsync(section, key, name, toggle.IsChecked == true));
                 }
             };
         }
@@ -500,8 +501,9 @@ internal sealed class ManagerWindow : Window {
         }
 
         _battleCard.IsVisible = _manager.IsInstalled && _manager.HasSetting("Battle", "ManaOnFizzle");
-        foreach (var (key, _, toggle) in _battleSwitches) {
-            toggle.IsChecked = _manager.GetSwitch("Battle", key);
+        foreach (var (section, key, _, toggle) in _battleSwitches) {
+            toggle.IsChecked = _manager.GetSwitch(section, key);
+            toggle.IsEnabled = _manager.HasSetting(section, key);
         }
 
         if (!_pointsPerLevel.IsFocused) {

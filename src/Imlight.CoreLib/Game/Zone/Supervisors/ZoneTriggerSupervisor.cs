@@ -46,6 +46,9 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
     private static readonly bool s_randomizeGateways 
         = ConfigurationManager.Settings["April Fools.RandomizeGateways"].AsBool();
 
+    // [World] OpenAllDoors: doors and other teleports work without their quest, level or event requirements.
+    private static readonly bool s_openAllDoors = ConfigurationManager.GetValue("World.OpenAllDoors", false);
+
     // A trigger's own object is hidden with this state when the trigger is deactivated.
     private const string DEACTIVATED_OBJECT_STATE = "Off";
 
@@ -114,6 +117,15 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         var passing = new List<(Trigger Trigger, IActorRef Actor)>();
         foreach (var (trigger, triggerActor) in _orderedTriggers) {
             if (trigger.m_fireEvents is null || !trigger.m_fireEvents.Any(x => x == message.EventName)) {
+                continue;
+            }
+
+            // With OpenAllDoors, a door goes through as long as its fire limit allows.
+            if (s_openAllDoors && HasTeleportResult(trigger)) {
+                if (Zone.ScriptState.HasTriggerFiresLeft(trigger.m_triggerName, trigger.m_triggerMax)) {
+                    passing.Add((trigger, triggerActor));
+                }
+
                 continue;
             }
 
