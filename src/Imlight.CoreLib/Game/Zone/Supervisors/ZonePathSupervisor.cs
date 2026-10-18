@@ -48,6 +48,8 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
             nodesById.TryAdd(node.m_id.Full, node);
         }
 
+        LogWispSpawners(pathData, creatureSpawnData);
+
         foreach (var path in pathData.m_pathList) {
             if (!TryGetNodesForPath(path, nodesById, out var nodes)) {
                 continue;
@@ -78,7 +80,40 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
         return true;
     }
 
-    private static bool IsWisp(SpawnObjectInfo info)
+    /// <summary>
+    /// Writes one log line for every wisp spawner in this zone's data, so a missing wisp can be traced to its
+    /// spawner settings or to a path the server never loads.
+    /// </summary>
+    private void LogWispSpawners(PathTemplateList pathData, SpawnManager spawnData) {
+        if (spawnData?.m_spawners is null) {
+            return;
+        }
+
+        var paths = new Dictionary<ulong, PathObjectTemplate>();
+        foreach (var path in pathData?.m_pathList ?? []) {
+            paths.TryAdd(path.m_id.Full, path);
+        }
+
+        foreach (var spawner in spawnData.m_spawners) {
+            var wisps = spawner.m_spawnList?.Where(x => x.m_objectInfo is not null && IsWisp(x.m_objectInfo)).ToList();
+            if (wisps is null || wisps.Count == 0) {
+                continue;
+            }
+
+            foreach (var wisp in wisps) {
+                var info = wisp.m_objectInfo;
+                var template = CoreObjectFactory.GetCoreTemplate(info.m_templateID) as GameObjectTemplate;
+                var pathName = paths.TryGetValue(info.m_pathID.Full, out var path) ? path.m_name.ToString() : "(no such path)";
+                Logger.Information(
+                    "Wisp spawner {Spawner} in {Zone}: {Wisp} on path {Path}, active {Active}, max {Max}, at least one {AtLeastOne}, every {Seconds}s, requirements {Reqs}.",
+                    Logger.Args(spawner.m_name.ToString(), Zone.ZoneName, template?.m_objectName.ToString() ?? info.m_templateID.ToString(),
+                                pathName, spawner.m_active, spawner.m_maxNumberOfSpawns, spawner.m_atLeastOneSpawn,
+                                spawner.m_spawnTime, spawner.m_globalDynamicReqs is not null));
+            }
+        }
+    }
+
+    internal static bool IsWisp(SpawnObjectInfo info)
         => CoreObjectFactory.GetCoreTemplate(info.m_templateID) is GameObjectTemplate template
            && template.m_objectName.ToString().Contains("Wisp");
 

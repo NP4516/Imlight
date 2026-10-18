@@ -80,11 +80,13 @@ internal class SpellFactory : RootDirectoryResourceSingleton<SpellFactory>, IMem
 
             var stringHash = StringHash.Compute(spellTemplate.m_name);
 
-            s_spellTemplates.Add(stringHash, spellTemplate);
+            // The Director creates every resource up front and Instance can create a second one later,
+            // so this can run twice over the same static tables; overwrite instead of throwing.
+            s_spellTemplates[stringHash] = spellTemplate;
             counter++;
 
             // Store the path of the spell template for later use.
-            s_spellTemplatePaths.Add(stringHash, fileRecord.FileName);
+            s_spellTemplatePaths[stringHash] = fileRecord.FileName;
         }
 
         Logger.Information("Loaded {0} spell templates.", 
@@ -95,7 +97,9 @@ internal class SpellFactory : RootDirectoryResourceSingleton<SpellFactory>, IMem
     /// Every spell template the game has, with the file it came from.
     /// </summary>
     internal static List<(string Path, SpellTemplate Template)> AllSpellTemplates() {
-        _ = Instance;
+        if (s_spellTemplates.Count == 0) {
+            _ = Instance;
+        }
 
         var templates = new List<(string Path, SpellTemplate Template)>(s_spellTemplates.Count);
         foreach (var (hash, template) in s_spellTemplates) {

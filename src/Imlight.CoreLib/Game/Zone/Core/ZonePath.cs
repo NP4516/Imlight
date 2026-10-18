@@ -279,25 +279,34 @@ public sealed class ZonePath : ZoneEntity {
         // Get the node to spawn the creature at.
         var spawnNode = GetRelevantNode(spawnItemInfo);
 
-        // If creatures are randomized, pick a random template ID.
-        if (_randomizeCreatures) {
-            spawnItemInfo.m_templateID = AprilFools.CreatureList.GetRandomCreatureTemplateID();
+        // If creatures are randomized, pick a random template ID. Wisps always stay wisps. The spawn data is
+        // shared by every spawn of this spawner, so the swap must not stick to it or each spawn swaps the last swap.
+        var originalTemplateId = spawnItemInfo.m_templateID;
+        var isWisp = Supervisors.ZonePathSupervisor.IsWisp(spawnItemInfo);
+        var templateId = originalTemplateId;
+        if (_randomizeCreatures && !isWisp) {
+            templateId = AprilFools.CreatureList.GetRandomCreatureTemplateID();
         }
-        else if (Randomizer.RandomizeCreatures) {
-            spawnItemInfo.m_templateID = Randomizer.MapCreature(spawnItemInfo.m_templateID);
+        else if (Randomizer.RandomizeCreatures && !isWisp) {
+            templateId = Randomizer.MapCreature(originalTemplateId);
         }
 
         // Create the creature using the data we have.
-        var template = CoreObjectFactory.GetCoreTemplate(spawnItemInfo.m_templateID);
+        var template = CoreObjectFactory.GetCoreTemplate(templateId);
         if (template is null) {
             Logger.Error("Failed to get template for {0}.",
-                Logger.Args(spawnItemInfo.m_templateID));
+                Logger.Args(templateId));
 
             return;
         }
 
+        spawnItemInfo.m_templateID = templateId;
         var creatureObj = CoreObjectFactory.FinalizeCoreObject(spawnItemInfo, template);
+        spawnItemInfo.m_templateID = originalTemplateId;
         creatureObj = CoreObjectFactory.InitializeCoreObjectBehaviors(creatureObj, template);
+        if (isWisp) {
+            Logger.Debug("Wisp {0} spawned on path {1}.", Logger.Args((template as GameObjectTemplate)?.m_objectName, _template.m_name));
+        }
         creatureObj.m_location = spawnNode.m_location;
         var Z = (float) (spawnNode.m_direction * (Math.PI / 180));
         creatureObj.m_orientation = new Imcodec.Math.Vector3(
