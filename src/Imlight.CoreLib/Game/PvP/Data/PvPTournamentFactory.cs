@@ -20,7 +20,7 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Loads the tournament templates (Practice, Sanctioned, brackets, pet tournaments) from the Root.wad
+ * Loads the tournament templates (practice, ranked, bracket and pet tournaments) from the game data
  * and looks them up by name or by the name hash the client sends as TournamentNameID.
  * 
  * USAGE EXAMPLE:
@@ -34,11 +34,12 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/18/2026
  */
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Imcodec.Cryptography;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
@@ -72,6 +73,8 @@ internal sealed class PvPTournamentFactory : RootDirectoryResourceSingleton<PvPT
         s_tournamentsById = byId;
 
         Logger.Information("Loaded {Count} PvP tournaments.", Logger.Args(byName.Count));
+        Logger.Information("PvP ranked play uses the tournament {Tournament}; {RankedCount} tournament(s) of the data update a ladder with the Elo behavior.",
+            Logger.Args(TryGetRankedTournament(out var ranked) ? ranked.m_tournamentName.ToString() : "none", byName.Values.Count(IsRanked)));
     }
 
     internal static bool TryGetTournament(string name, out TournamentTemplate tournament) {
@@ -82,6 +85,35 @@ internal sealed class PvPTournamentFactory : RootDirectoryResourceSingleton<PvPT
 
     internal static bool TryGetTournament(uint nameId, out TournamentTemplate tournament)
         => s_tournamentsById.TryGetValue(nameId, out tournament);
+
+    internal static bool IsRanked(TournamentTemplate tournament)
+        => tournament.m_useEloBehavior && tournament.m_updateLadder && !tournament.m_isBracketTournament;
+
+    internal static bool TryGetRankedTournament(out TournamentTemplate tournament) {
+        var configured = PvPSettings.RankedTournament;
+        if (!string.IsNullOrEmpty(configured)) {
+            return TryGetTournament(configured, out tournament);
+        }
+
+        tournament = s_tournamentsByName.Values
+            .Where(IsRanked)
+            .OrderBy(candidate => (string) candidate.m_tournamentName, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        return tournament is not null;
+    }
+
+    internal static bool IsPractice(TournamentTemplate tournament)
+        => !tournament.m_updateLadder && !tournament.m_isBracketTournament && tournament.m_pvpDuelModifiers?.Any() == true;
+
+    internal static bool TryGetPracticeTournament(out TournamentTemplate tournament) {
+        tournament = s_tournamentsByName.Values
+            .Where(IsPractice)
+            .OrderBy(candidate => (string) candidate.m_tournamentName, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+        return tournament is not null;
+    }
 
     internal static IReadOnlyCollection<TournamentTemplate> GetTournaments()
         => s_tournamentsByName.Values;

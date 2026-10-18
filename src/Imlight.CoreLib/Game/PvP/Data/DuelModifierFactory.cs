@@ -20,14 +20,14 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Loads the duel modifier templates (no crits, banned items, level scaling, alternating turns) from the
- * Root.wad and looks them up by the name a league, tournament or match lists.
+ * Loads the duel modifier templates (crit rules, banned items, level scaling, turn order) from the
+ * game data and looks them up by the name a league, tournament or match lists.
  * 
  * USAGE EXAMPLE:
- * if (DuelModifierFactory.TryGetModifier("NoCrits", out var modifier)) { }
+ * if (DuelModifierFactory.TryGetModifier(name, out var modifier)) { }
  * 
  * NOTE:
- * AlternatingTurns_PipsAtOnce has no file; the server resolves that name itself.
+ * One game type the tournaments list has no file; the server resolves that name itself (see PvPGameTypes).
  * 
  * TODO:
  * 

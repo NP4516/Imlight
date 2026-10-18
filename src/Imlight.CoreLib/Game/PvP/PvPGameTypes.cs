@@ -26,8 +26,8 @@
  * if (PvPGameTypes.TryResolve(tournament.m_pvpDuelModifiers, out var rules)) { }
  * 
  * NOTE:
- * The practice tournament lists AlternatingTurns_PipsAtOnce, a game type that has no file in the game data: the
- * client treats it as the alternate turns rule with pips for both teams. Any other name is not supported yet.
+ * The practice tournament lists one game type that has no file in the game data: the client treats it as the
+ * alternate turns rule with pips for both teams. Any other name is not supported yet.
  * 
  * TODO:
  * 

@@ -20,14 +20,14 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Loads PvPTournamentConfig.xml from the Root.wad: the active season number, the forfeit and observer
+ * Loads the PvP tournament config from the game data: the active season number, the forfeit and observer
  * timeouts and the tournament name lists.
  * 
  * USAGE EXAMPLE:
  * if (PvPConfigLoader.TryGetConfig(out var config)) { var forfeit = config.m_forfeitTimeout; }
  * 
  * NOTE:
- * The tournament schedule and hosting fields name files that are not in the Root.wad.
+ * The tournament schedule and hosting fields name files that are not in the game data.
  * 
  * TODO:
  * 

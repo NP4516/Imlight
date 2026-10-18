@@ -20,7 +20,7 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Reads one Root.wad file as the PropertyClass type a PvP loader expects.
+ * Reads one game data file as the PropertyClass type a PvP loader expects.
  * 
  * USAGE EXAMPLE:
  * PvPResourceReader.TryRead(file, data, out TournamentTemplate template);
