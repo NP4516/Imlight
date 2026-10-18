@@ -43,7 +43,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Data;
 
 internal static class PvPSeasonClock {
 

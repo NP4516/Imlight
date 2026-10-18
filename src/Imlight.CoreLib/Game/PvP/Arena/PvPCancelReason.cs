@@ -20,14 +20,13 @@
  * ========================================================================
  * 
  * PURPOSE:
- * A season template together with the year the season starts in.
+ * Why a match was cancelled before it started.
  * 
  * USAGE EXAMPLE:
- * PvPLeagueFactory.TryGetSeason(seasonId, out var season); var year = season.Year;
+ * new PVP_111_PROTOCOL.MSG_MATCHCANCELLED { MatchId = id, Reason = PvPCancelReason.NoArena };
  * 
  * NOTE:
- * The template stores month, day, hour and minute only. The year comes from the Seasons<year> directory the
- * template was loaded from. Seasons outside such a directory (the beta, gamma and test seasons) have no year.
+ * 
  * 
  * TODO:
  * 
@@ -37,8 +36,15 @@
  * Last Updated: 10/14/2026
  */
 
-using Imcodec.ObjectProperty.TypeCache;
+namespace Imlight.CoreLib.Game.PvP.Arena;
 
-namespace Imlight.CoreLib.Game.PvP;
+internal enum PvPCancelReason {
 
-internal sealed record PvPSeasonEntry(PvPSeasonTemplate Template, int? Year);
+    Declined,
+    ConfirmTimeout,
+    OpponentLeft,
+    ArrivalTimeout,
+    NoArena,
+    UnsupportedRules
+
+}

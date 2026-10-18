@@ -24,6 +24,7 @@ using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.PvP;
+using Imlight.CoreLib.Game.PvP.Arena;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Models.Player;

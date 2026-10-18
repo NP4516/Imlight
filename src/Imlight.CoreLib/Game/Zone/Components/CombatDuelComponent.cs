@@ -58,6 +58,8 @@ using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.PvP;
+using Imlight.CoreLib.Game.PvP.Arena;
+using Imlight.CoreLib.Game.PvP.Data;
 using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -93,7 +95,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private const string PREPLANNING_TIME_KEY = "PrePlanningPhase";
     private const string RESOUTION_TIME_KEY = "ResolutionPhase";
     private const double MINION_SUMMON_ANIMATION_DELAY = 5.5;
-    private const string GroupJoinPromptKey = "GUI_GotoFriendQuestion";
+    private const string GROUP_JOIN_PROMPT_KEY = "GUI_GotoFriendQuestion";
     private const string PVP_RETURN_GRACE_KEY = "PvPReturnGrace";
 
     public bool NoTransfer { get; set; } = false;
@@ -376,8 +378,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         CombatResolver.Reset();
         _awaitingCombatMoves = true;
 
-        // Determine the power pip gain for each participant.
-        DoPipGain();
+        // Determine the power pip gain. Alternating turns gain in the opponent's phase: the non-starter now.
+        DoPipGain(IsAlternatingPvP ? PvPDuelState.Opposite(_pvp.RoundStarter) : null);
 
         if (IsPvPDuel) {
             BeginPvPHalfTurn();
@@ -615,7 +617,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         }
 
         if (_pvp.TryBeginSecondHalfTurn()) {
-            // The other team acts next in the same round: no new round, no new pips.
+            // The other team acts next in the same round. The starter team gains its pips as phase two begins.
+            DoPipGain(_pvp.RoundStarter);
             BeginPvPHalfTurn();
             SendUpFirst(Duel.m_roundNum);
 
@@ -1116,7 +1119,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
             // Accepting sends MSG_GotoPlayerConfirm back, which GroupService turns into MSG_JOINRESERVEDDUEL.
             groupMate.Session?.Tell(new WIZARD2_53_PROTOCOL.MSG_GotoPlayerConfirm {
-                PromptKey = GroupJoinPromptKey,
+                PromptKey = GROUP_JOIN_PROMPT_KEY,
                 TargetCharacterID = charId,
                 DisableCrossPlay = 0,
                 ClientPlatform = 0
@@ -1554,8 +1557,14 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         Duel.m_flatParticipantList.Add(participant);
     });
 
-    private void DoPipGain() => EnactActionOnSubCircles(circle => {
+    private bool IsAlternatingPvP => IsPvPDuel && _pvp.Rules.AlternateTurns;
+
+    private void DoPipGain(CombatTeam? onlyTeam = null) => EnactActionOnSubCircles(circle => {
         if (!circle.AddedToDuel || !circle.IsAlive) {
+            return;
+        }
+
+        if (onlyTeam is { } team && circle.OccupiedTeam != team) {
             return;
         }
 
@@ -1934,6 +1943,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             var action = CombatResolver.GetQueuedAction(circle);
             if (action is null || action.Spell is null || action.SelectedTarget is null) {
                 SendCombatMoveSelection(circle.OccupiedTeam, circle.ParticipantObject.m_globalID, (byte) CombatMoveType.Pass, null, 0);
+
                 return;
             }
 

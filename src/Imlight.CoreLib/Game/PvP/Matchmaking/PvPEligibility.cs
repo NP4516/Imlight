@@ -40,11 +40,12 @@
 
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Game.PvP.Arena;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Matchmaking;
 
 internal static class PvPEligibility {
 
@@ -59,6 +60,10 @@ internal static class PvPEligibility {
     /// </summary>
     public static string GetQueueRefusal(Wizard wizard) {
         if (PvPRegistry.IsQueued(wizard.CharId)) {
+            return PvPArenaErrors.ALREADY_QUEUED;
+        }
+
+        if (PvPRegistry.IsHosting(wizard.CharId)) {
             return PvPArenaErrors.ALREADY_QUEUED;
         }
 

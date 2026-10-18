@@ -44,8 +44,9 @@ using Imcodec.IO;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.PvP.Matchmaking;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Arena;
 
 internal static class PvPMatchActorBuilder {
 
@@ -56,7 +57,7 @@ internal static class PvPMatchActorBuilder {
     public const int STATUS_WAITING_TO_TELEPORT = 11;
     public const int STATUS_IN_ARENA = 12;
 
-    private const int IdleEnteredQueue = 41;
+    private const int IDLE_ENTERED_QUEUE = 41;
 
     /// <summary>
     /// The actor of a player who is not in any queue or match. Sending it resets the status window of the client.
@@ -67,19 +68,57 @@ internal static class PvPMatchActorBuilder {
     public static ByteString BuildQueued(PvPQueueEntry entry, int status)
         => Serialize(Create(entry.CharId, status, entry));
 
-    private static MatchActor Create(ulong charId, int status, PvPQueueEntry entry) {
-        var actor = new MatchActor {
-            m_nActorID = charId,
-            m_status = status,
-            m_costAdj = new MatchCostAdjustment { m_matchAdjustmentType = ADJUSTMENT_TYPE.UNSET_MAX },
-            m_overridingELO = -1,
-            m_matchKFactor = 32,
-            m_allowRangeToExceedMaxForMatches = true,
-            m_matchCrownsCost = -1,
-            m_enteredQueue = IdleEnteredQueue,
-            m_meetBracketBadgeRequirnments = true,
-            m_optInOut = "0"
-        };
+    /// <summary>
+    /// The actor a hosted match lists for its host. The client lists a match only if some actor has a status other
+    /// than zero, and draws a row only for a PvPActor, with its school, name blob and level.
+    /// </summary>
+    public static PvPActor BuildListed(PvPQueueEntry entry, PvPPlayerProfile profile, ulong matchId, ulong teamId) {
+        var actor = Fill(new PvPActor(), entry.CharId, STATUS_FINDING_MATCH, entry);
+        actor.m_nMatchID = matchId;
+        actor.m_nTeamID = teamId;
+        actor.m_level = (int) profile.Level;
+        actor.m_nameBlob = new ByteString(profile.NameBlob);
+        actor.m_sSchool = SchoolName(profile.SchoolId);
+
+        return actor;
+    }
+
+    /// <summary>
+    /// The placeholder the client draws as an open, joinable slot: an actor with the id zero.
+    /// </summary>
+    public static PvPActor BuildOpenSlot(PvPQueueEntry host, ulong matchId, ulong teamId) {
+        var actor = Fill(new PvPActor(), 0, STATUS_IDLE, host);
+        actor.m_nMatchID = matchId;
+        actor.m_nTeamID = teamId;
+
+        return actor;
+    }
+
+    private static string SchoolName(uint schoolId) => schoolId switch {
+        1 => "Balance",
+        2 => "Death",
+        3 => "Fire",
+        4 => "Ice",
+        5 => "Life",
+        6 => "Myth",
+        7 => "Storm",
+        _ => string.Empty
+    };
+
+    private static MatchActor Create(ulong charId, int status, PvPQueueEntry entry)
+        => Fill(new MatchActor(), charId, status, entry);
+
+    private static T Fill<T>(T actor, ulong charId, int status, PvPQueueEntry entry) where T : MatchActor {
+        actor.m_nActorID = charId;
+        actor.m_status = status;
+        actor.m_costAdj = new MatchCostAdjustment { m_matchAdjustmentType = ADJUSTMENT_TYPE.UNSET_MAX };
+        actor.m_overridingELO = -1;
+        actor.m_matchKFactor = 32;
+        actor.m_allowRangeToExceedMaxForMatches = true;
+        actor.m_matchCrownsCost = -1;
+        actor.m_enteredQueue = IDLE_ENTERED_QUEUE;
+        actor.m_meetBracketBadgeRequirnments = true;
+        actor.m_optInOut = "0";
 
         if (entry is not null) {
             actor.m_nTournamentNameID = entry.TournamentNameId;

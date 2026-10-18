@@ -20,13 +20,13 @@
  * ========================================================================
  * 
  * PURPOSE:
- * The stages of a match: the players confirm, travel to the arena, fight, and the match ends.
+ * One player of a started match, as the arena zone needs them to seat the player on a circle.
  * 
  * USAGE EXAMPLE:
- * match.State = PvPMatchState.Travelling;
+ * new ZONE_102_PROTOCOL.MSG_STARTPVPMATCH { MatchId = id, Roster = [new PvPRosterEntry(charId, session, player, 0)] };
  * 
  * NOTE:
- * 
+ * TeamIndex 0 is the blue side (circles 4-7 of the sigil), 1 the red side.
  * 
  * TODO:
  * 
@@ -36,13 +36,9 @@
  * Last Updated: 10/14/2026
  */
 
-namespace Imlight.CoreLib.Game.PvP;
+using Akka.Actor;
+using Imcodec.ObjectProperty.TypeCache;
 
-internal enum PvPMatchState {
+namespace Imlight.CoreLib.Game.PvP.Arena;
 
-    Confirming,
-    Travelling,
-    InProgress,
-    Ended
-
-}
+internal sealed record PvPRosterEntry(ulong CharId, IActorRef Session, CoreObject PlayerObject, int TeamIndex);

@@ -44,10 +44,15 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.Cryptography;
+using Imcodec.IO;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.PvP.Arena;
+using Imlight.CoreLib.Game.PvP.Data;
+using Imlight.CoreLib.Game.PvP.Matchmaking;
 using Imlight.CoreLib.Game.World;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -80,8 +85,12 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     private readonly Dictionary<ulong, PvPMatch> _matches = [];
     private readonly Dictionary<ulong, ulong> _matchIdByPlayer = [];
     private readonly Dictionary<ulong, PvPStrandedPlayer> _strandedPlayers = [];
+    private readonly Dictionary<ulong, PvPHostedMatch> _hostedMatches = [];
+    private readonly Dictionary<ulong, ulong> _hostedIdByHost = [];
+    private readonly Dictionary<ulong, uint> _windowViewers = [];
     private readonly HashSet<string> _failedArenas = new(StringComparer.OrdinalIgnoreCase);
     private ulong _matchSequence;
+    private ulong _hostedSequence;
 
     // ctor
     public PvPDirector()
@@ -118,6 +127,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         _sessions[charId] = message.Session;
         _profiles[charId] = profile;
         _playerObjects[charId] = message.PlayerObject;
+        _windowViewers.Remove(charId);
         Timers.Cancel(DepartureTimerKey(charId));
 
         ReplayQueuedMessages(charId, message.Session);
@@ -188,32 +198,49 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (!PvPMatchFactory.TryGetMatch(message.MatchNameId, out var match)
-            || !PvPMatchFactory.TryGetLevelModifiers(match.m_levelModifiersListID.Full, out var levelModifiers)) {
-            Logger.Error("Match {MatchId} has no template or level table; {CharId} cannot queue.", Logger.Args(message.MatchNameId, charId));
-            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.INVALID_MATCH_NAME_ID));
+        if (PvPRegistry.IsHosting(charId)) {
+            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.ALREADY_QUEUED));
 
             return;
         }
 
-        var entry = new PvPQueueEntry(
-            CharId: charId,
+        if (!TryBuildEntry(profile, message.TournamentNameId, message.MatchNameId, message.LeagueId, message.SeasonId, message.ExpandSearch, out var entry)) {
+            return;
+        }
+
+        _queue.Add(entry);
+        PvPRegistry.SetQueued(charId, true);
+
+        SendQueueStatus(entry);
+    }
+
+    private bool TryBuildEntry(PvPPlayerProfile profile, uint tournamentNameId, uint matchNameId, uint leagueId, uint seasonId,
+                               bool expandSearch, out PvPQueueEntry entry) {
+        entry = null;
+        if (!PvPMatchFactory.TryGetMatch(matchNameId, out var match)
+            || !PvPMatchFactory.TryGetLevelModifiers(match.m_levelModifiersListID.Full, out var levelModifiers)) {
+            Logger.Error("Match {MatchId} has no template or level table; {CharId} cannot play it.", Logger.Args(matchNameId, profile.CharId));
+            SendToPlayer(profile.CharId, PvPArenaErrors.Message(PvPArenaErrors.INVALID_MATCH_NAME_ID));
+
+            return false;
+        }
+
+        entry = new PvPQueueEntry(
+            CharId: profile.CharId,
             RealmName: profile.RealmName,
-            TournamentNameId: message.TournamentNameId,
-            MatchNameId: message.MatchNameId,
-            LeagueId: message.LeagueId,
-            SeasonId: message.SeasonId,
-            ExpandSearch: message.ExpandSearch,
+            TournamentNameId: tournamentNameId,
+            MatchNameId: matchNameId,
+            LeagueId: leagueId,
+            SeasonId: seasonId,
+            ExpandSearch: expandSearch,
             EnteredAtUtc: DateTime.UtcNow,
             Rating: (int) Math.Round(PvPMatchmaker.GetRating(levelModifiers, (int) profile.Level)),
             OriginZone: profile.ZonePath,
             OriginZoneDisplayName: profile.ZoneDisplayName,
             OriginLocation: profile.Location
         );
-        _queue.Add(entry);
-        PvPRegistry.SetQueued(charId, true);
 
-        SendQueueStatus(entry);
+        return true;
     }
 
     [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_SETEXPANDSEARCH))]
@@ -242,8 +269,169 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     }
 
     [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_LEAVEQUEUE))]
-    private void ReceiveLeaveQueue(PVP_111_PROTOCOL.MSG_LEAVEQUEUE message)
-        => RemoveFromQueue(message.CharId);
+    private void ReceiveLeaveQueue(PVP_111_PROTOCOL.MSG_LEAVEQUEUE message) {
+        // todo: guess; a host cancels the open match with the same command a queued player leaves with.
+        if (CancelHosted(message.CharId)) {
+            return;
+        }
+
+        if (TryGetMatch(message.CharId, out var match)) {
+            LeaveMatch(match, message.CharId);
+
+            return;
+        }
+
+        RemoveFromQueue(message.CharId);
+    }
+
+    private void LeaveMatch(PvPMatch match, ulong charId) {
+        if (match.State == PvPMatchState.InProgress) {
+            // todo: the zone has no forfeit message; the duel is left to its own flee handling and the match is closed here.
+            match.State = PvPMatchState.Ended;
+            ForgetMatch(match);
+            ReturnPlayers(match, culpritCharId: 0);
+
+            return;
+        }
+
+        CancelMatch(match, PvPCancelReason.OpponentLeft, charId);
+    }
+
+    #endregion
+
+    #region Hosted
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_WINDOWOPENED))]
+    private void ReceiveWindowOpened(PVP_111_PROTOCOL.MSG_WINDOWOPENED message) {
+        if (_sessions.ContainsKey(message.CharId)) {
+            _windowViewers[message.CharId] = message.TournamentNameId;
+        }
+    }
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_HOSTMATCH))]
+    private void ReceiveHostMatch(PVP_111_PROTOCOL.MSG_HOSTMATCH message) {
+        var charId = message.CharId;
+        if (!_sessions.ContainsKey(charId) || !_profiles.TryGetValue(charId, out var profile)) {
+            return;
+        }
+
+        if (IsQueuedOrInMatch(charId) || PvPRegistry.IsHosting(charId)) {
+            SendToPlayer(charId, PvPArenaErrors.Message(PvPArenaErrors.ALREADY_QUEUED));
+            SendToPlayer(charId, HostReply(message.TournamentNameId, charId, failure: 1));
+
+            return;
+        }
+
+        if (!TryBuildEntry(profile, message.TournamentNameId, message.MatchNameId, message.LeagueId, message.SeasonId, false, out var entry)
+            || !PvPMatchFactory.TryGetMatch(message.MatchNameId, out var template)) {
+            SendToPlayer(charId, HostReply(message.TournamentNameId, charId, failure: 1));
+
+            return;
+        }
+
+        var hosted = new PvPHostedMatch(++_hostedSequence, entry with { IsHosted = true }, profile, template, message.Request);
+        Logger.Debug("PvP host request of {CharId}: m_matchNameID {RequestMatchNameId}, template {Template} ({TemplateId}), stored match id {StoredId}, teams {TeamCount}, team size {TeamSize}.",
+            Logger.Args(charId, message.Request.m_matchNameID, (string) template.m_matchName, StringHash.Compute(template.m_matchName),
+                hosted.Info.m_matchNameID, hosted.Info.m_teams.Count, template.m_teamSize));
+        _hostedMatches[hosted.Id] = hosted;
+        _hostedIdByHost[charId] = hosted.Id;
+        PvPRegistry.SetHosting(charId, true);
+        PvPRegistry.SetHostedMatch(hosted.Id, hosted.Info);
+
+        Logger.Debug("{CharId} hosts PvP match {HostedId}.", Logger.Args(charId, hosted.Id));
+
+        // todo: guess; Failure 0 is success and MobileID is the id of the new match.
+        SendToPlayer(charId, HostReply(message.TournamentNameId, hosted.Id, failure: 0));
+        SendToPlayer(charId, PvPBlobs.UpdateInfo(charId, PvPBlobs.TournamentList(GetTournamentName(message.TournamentNameId), message.TournamentNameId)));
+        PushToViewers(message.TournamentNameId, exceptCharId: charId);
+    }
+
+    [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_JOINHOSTED))]
+    private void ReceiveJoinHosted(PVP_111_PROTOCOL.MSG_JOINHOSTED message) {
+        var charId = message.CharId;
+        if (!_sessions.ContainsKey(charId) || !_profiles.TryGetValue(charId, out var profile)) {
+            return;
+        }
+
+        var refusal = GetJoinHostedRefusal(message, profile, out var hosted);
+        if (refusal is not null) {
+            SendToPlayer(charId, PvPArenaErrors.Message(refusal));
+
+            return;
+        }
+
+        if (!TryBuildEntry(profile, hosted.Host.TournamentNameId, hosted.Host.MatchNameId, hosted.Host.LeagueId, hosted.Host.SeasonId, false, out var joiner)) {
+            return;
+        }
+
+        joiner = joiner with { IsHosted = true };
+
+        hosted.State = PvPHostedState.Full;
+        RemoveHosted(hosted);
+        CreateMatch(hosted.Host, joiner);
+    }
+
+    private string GetJoinHostedRefusal(PVP_111_PROTOCOL.MSG_JOINHOSTED message, PvPPlayerProfile profile, out PvPHostedMatch hosted) {
+        if (!_hostedMatches.TryGetValue(message.MatchId, out hosted) || hosted.State != PvPHostedState.Open
+            || hosted.Host.TournamentNameId != message.TournamentNameId || hosted.Host.LeagueId != message.LeagueId
+            || hosted.Host.SeasonId != message.SeasonId || !_sessions.ContainsKey(hosted.Host.CharId)) {
+            return PvPArenaErrors.INVALID_MATCH_NAME_ID;
+        }
+
+        if (hosted.Host.CharId == profile.CharId) {
+            return PvPArenaErrors.ALREADY_IN_MATCH;
+        }
+
+        if (IsQueuedOrInMatch(profile.CharId) || PvPRegistry.IsHosting(profile.CharId)) {
+            return PvPArenaErrors.ALREADY_QUEUED;
+        }
+
+        if (hosted.MaxActorLevel > 0 && profile.Level > hosted.MaxActorLevel) {
+            return PvPArenaErrors.NOT_IN_LEVEL_RANGE;
+        }
+
+        // todo: the buddy check of a friends-only match; no buddy lookup helper exists yet, so every joiner passes.
+        return null;
+    }
+
+    private bool CancelHosted(ulong hostCharId) {
+        if (!_hostedIdByHost.TryGetValue(hostCharId, out var hostedId) || !_hostedMatches.TryGetValue(hostedId, out var hosted)) {
+            return false;
+        }
+
+        Logger.Debug("{CharId} cancels hosted PvP match {HostedId}.", Logger.Args(hostCharId, hostedId));
+
+        RemoveHosted(hosted);
+
+        return true;
+    }
+
+    private void RemoveHosted(PvPHostedMatch hosted) {
+        _hostedMatches.Remove(hosted.Id);
+        _hostedIdByHost.Remove(hosted.Host.CharId);
+        PvPRegistry.SetHosting(hosted.Host.CharId, false);
+        PvPRegistry.SetHostedMatch(hosted.Id, null);
+
+        PushToViewers(hosted.Host.TournamentNameId);
+    }
+
+    private void PushToViewers(uint tournamentNameId, ulong exceptCharId = 0) {
+        // The client only accepts a whole new list, so every change resends it.
+        var blob = PvPBlobs.TournamentList(GetTournamentName(tournamentNameId), tournamentNameId);
+
+        foreach (var (viewerId, viewedTournament) in _windowViewers) {
+            if (viewedTournament == tournamentNameId && viewerId != exceptCharId && _sessions.TryGetValue(viewerId, out var session)) {
+                Logger.Debug("PvP list push to {CharId}: tournament {TournamentId}, {Bytes} bytes.", Logger.Args(viewerId, tournamentNameId, blob.Length));
+                session.Tell(PvPBlobs.UpdateInfo(viewerId, blob));
+            }
+        }
+    }
+
+    private static WIZARD_12_PROTOCOL.MSG_PVPMATCHREQUEST HostReply(uint tournamentNameId, ulong mobileId, byte failure)
+        => new() { TournamentNameID = tournamentNameId, MobileID = mobileId, Failure = failure };
+
+    private static string GetTournamentName(uint tournamentNameId)
+        => PvPTournamentFactory.TryGetTournament(tournamentNameId, out var tournament) ? tournament.m_tournamentName : string.Empty;
 
     #endregion
 
@@ -528,7 +716,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
                 _ => false
             };
 
-            if (requeue) {
+            if (requeue && !entry.IsHosted) {
                 if (reason == PvPCancelReason.Declined) {
                     SendToPlayer(entry.CharId, PvPArenaErrors.Message(PvPArenaErrors.PLAYER_DECLINED));
                 }
@@ -614,6 +802,8 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
     private void Leave(ulong charId) {
         RemoveFromQueue(charId);
+        CancelHosted(charId);
+        _windowViewers.Remove(charId);
 
         // A match in progress is the business of its duel: the player forfeits there and the duel ends the match.
         if (TryGetMatch(charId, out var match) && match.State != PvPMatchState.InProgress) {

@@ -20,10 +20,10 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Why a match was cancelled before it started.
+ * The players waiting for a match. Plain state owned by the PvPDirector; only the director's thread uses it.
  * 
  * USAGE EXAMPLE:
- * new PVP_111_PROTOCOL.MSG_MATCHCANCELLED { MatchId = id, Reason = PvPCancelReason.NoArena };
+ * if (queue.Add(entry)) { }
  * 
  * NOTE:
  * 
@@ -36,15 +36,30 @@
  * Last Updated: 10/14/2026
  */
 
-namespace Imlight.CoreLib.Game.PvP;
+using System.Collections.Generic;
 
-internal enum PvPCancelReason {
+namespace Imlight.CoreLib.Game.PvP.Matchmaking;
 
-    Declined,
-    ConfirmTimeout,
-    OpponentLeft,
-    ArrivalTimeout,
-    NoArena,
-    UnsupportedRules
+internal sealed class PvPQueue {
+
+    private readonly Dictionary<ulong, PvPQueueEntry> _entries = [];
+
+    public int Count => _entries.Count;
+    public IEnumerable<PvPQueueEntry> Entries => _entries.Values;
+
+    public bool Contains(ulong charId)
+        => _entries.ContainsKey(charId);
+
+    public bool TryGet(ulong charId, out PvPQueueEntry entry)
+        => _entries.TryGetValue(charId, out entry);
+
+    public bool Add(PvPQueueEntry entry)
+        => _entries.TryAdd(entry.CharId, entry);
+
+    public bool Remove(ulong charId)
+        => _entries.Remove(charId);
+
+    public void Update(PvPQueueEntry entry)
+        => _entries[entry.CharId] = entry;
 
 }

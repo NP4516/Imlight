@@ -18,34 +18,31 @@
  * ========================================================================
  * PVP
  * ========================================================================
- *
+ * 
  * PURPOSE:
- * Where a player goes back to when a match ends: the zone and spot they queued from.
- *
+ * The stages of a match: the players confirm, travel to the arena, fight, and the match ends.
+ * 
  * USAGE EXAMPLE:
- * var returnTo = PvPArenaReturn.For(queueEntry);
- *
+ * match.State = PvPMatchState.Travelling;
+ * 
  * NOTE:
- * A player who queued from a zone without a name returns to the arena lobby, at the spot of its kiosks.
- *
+ * 
+ * 
  * TODO:
- *
- *
+ * 
+ * 
  * Created by: Jay
  * Version: KALI 1.0
  * Last Updated: 10/14/2026
  */
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Arena;
 
-internal sealed record PvPArenaReturn(string Zone, string ZoneDisplayName, string Location) {
+internal enum PvPMatchState {
 
-    public const string LOBBY_ZONE = "WizardCity/WC_Duel_Arena";
-    public const string LOBBY_LOCATION = "From_PVP_Kiosk";
-
-    public static PvPArenaReturn For(PvPQueueEntry entry)
-        => string.IsNullOrEmpty(entry.OriginZone)
-            ? new PvPArenaReturn(LOBBY_ZONE, string.Empty, LOBBY_LOCATION)
-            : new PvPArenaReturn(entry.OriginZone, entry.OriginZoneDisplayName, entry.OriginLocation);
+    Confirming,
+    Travelling,
+    InProgress,
+    Ended
 
 }

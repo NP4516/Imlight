@@ -43,7 +43,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Data;
 
 internal sealed class DuelModifierFactory : RootDirectoryResourceSingleton<DuelModifierFactory> {
 

@@ -18,28 +18,27 @@
  * ========================================================================
  * PVP
  * ========================================================================
- *
+ * 
  * PURPOSE:
- * A player who was on the way to an arena when the match was cancelled. If they still arrive, the director
- * sends them back.
- *
+ * A season template together with the year the season starts in.
+ * 
  * USAGE EXAMPLE:
- * _strandedPlayers[charId] = new PvPStrandedPlayer(arenaZone, lobbySession, returnTo, expiresAtUtc);
- *
+ * PvPLeagueFactory.TryGetSeason(seasonId, out var season); var year = season.Year;
+ * 
  * NOTE:
- * The entry only applies to a session other than the lobby session, in the arena zone, before it expires.
- *
+ * The template stores month, day, hour and minute only. The year comes from the Seasons<year> directory the
+ * template was loaded from. Seasons outside such a directory (the beta, gamma and test seasons) have no year.
+ * 
  * TODO:
- *
- *
+ * 
+ * 
  * Created by: Jay
  * Version: KALI 1.0
  * Last Updated: 10/14/2026
  */
 
-using System;
-using Akka.Actor;
+using Imcodec.ObjectProperty.TypeCache;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Data;
 
-internal sealed record PvPStrandedPlayer(string ArenaZone, IActorRef LobbySession, PvPArenaReturn ReturnTo, DateTime ExpiresAtUtc);
+internal sealed record PvPSeasonEntry(PvPSeasonTemplate Template, int? Year);

@@ -43,6 +43,8 @@ using System.Collections.Generic;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.PvP;
+using Imlight.CoreLib.Game.PvP.Arena;
+using Imlight.CoreLib.Game.PvP.Matchmaking;
 using Imlight.CoreLib.Shared.Networking;
 
 namespace Imlight.CoreLib.Shared.Packets;
@@ -237,6 +239,53 @@ public sealed class PVP_111_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 111;
 
         public ulong CharId;
+
+    }
+
+    /// <summary>
+    /// A player asking to host a practice match. The ids are the ones the client sent, already checked against the
+    /// loaded tournament, match, league and season templates.
+    /// </summary>
+    public sealed class MSG_HOSTMATCH : IServerMessage {
+
+        public byte MessageOrder { get; } = 15;
+        public byte ServiceID { get; } = 111;
+
+        public ulong CharId;
+        public uint TournamentNameId;
+        public uint MatchNameId;
+        public uint LeagueId;
+        public uint SeasonId;
+        public PvPMatchRequest Request;
+
+    }
+
+    /// <summary>
+    /// A player asking to join the hosted match with this id. The league and season are the ones of the window.
+    /// </summary>
+    public sealed class MSG_JOINHOSTED : IServerMessage {
+
+        public byte MessageOrder { get; } = 16;
+        public byte ServiceID { get; } = 111;
+
+        public ulong CharId;
+        public ulong MatchId;
+        public uint TournamentNameId;
+        public uint LeagueId;
+        public uint SeasonId;
+
+    }
+
+    /// <summary>
+    /// A session telling the director that its client shows the list of this tournament, so list changes are pushed to it.
+    /// </summary>
+    public sealed class MSG_WINDOWOPENED : IServerMessage {
+
+        public byte MessageOrder { get; } = 17;
+        public byte ServiceID { get; } = 111;
+
+        public ulong CharId;
+        public uint TournamentNameId;
 
     }
 

@@ -46,7 +46,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Data;
 
 internal sealed class PvPMatchFactory : RootDirectoryResourceSingleton<PvPMatchFactory> {
 
@@ -67,28 +67,22 @@ internal sealed class PvPMatchFactory : RootDirectoryResourceSingleton<PvPMatchF
             }
 
             switch (template) {
-                case MatchTemplate match: {
-                    string name = match.m_matchName;
-                    if (!byName.TryAdd(name, match) || !byId.TryAdd(StringHash.Compute(name), match)) {
-                        Logger.Error("Match {Name} in {File} is defined twice.", Logger.Args(name, file.Key.FileName));
-                    }
+                case MatchTemplate match:
+                    RegisterMatch(match, file.Key.FileName, byName, byId);
 
                     break;
-                }
-                case TournamentLevelModifiers modifiers: {
+                case TournamentLevelModifiers modifiers:
                     if (!levelModifiers.TryAdd(modifiers.m_templateID, modifiers)) {
                         Logger.Error("Level modifiers {Id} in {File} are defined twice.",
                             Logger.Args(modifiers.m_templateID, file.Key.FileName));
                     }
 
                     break;
-                }
-                default: {
+                default:
                     Logger.Error("PvP match file {File} is a {Type}, which no loader handles.",
                         Logger.Args(file.Key.FileName, template.GetType().Name));
 
                     break;
-                }
             }
         }
 
@@ -98,6 +92,16 @@ internal sealed class PvPMatchFactory : RootDirectoryResourceSingleton<PvPMatchF
 
         Logger.Information("Loaded {MatchCount} PvP matches and {TableCount} level modifier tables.",
             Logger.Args(byName.Count, levelModifiers.Count));
+    }
+
+    private static void RegisterMatch(MatchTemplate match,
+                                      string fileName,
+                                      Dictionary<string, MatchTemplate> byName,
+                                      Dictionary<uint, MatchTemplate> byId) {
+        string name = match.m_matchName;
+        if (!byName.TryAdd(name, match) || !byId.TryAdd(StringHash.Compute(name), match)) {
+            Logger.Error("Match {Name} in {File} is defined twice.", Logger.Args(name, fileName));
+        }
     }
 
     internal static bool TryGetMatch(string name, out MatchTemplate match) {

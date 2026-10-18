@@ -41,7 +41,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.Wad;
 using Imlight.Common;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Data;
 
 internal static class PvPResourceReader {
 

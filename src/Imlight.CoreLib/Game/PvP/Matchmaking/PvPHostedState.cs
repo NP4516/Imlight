@@ -20,38 +20,27 @@
  * ========================================================================
  * 
  * PURPOSE:
- * One queued player: what they asked to play and since when.
+ * Where a hosted practice match is in its short life: listed and open, or taken by a joiner.
  * 
  * USAGE EXAMPLE:
- * new PvPQueueEntry(charId, realm, tournamentId, matchId, leagueId, seasonId, false, DateTime.UtcNow, rating, zone, zoneName, location);
+ * hosted.State = PvPHostedState.Full;
  * 
  * NOTE:
- * The queue key is the realm, the tournament and the match: only players with equal keys can be paired.
- * The rating is the one of the match level table at the level the player had when they joined. The origin is
- * the zone, its display name and the location the player queued from.
+ * A full match leaves the list at once and becomes a normal match.
  * 
  * TODO:
  * 
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/18/2026
  */
 
-using System;
+namespace Imlight.CoreLib.Game.PvP.Matchmaking;
 
-namespace Imlight.CoreLib.Game.PvP;
+internal enum PvPHostedState {
 
-internal sealed record PvPQueueEntry(
-    ulong CharId,
-    string RealmName,
-    uint TournamentNameId,
-    uint MatchNameId,
-    uint LeagueId,
-    uint SeasonId,
-    bool ExpandSearch,
-    DateTime EnteredAtUtc,
-    int Rating,
-    string OriginZone,
-    string OriginZoneDisplayName,
-    string OriginLocation);
+    Open,
+    Full
+
+}

@@ -74,7 +74,8 @@ internal static class PvPGameTypes {
     public static AlternateTurnsCombatRule ToCombatRule(PvPDuelRules rules)
         => new() {
             m_alternateTurns = rules.AlternateTurns,
-            m_pipsForBothTeamsAtOnce = rules.PipsForBothTeamsAtOnce
+            // Alternating turns gain pips per phase, so the client must not show them arriving together.
+            m_pipsForBothTeamsAtOnce = rules.PipsForBothTeamsAtOnce && !rules.AlternateTurns
         };
 
 }

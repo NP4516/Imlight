@@ -18,27 +18,36 @@
  * ========================================================================
  * PVP
  * ========================================================================
- * 
+ *
  * PURPOSE:
- * One player of a started match, as the arena zone needs them to seat the player on a circle.
- * 
+ * Where a player goes back to when a match ends: the zone and spot they queued from.
+ *
  * USAGE EXAMPLE:
- * new ZONE_102_PROTOCOL.MSG_STARTPVPMATCH { MatchId = id, Roster = [new PvPRosterEntry(charId, session, player, 0)] };
- * 
+ * var returnTo = PvPArenaReturn.For(queueEntry);
+ *
  * NOTE:
- * TeamIndex 0 is the blue side (circles 4-7 of the sigil), 1 the red side.
- * 
+ * A player who queued from a zone without a name returns to the arena lobby, at the spot of its kiosks.
+ *
  * TODO:
- * 
- * 
+ *
+ *
  * Created by: Jay
  * Version: KALI 1.0
  * Last Updated: 10/14/2026
  */
 
-using Akka.Actor;
-using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Game.PvP.Matchmaking;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Arena;
 
-internal sealed record PvPRosterEntry(ulong CharId, IActorRef Session, CoreObject PlayerObject, int TeamIndex);
+internal sealed record PvPArenaReturn(string Zone, string ZoneDisplayName, string Location) {
+
+    public const string LOBBY_ZONE = "WizardCity/WC_Duel_Arena";
+    public const string LOBBY_LOCATION = "From_PVP_Kiosk";
+
+    public static PvPArenaReturn For(PvPQueueEntry entry)
+        => string.IsNullOrEmpty(entry.OriginZone)
+            ? new PvPArenaReturn(LOBBY_ZONE, string.Empty, LOBBY_LOCATION)
+            : new PvPArenaReturn(entry.OriginZone, entry.OriginZoneDisplayName, entry.OriginLocation);
+
+}

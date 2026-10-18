@@ -23,6 +23,7 @@ using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.PvP;
+using Imlight.CoreLib.Game.PvP.Arena;
 using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;

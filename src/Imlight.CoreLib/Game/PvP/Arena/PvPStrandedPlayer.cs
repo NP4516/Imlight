@@ -18,48 +18,28 @@
  * ========================================================================
  * PVP
  * ========================================================================
- * 
+ *
  * PURPOSE:
- * The players waiting for a match. Plain state owned by the PvPDirector; only the director's thread uses it.
- * 
+ * A player who was on the way to an arena when the match was cancelled. If they still arrive, the director
+ * sends them back.
+ *
  * USAGE EXAMPLE:
- * if (queue.Add(entry)) { }
- * 
+ * _strandedPlayers[charId] = new PvPStrandedPlayer(arenaZone, lobbySession, returnTo, expiresAtUtc);
+ *
  * NOTE:
- * 
- * 
+ * The entry only applies to a session other than the lobby session, in the arena zone, before it expires.
+ *
  * TODO:
- * 
- * 
+ *
+ *
  * Created by: Jay
  * Version: KALI 1.0
  * Last Updated: 10/14/2026
  */
 
-using System.Collections.Generic;
+using System;
+using Akka.Actor;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Arena;
 
-internal sealed class PvPQueue {
-
-    private readonly Dictionary<ulong, PvPQueueEntry> _entries = [];
-
-    public int Count => _entries.Count;
-    public IEnumerable<PvPQueueEntry> Entries => _entries.Values;
-
-    public bool Contains(ulong charId)
-        => _entries.ContainsKey(charId);
-
-    public bool TryGet(ulong charId, out PvPQueueEntry entry)
-        => _entries.TryGetValue(charId, out entry);
-
-    public bool Add(PvPQueueEntry entry)
-        => _entries.TryAdd(entry.CharId, entry);
-
-    public bool Remove(ulong charId)
-        => _entries.Remove(charId);
-
-    public void Update(PvPQueueEntry entry)
-        => _entries[entry.CharId] = entry;
-
-}
+internal sealed record PvPStrandedPlayer(string ArenaZone, IActorRef LobbySession, PvPArenaReturn ReturnTo, DateTime ExpiresAtUtc);

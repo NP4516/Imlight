@@ -47,7 +47,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Data;
 
 internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<PvPLeagueFactory> {
 
@@ -78,24 +78,15 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
             }
 
             switch (template) {
-                case PvPLeagueTemplate league: {
-                    string name = league.m_leagueType;
-                    if (!leaguesByName.TryAdd(name, league) || !leaguesById.TryAdd(StringHash.Compute(name), league)) {
-                        Logger.Error("League {Name} in {File} is defined twice.", Logger.Args(name, file.Key.FileName));
-                    }
+                case PvPLeagueTemplate league:
+                    RegisterLeague(league, file.Key.FileName, leaguesByName, leaguesById);
 
                     break;
-                }
-                case PvPSeasonTemplate season: {
-                    string name = season.m_seasonName;
-                    var entry = new PvPSeasonEntry(season, GetStartYear(season, file.Key.FileName));
-                    if (!seasonsByName.TryAdd(name, entry) || !seasonsById.TryAdd(StringHash.Compute(name), entry)) {
-                        Logger.Error("Season {Name} in {File} is defined twice.", Logger.Args(name, file.Key.FileName));
-                    }
+                case PvPSeasonTemplate season:
+                    RegisterSeason(season, file.Key.FileName, seasonsByName, seasonsById);
 
                     break;
-                }
-                case EloConfig elo: {
+                case EloConfig elo:
                     if (eloConfig is not null) {
                         Logger.Error("The Elo config in {File} is a second one.", Logger.Args(file.Key.FileName));
                     }
@@ -103,13 +94,11 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
                     eloConfig = elo;
 
                     break;
-                }
-                default: {
+                default:
                     Logger.Error("PvP file {File} is a {Type}, which no loader handles.",
                         Logger.Args(file.Key.FileName, template.GetType().Name));
 
                     break;
-                }
             }
         }
 
@@ -119,9 +108,31 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
         s_seasonsById = seasonsById;
         s_eloConfig = eloConfig;
 
-        Logger.Information("Loaded {LeagueCount} PvP leagues and {SeasonCount} seasons.", Logger.Args(leaguesByName.Count, seasonsByName.Count));
+        Logger.Information("Loaded {LeagueCount} PvP leagues and {SeasonCount} seasons.", 
+            Logger.Args(leaguesByName.Count, seasonsByName.Count));
         if (eloConfig is null) {
             Logger.Error("The PvP Elo config is missing from the Root.wad.");
+        }
+    }
+
+    private static void RegisterLeague(PvPLeagueTemplate league,
+                                       string fileName,
+                                       Dictionary<string, PvPLeagueTemplate> byName,
+                                       Dictionary<uint, PvPLeagueTemplate> byId) {
+        string name = league.m_leagueType;
+        if (!byName.TryAdd(name, league) || !byId.TryAdd(StringHash.Compute(name), league)) {
+            Logger.Error("League {Name} in {File} is defined twice.", Logger.Args(name, fileName));
+        }
+    }
+
+    private static void RegisterSeason(PvPSeasonTemplate season,
+                                       string fileName,
+                                       Dictionary<string, PvPSeasonEntry> byName,
+                                       Dictionary<uint, PvPSeasonEntry> byId) {
+        string name = season.m_seasonName;
+        var entry = new PvPSeasonEntry(season, GetStartYear(season, fileName));
+        if (!byName.TryAdd(name, entry) || !byId.TryAdd(StringHash.Compute(name), entry)) {
+            Logger.Error("Season {Name} in {File} is defined twice.", Logger.Args(name, fileName));
         }
     }
 

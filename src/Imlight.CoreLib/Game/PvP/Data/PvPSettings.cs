@@ -39,7 +39,7 @@
 using System;
 using Imlight.Common;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Data;
 
 internal static class PvPSettings {
 

@@ -41,7 +41,7 @@ using System.Collections.Generic;
 using Akka.Actor;
 using Imlight.CoreLib.Game.Combat;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Arena;
 
 internal sealed class PvPDuelState(
     ulong matchId,
@@ -71,7 +71,8 @@ internal sealed class PvPDuelState(
         => !Rules.AlternateTurns || HalfTurn == 0 ? null : HalfTurn == 2 ? Opposite(RoundStarter) : RoundStarter;
 
     public void BeginRound(int roundNumber) {
-        if (roundNumber > 1 && swapFirstTeamEachRound) {
+        // An alternating duel keeps its starter, otherwise a team would act last in a round and first in the next.
+        if (roundNumber > 1 && swapFirstTeamEachRound && !Rules.AlternateTurns) {
             RoundStarter = Opposite(RoundStarter);
         }
 

@@ -44,7 +44,7 @@ using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Matchmaking;
 
 internal sealed record PvPPlayerProfile(
     ulong CharId,

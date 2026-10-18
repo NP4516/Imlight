@@ -43,8 +43,9 @@
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imlight.CoreLib.Game.PvP.Matchmaking;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Arena;
 
 internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
 

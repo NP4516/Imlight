@@ -40,7 +40,7 @@
 using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Arena;
 
 internal static class PvPArenaErrors {
 

@@ -45,8 +45,9 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.PvP.Data;
 
-namespace Imlight.CoreLib.Game.PvP;
+namespace Imlight.CoreLib.Game.PvP.Matchmaking;
 
 internal static class PvPMatchmaker {
 
@@ -95,29 +96,36 @@ internal static class PvPMatchmaker {
                 continue;
             }
 
-            var waiting = pool.OrderBy(entry => entry.EnteredAtUtc).ThenBy(entry => entry.CharId).ToList();
-            var paired = new HashSet<ulong>();
-            foreach (var first in waiting) {
-                if (paired.Contains(first.CharId)) {
-                    continue;
-                }
-
-                var second = waiting
-                    .Where(candidate => candidate.CharId != first.CharId && !paired.Contains(candidate.CharId))
-                    .Where(candidate => Accepts(match, first, candidate, utcNow) || Accepts(match, candidate, first, utcNow))
-                    .OrderBy(candidate => Math.Abs(candidate.Rating - first.Rating))
-                    .FirstOrDefault();
-                if (second is null) {
-                    continue;
-                }
-
-                paired.Add(first.CharId);
-                paired.Add(second.CharId);
-                pairs.Add((first, second));
-            }
+            PairPool(pool, match, utcNow, pairs);
         }
 
         return pairs;
+    }
+
+    private static void PairPool(IEnumerable<PvPQueueEntry> pool,
+                                 MatchTemplate match,
+                                 DateTime utcNow,
+                                 List<(PvPQueueEntry, PvPQueueEntry)> pairs) {
+        var waiting = pool.OrderBy(entry => entry.EnteredAtUtc).ThenBy(entry => entry.CharId).ToList();
+        var paired = new HashSet<ulong>();
+        foreach (var first in waiting) {
+            if (paired.Contains(first.CharId)) {
+                continue;
+            }
+
+            var second = waiting
+                .Where(candidate => candidate.CharId != first.CharId && !paired.Contains(candidate.CharId))
+                .Where(candidate => Accepts(match, first, candidate, utcNow) || Accepts(match, candidate, first, utcNow))
+                .OrderBy(candidate => Math.Abs(candidate.Rating - first.Rating))
+                .FirstOrDefault();
+            if (second is null) {
+                continue;
+            }
+
+            paired.Add(first.CharId);
+            paired.Add(second.CharId);
+            pairs.Add((first, second));
+        }
     }
 
     private static bool Accepts(MatchTemplate match, PvPQueueEntry player, PvPQueueEntry opponent, DateTime utcNow) {
