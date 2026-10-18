@@ -24,6 +24,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imcodec.ObjectProperty.TypeCache;
 using Microsoft.VisualBasic;
@@ -77,6 +78,10 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
         return true;
     }
 
+    private static bool IsWisp(SpawnObjectInfo info)
+        => CoreObjectFactory.GetCoreTemplate(info.m_templateID) is GameObjectTemplate template
+           && template.m_objectName.ToString().Contains("Wisp");
+
     private static List<SpawnObject> GetCreaturesForPath(PathObjectTemplate path, SpawnManager spawnData) {
         var creatureList = new List<SpawnObject>();
         foreach (var spawnObject in spawnData.m_spawners) {
@@ -101,6 +106,11 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
                 );
 
                 if (!requirementsMet) {
+                    if (spawnObject.m_spawnList.Any(x => x.m_objectInfo?.m_pathID == path.m_id && IsWisp(x.m_objectInfo))) {
+                        Logger.Information("Wisp spawner {0} on path {1} is off: its spawn requirements are not met.",
+                            Logger.Args(spawnObject.m_id, path.m_name));
+                    }
+
                     continue;
                 }
             }
