@@ -97,7 +97,7 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
 
         // Determine if the wizard has enough training points to learn the spell.
         // Wizards that are of the same magic school as the spell they are training have a cost of 0.
-        var spellCost = wizard.MagicSchoolBehavior.MagicSchool.ToString() == spellTemplate.m_sMagicSchoolName ? 0 : 1;
+        var spellCost = InteractTrainerComponent.TrainingCost(wizard, spellTemplate);
         if (wizard.MagicSchoolBehavior.TrainingPoints < spellCost) {
             Logger.Error("Wizard {0} attempted to train spell {1} but does not have enough training points.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellId));

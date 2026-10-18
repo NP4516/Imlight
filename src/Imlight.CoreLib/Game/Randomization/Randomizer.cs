@@ -98,6 +98,15 @@ public static class Randomizer {
         = Enabled && ConfigurationManager.GetValue("Randomizer.RandomizeItemCards", true);
     internal static readonly bool RandomizePips
         = Enabled && ConfigurationManager.GetValue("Randomizer.RandomizePips", true);
+    // The [Trainers] switches work with or without randomizer mode.
+    internal static readonly bool RandomizeSpellRequirements
+        = ConfigurationManager.GetValue("Trainers.RandomizeSpellRequirements", false);
+    internal static readonly bool NoSpellRequirements
+        = ConfigurationManager.GetValue("Trainers.NoSpellRequirements", false);
+    internal static readonly bool NoLevelRequirements
+        = ConfigurationManager.GetValue("Trainers.NoLevelRequirements", false);
+    internal static readonly bool FreeTraining
+        = ConfigurationManager.GetValue("Trainers.FreeTraining", false);
     private static readonly int s_startingSpells
         = Enabled ? Math.Clamp(ConfigurationManager.GetValue("Randomizer.StartingSpells", 6), 0, 50) : 0;
     private const int STARTER_MAX_PIPS = 3;
@@ -293,6 +302,12 @@ public static class Randomizer {
             return spellTemplateId;
         }
     }
+
+    /// <summary>
+    /// A random index below <paramref name="count"/> that stays the same for this wizard and <paramref name="key"/>.
+    /// </summary>
+    internal static int PickIndex(Wizard wizard, string what, ulong key, int count)
+        => (int) (SeededShuffle.Mix(SeedFor(wizard, what) ^ key) % (ulong) count);
 
     private static ulong SeedFor(Wizard wizard, string what) {
         var seed = s_seed ^ SeededShuffle.Fnv1a(what);

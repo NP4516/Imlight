@@ -79,6 +79,16 @@ internal sealed class ManagerWindow : Window {
     private readonly Border _dieDeleteCard;
     private readonly ToggleSwitch _dieDelete = new() { OnContent = "On", OffContent = "Off" };
     private bool _updatingRandomizer;
+    private readonly Border _trainersCard;
+    private readonly List<(string Key, string Name, ToggleSwitch Switch)> _trainerSwitches = [
+        ("RandomizeSpellRequirements", "Random spell requirements", new() { OnContent = "On", OffContent = "Off" }),
+        ("NoSpellRequirements", "No spell requirements", new() { OnContent = "On", OffContent = "Off" }),
+        ("NoLevelRequirements", "No level requirements", new() { OnContent = "On", OffContent = "Off" }),
+        ("FreeTraining", "Free training (no training points)", new() { OnContent = "On", OffContent = "Off" }),
+        ("TrainingPointPerLevel", "Training points for every level gained", new() { OnContent = "On", OffContent = "Off" }),
+        ("PlayersCanGainTrainingPoints", "Players can type .gaintp <amount> to get training points", new() { OnContent = "On", OffContent = "Off" }),
+    ];
+    private readonly NumericUpDown _pointsPerLevel = new() { Minimum = 0, Maximum = 100, Increment = 1, FormatString = "0", Width = 130 };
 
     // Settings.
     private readonly TextBox _settingSearch = new() { Watermark = "Search settings" };
@@ -139,6 +149,31 @@ internal sealed class ManagerWindow : Window {
             },
         });
         _dieDeleteCard.IsVisible = false;
+        var trainerRows = new StackPanel {
+            Spacing = 6,
+            Children = {
+                Heading("Spell trainers"),
+                Sub("Change what trainers ask for before they teach a spell. These work with or without randomizer mode. " +
+                    "Random spell requirements makes each spell that needs another spell first need a different one from the same trainer instead."),
+            },
+        };
+        foreach (var (key, name, toggle) in _trainerSwitches) {
+            trainerRows.Children.Add(new DockPanel {
+                Children = {
+                    WithDock(toggle, Dock.Right),
+                    new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center },
+                },
+            });
+        }
+
+        trainerRows.Children.Add(new DockPanel {
+            Children = {
+                WithDock(_pointsPerLevel, Dock.Right),
+                new TextBlock { Text = "Training points per level", VerticalAlignment = VerticalAlignment.Center },
+            },
+        });
+        _trainersCard = Card(trainerRows);
+        _trainersCard.IsVisible = false;
         _logScroll = new ScrollViewer {
             Height = 440,
             Background = LOG_BACK,
@@ -197,6 +232,7 @@ internal sealed class ManagerWindow : Window {
             Refresh();
             await LoadPlayAsync();
             _timer.Start();
+            await Guard(AutoUpdateAsync);
         };
         Closed += (_, _) => _timer.Stop();
     }
@@ -287,6 +323,20 @@ internal sealed class ManagerWindow : Window {
                 await Guard(() => SetDieDeleteAsync(_dieDelete.IsChecked == true));
             }
         };
+        foreach (var (key, name, toggle) in _trainerSwitches) {
+            toggle.IsCheckedChanged += async (_, _) => {
+                if (!_updatingRandomizer) {
+                    await Guard(() => SetTrainerSwitchAsync(key, name, toggle.IsChecked == true));
+                }
+            };
+        }
+
+        _pointsPerLevel.ValueChanged += async (_, _) => {
+            if (!_updatingRandomizer && _pointsPerLevel.Value is { } value) {
+                await Guard(() => SetPointsPerLevelAsync((int) value));
+            }
+        };
+
         foreach (var box in new[] { _hideDebug, _hideWarnings }) {
             box.IsCheckedChanged += (_, _) => RefreshLog();
         }
@@ -301,6 +351,7 @@ internal sealed class ManagerWindow : Window {
             }),
             _randomizerCard,
             _dieDeleteCard,
+            _trainersCard,
             Card(new StackPanel {
                 Children = {
                     new DockPanel {
@@ -358,6 +409,17 @@ internal sealed class ManagerWindow : Window {
             }));
     }
 
+    private CheckBox AutoUpdateBox() {
+        var box = new CheckBox {
+            Content = "Update by itself when a new version is out (checked each time this app opens)",
+            IsChecked = _manager.AutoUpdate,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        box.IsCheckedChanged += (_, _) => _manager.AutoUpdate = box.IsChecked == true;
+
+        return box;
+    }
+
     private Control ToolsTab() {
         return Page(Card(new StackPanel {
             Children = {
@@ -372,6 +434,7 @@ internal sealed class ManagerWindow : Window {
                         Spaced(Action(Plain("Open install folder"), () => Open(_manager.InstallFolder))),
                     },
                 }, new Thickness(0, 10, 0, 10)),
+                AutoUpdateBox(),
                 Sub($"{Edition.NAME} {SelfUpdate.CurrentVersion}, installed in {_manager.InstallFolder}."),
             },
         }));
@@ -398,6 +461,15 @@ internal sealed class ManagerWindow : Window {
         _randomizer.IsChecked = status.Randomizer == true;
         _dieDeleteCard.IsVisible = status.DieDelete is not null;
         _dieDelete.IsChecked = status.DieDelete == true;
+        _trainersCard.IsVisible = _manager.IsInstalled && _manager.HasSetting("Trainers", "FreeTraining");
+        foreach (var (key, _, toggle) in _trainerSwitches) {
+            toggle.IsChecked = _manager.GetSwitch("Trainers", key);
+        }
+
+        if (!_pointsPerLevel.IsFocused) {
+            _pointsPerLevel.Value = int.TryParse(_manager.GetSetting("Trainers", "TrainingPointsPerLevel"), out var points) ? points : 1;
+        }
+
         _updatingRandomizer = false;
         RefreshLog();
     }
@@ -451,6 +523,28 @@ internal sealed class ManagerWindow : Window {
         if (restart && await ConfirmAsync($"Randomizer mode is now {(on ? "on" : "off")}. Restart the server now to use it?")) {
             Say(await _manager.RestartServerAsync());
         }
+    }
+
+    private async Task SetTrainerSwitchAsync(string key, string name, bool on) {
+        var restart = _manager.SaveSettings([new Setting("Trainers", key, on ? "true" : "false", "")]);
+        _settings = [];
+        Say($"{name} is now {(on ? "on" : "off")}.");
+        if (restart && await ConfirmAsync($"{name} is now {(on ? "on" : "off")}. Restart the server now to use it?")) {
+            Say(await _manager.RestartServerAsync());
+        }
+    }
+
+    private Task SetPointsPerLevelAsync(int points) {
+        if (!_manager.HasSetting("Trainers", "TrainingPointsPerLevel")
+                || _manager.GetSetting("Trainers", "TrainingPointsPerLevel") == points.ToString()) {
+            return Task.CompletedTask;
+        }
+
+        _manager.SaveSettings([new Setting("Trainers", "TrainingPointsPerLevel", points.ToString(), "")]);
+        _settings = [];
+        Say($"Each level now gives {points} training points while that switch is on. It applies the next time the server starts.");
+
+        return Task.CompletedTask;
     }
 
     private async Task SetDieDeleteAsync(bool on) {
@@ -612,6 +706,26 @@ internal sealed class ManagerWindow : Window {
     // ---------------------------------------------------------------------
     // Tools
     // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// When the app opens, updates Imlight by itself if a newer release is out (unless turned off on the Tools tab).
+    /// While the server is running it asks first, so nobody playing is thrown out.
+    /// </summary>
+    private async Task AutoUpdateAsync() {
+        if (!_manager.AutoUpdate || await SelfUpdate.NewerReleaseAsync() is not { } version) {
+            return;
+        }
+
+        if (_manager.Status().Running && !await ConfirmAsync($"Imlight {version} is out. Update now? The server stops and everyone playing is disconnected.")) {
+            Say($"Imlight {version} is out. Click Update Imlight on the Tools tab when you're ready.");
+
+            return;
+        }
+
+        Say($"Updating to Imlight {version}…");
+        _manager.RunInstaller("--update");
+        Close();
+    }
 
     private async Task UpdateAsync() {
         if (await ConfirmAsync("Update Imlight now? The server stops, this app closes, and the update opens in its own window. " +
