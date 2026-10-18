@@ -259,6 +259,9 @@ public class CombatDuelSubCircle {
     }
 
     internal void DoPipGain() {
+        // Shadow pips sit in their own slots, so they roll whether or not the normal slots are full.
+        RollShadowPip();
+
         // If the participant has the maximum amount of pips, do not gain any more (but maybe convert one).
         var pipCount = CombatParticipant.m_pipCount;
         if (TotalPips(pipCount) >= MAX_PIP_COUNT) {
@@ -316,6 +319,34 @@ public class CombatDuelSubCircle {
         SetSchoolPips(pipCount, school, (byte) (current.Value + 1));
     }
 
+    // [Battle] ShadowPips: shadow pips, which shadow spells cost, kept in their own slots.
+    private static readonly bool s_shadowPips = ConfigurationManager.GetValue("Battle.ShadowPips", true);
+    private static readonly int s_playerMaxShadowPips
+        = Math.Clamp(ConfigurationManager.GetValue("Battle.PlayerMaxShadowPips", 2), 0, 10);
+    private static readonly int s_creatureMaxShadowPips
+        = Math.Clamp(ConfigurationManager.GetValue("Battle.CreatureMaxShadowPips", 5), 0, 10);
+    private static readonly int s_shadowPipChance
+        = Math.Clamp(ConfigurationManager.GetValue("Battle.ShadowPipChance", 0), 0, 100);
+
+    /// <summary>
+    /// Each round, maybe gives a shadow pip. The chance is ShadowPipChance if set, else the participant's own
+    /// shadow pip rating (from level and gear) as a percent.
+    /// </summary>
+    private void RollShadowPip() {
+        var pipCount = CombatParticipant.m_pipCount;
+        var max = _wizard is null ? s_creatureMaxShadowPips : s_playerMaxShadowPips;
+        if (!s_shadowPips || pipCount.m_shadowPips >= max) {
+            return;
+        }
+
+        var chance = s_shadowPipChance > 0
+            ? s_shadowPipChance
+            : (int) Math.Round(ParticipantGameStats.m_shadowPipRating + ParticipantGameStats.m_bonusShadowPipRating);
+        if (chance > 0 && Random.Shared.Next(100) < Math.Min(chance, 100)) {
+            pipCount.m_shadowPips++;
+        }
+    }
+
     private static readonly MagicSchool[] s_pipSchools = [
         MagicSchool.Balance, MagicSchool.Death, MagicSchool.Fire, MagicSchool.Ice,
         MagicSchool.Life, MagicSchool.Myth, MagicSchool.Storm,
@@ -363,13 +394,18 @@ public class CombatDuelSubCircle {
     /// Whether the participant has the school pips a spell costs.
     /// </summary>
     internal bool HasSchoolPipsForSpell(Spell spell)
-        => SchoolPipCosts(spell.m_pipCost).All(c => c.Cost == 0 || (SchoolPips(CombatParticipant.m_pipCount, c.School) ?? 0) >= c.Cost);
+        => SchoolPipCosts(spell.m_pipCost).All(c => c.Cost == 0 || (SchoolPips(CombatParticipant.m_pipCount, c.School) ?? 0) >= c.Cost)
+           && (spell.m_pipCost is null || CombatParticipant.m_pipCount.m_shadowPips >= spell.m_pipCost.m_shadowPips);
 
     /// <summary>
     /// Spends the school pips a spell costs.
     /// </summary>
     internal void DeductSchoolPips(Spell spell) {
         var pipCount = CombatParticipant.m_pipCount;
+        if (spell.m_pipCost is { m_shadowPips: > 0 } rank) {
+            pipCount.m_shadowPips = (byte) Math.Max(0, pipCount.m_shadowPips - rank.m_shadowPips);
+        }
+
         foreach (var (school, cost) in SchoolPipCosts(spell.m_pipCost)) {
             if (cost > 0 && SchoolPips(pipCount, school) is { } have) {
                 SetSchoolPips(pipCount, school, (byte) Math.Max(0, have - cost));
@@ -545,6 +581,7 @@ public class CombatDuelSubCircle {
         var ourPipCount = CombatParticipant.m_pipCount;
         ourPipCount.m_powerPips = 0;
         ourPipCount.m_genericPips = 0;
+        ourPipCount.m_shadowPips = 0;
         foreach (var school in s_pipSchools) {
             SetSchoolPips(ourPipCount, school, 0);
         }

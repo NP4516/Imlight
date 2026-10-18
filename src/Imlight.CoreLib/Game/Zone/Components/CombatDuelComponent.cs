@@ -1067,6 +1067,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
                     m_lifePips = current.m_lifePips,
                     m_mythPips = current.m_mythPips,
                     m_stormPips = current.m_stormPips,
+                    m_shadowPips = current.m_shadowPips,
                 }
             };
             pips.m_pipList.Add(participantPipData);
