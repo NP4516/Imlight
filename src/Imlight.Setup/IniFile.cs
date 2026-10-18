@@ -27,6 +27,72 @@ namespace Imlight.Setup;
 internal static class IniFile {
 
     /// <summary>
+    /// Adds the sections and keys a newer default file has that the person's file lacks, with their comments,
+    /// so new settings show up after an update. Values already there are never changed.
+    /// </summary>
+    /// <returns>How many keys were added.</returns>
+    internal static int AddMissing(List<string> lines, IReadOnlyList<string> defaults) {
+        var added = 0;
+        string? section = null;
+        var comments = new List<string>();
+
+        foreach (var line in defaults) {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith('[') && trimmed.EndsWith(']')) {
+                section = trimmed[1..^1].Trim();
+                comments.Clear();
+
+                continue;
+            }
+
+            if (trimmed.StartsWith(';')) {
+                comments.Add(line);
+
+                continue;
+            }
+
+            var equals = trimmed.IndexOf('=');
+            if (section is null || equals <= 0) {
+                comments.Clear();
+
+                continue;
+            }
+
+            var key = trimmed[..equals].Trim();
+            if (Find(lines, section, key) < 0) {
+                Set(lines, section, key, trimmed[(equals + 1)..].Trim());
+                var at = Find(lines, section, key);
+                lines.InsertRange(at, comments);
+                added++;
+            }
+
+            comments.Clear();
+        }
+
+        return added;
+    }
+
+    private static int Find(List<string> lines, string section, string key) {
+        var inSection = false;
+        for (var i = 0; i < lines.Count; i++) {
+            var trimmed = lines[i].Trim();
+            if (trimmed.StartsWith('[') && trimmed.EndsWith(']')) {
+                inSection = trimmed[1..^1].Trim().Equals(section, StringComparison.OrdinalIgnoreCase);
+
+                continue;
+            }
+
+            var equals = trimmed.IndexOf('=');
+            if (inSection && !trimmed.StartsWith(';') && equals > 0
+                && trimmed[..equals].Trim().Equals(key, StringComparison.OrdinalIgnoreCase)) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
     /// Returns a value from an ini file, or null when the file, section or key is missing.
     /// </summary>
     internal static string? Get(string path, string section, string key) {

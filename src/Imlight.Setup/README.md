@@ -12,7 +12,7 @@ The same program also builds as **ImlightManager.exe**, which installs this fork
 4. **Reads the game files Imcodec needs** (`*Messages*.xml`) straight out of the player's own `Root.wad`, and uses the type dump Imcodec ships. Nothing copyrighted is downloaded or shared.
 5. **Builds the server** into `%LOCALAPPDATA%\ImlightServer\Server`.
 6. **Asks for an admin account** on a first install.
-7. **Installs `Imlight.exe`, the app, and opens it**. The only shortcut is the app's, on the desktop; everything else is inside the app. Shortcuts and the Start menu folder from earlier versions are removed. Imlight is also listed under **Settings > Apps**, so it can be uninstalled from there.
+7. **Installs `Imlight.exe`, the app, and opens it**. The only shortcut is the app's, on the desktop; everything else is inside the app. Shortcuts and the Start menu folder from earlier versions are removed. Updating also adds any new settings to your existing `Config\Imlight.ini` without changing the ones you set. Imlight is also listed under **Settings > Apps**, so it can be uninstalled from there.
 
 ## No patch server needed
 
@@ -26,7 +26,7 @@ Opening `Imlight.exe` (the desktop shortcut) shows the app in its own dark windo
 
 - **Play**: play Wizard101 on the server on this computer (it starts the server first if needed), or on another private server you save by address and port. The live game is refused, by name (`wizard101.com`, `kingsisle.com`, `gameforge.com`) and by address. A server on this computer cannot use a port Imlight needs (login, game, patch, database, game files, which is also Aurorium's, or the app's own 12380 to 12399).
 - **Lookup**: every in-game command with a plain name, what to type and who may use it, plus every item, spell, creature, NPC, zone and quest with its ID or name and the command that uses it. One search box covers all of it, with a filter by kind and Copy buttons. The game lists come from files the server writes to its ID lookup folder (`ids.csv`, `zones.txt`, `quests.csv`).
-- **Server**: start, stop and restart the server, switch randomizer mode on or off, and read the log with repeated lines folded into one (`×30`) and debug lines hidden.
+- **Server**: start, stop and restart the server, switch randomizer mode and Die = Delete mode on or off (with Die = Delete on, a wizard that is still dead when its battle ends is deleted for good; fleeing and the tutorial battle don't count), and read the log with repeated lines folded into one (`×30`) and debug lines hidden.
 - **Settings**: change any setting in `Config\Imlight.ini`, with each setting's help text.
 - **Accounts**: create accounts, change their level or password, and lock or unlock them (the server must be running).
 - **Tools**: update or uninstall Imlight, and open the log, settings and install folders.

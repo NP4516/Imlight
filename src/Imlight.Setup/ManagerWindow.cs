@@ -76,6 +76,8 @@ internal sealed class ManagerWindow : Window {
     private readonly CheckBox _follow = new() { Content = "Follow", IsChecked = true };
     private readonly StackPanel _logLines = new();
     private readonly ScrollViewer _logScroll;
+    private readonly Border _dieDeleteCard;
+    private readonly ToggleSwitch _dieDelete = new() { OnContent = "On", OffContent = "Off" };
     private bool _updatingRandomizer;
 
     // Settings.
@@ -124,6 +126,19 @@ internal sealed class ManagerWindow : Window {
             },
         });
         _randomizerCard.IsVisible = false;
+        _dieDeleteCard = Card(new DockPanel {
+            Children = {
+                WithDock(_dieDelete, Dock.Right),
+                new StackPanel {
+                    Children = {
+                        Heading("Die = Delete mode"),
+                        Sub("If a wizard dies in battle and is still dead when the battle ends, that wizard is deleted for good. " +
+                            "Fleeing doesn't count, and neither does the tutorial battle."),
+                    },
+                },
+            },
+        });
+        _dieDeleteCard.IsVisible = false;
         _logScroll = new ScrollViewer {
             Height = 440,
             Background = LOG_BACK,
@@ -267,6 +282,11 @@ internal sealed class ManagerWindow : Window {
                 await Guard(() => SetRandomizerAsync(_randomizer.IsChecked == true));
             }
         };
+        _dieDelete.IsCheckedChanged += async (_, _) => {
+            if (!_updatingRandomizer) {
+                await Guard(() => SetDieDeleteAsync(_dieDelete.IsChecked == true));
+            }
+        };
         foreach (var box in new[] { _hideDebug, _hideWarnings }) {
             box.IsCheckedChanged += (_, _) => RefreshLog();
         }
@@ -280,6 +300,7 @@ internal sealed class ManagerWindow : Window {
                 },
             }),
             _randomizerCard,
+            _dieDeleteCard,
             Card(new StackPanel {
                 Children = {
                     new DockPanel {
@@ -375,6 +396,8 @@ internal sealed class ManagerWindow : Window {
         _randomizerCard.IsVisible = status.Randomizer is not null;
         _updatingRandomizer = true;
         _randomizer.IsChecked = status.Randomizer == true;
+        _dieDeleteCard.IsVisible = status.DieDelete is not null;
+        _dieDelete.IsChecked = status.DieDelete == true;
         _updatingRandomizer = false;
         RefreshLog();
     }
@@ -426,6 +449,24 @@ internal sealed class ManagerWindow : Window {
         _settings = [];
         Say($"Randomizer mode is now {(on ? "on" : "off")}.");
         if (restart && await ConfirmAsync($"Randomizer mode is now {(on ? "on" : "off")}. Restart the server now to use it?")) {
+            Say(await _manager.RestartServerAsync());
+        }
+    }
+
+    private async Task SetDieDeleteAsync(bool on) {
+        if (on && !await ConfirmAsync("Turn on Die = Delete? From now on, any wizard on this server that dies in battle " +
+                "and is still dead when the battle ends is deleted for good. It can't be undone.")) {
+            _updatingRandomizer = true;
+            _dieDelete.IsChecked = false;
+            _updatingRandomizer = false;
+
+            return;
+        }
+
+        var restart = _manager.SaveSettings([new Setting("Die Delete", "Enabled", on ? "true" : "false", "")]);
+        _settings = [];
+        Say($"Die = Delete mode is now {(on ? "on" : "off")}.");
+        if (restart && await ConfirmAsync($"Die = Delete mode is now {(on ? "on" : "off")}. Restart the server now to use it?")) {
             Say(await _manager.RestartServerAsync());
         }
     }

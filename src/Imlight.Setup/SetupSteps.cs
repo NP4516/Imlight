@@ -338,7 +338,20 @@ internal sealed class SetupSteps : IDisposable {
             throw new SetupException("The server could not be built. The errors are in the setup log.");
         }
 
+        var existingConfig = File.Exists(ConfigFile);
         CopyFolder(staging, ServerFolder, keepIfPresent: ["Config/Imlight.ini"]);
+
+        // A kept configuration gets the settings this version added, so they show up in the app.
+        var defaults = Path.Combine(staging, "Config", "Imlight.ini");
+        if (existingConfig && File.Exists(defaults)) {
+            var lines = File.ReadAllLines(ConfigFile).ToList();
+            var added = IniFile.AddMissing(lines, File.ReadAllLines(defaults));
+            if (added > 0) {
+                File.WriteAllLines(ConfigFile, lines);
+                SetupLog.Detail($"Added {added} new settings to Config\\Imlight.ini.");
+            }
+        }
+
         Directory.Delete(staging, recursive: true);
     }
 

@@ -1479,9 +1479,9 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        // Send any dead players back to the hub.
+        // Send any dead players back to the hub. Scripted tutorial duels never count as a death.
         if (!circle.IsAlive) {
-            var defeatMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT();
+            var defeatMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT { DiedInDuel = !_tutorialDirector.IsActive };
             circle.ParticipantActor.Tell(defeatMsg);
 
             return;
