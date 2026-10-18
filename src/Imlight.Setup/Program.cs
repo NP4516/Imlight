@@ -62,7 +62,7 @@ internal static class Program {
             case SetupMode.Start:
                 return await InstalledCommands.StartAsync(options.InstallFolder, options.NoWait);
             case SetupMode.Panel:
-                return await ControlPanel.RunAsync(options.InstallFolder);
+                return ManagerApp.Run(options.InstallFolder);
             case SetupMode.Play:
                 return InstalledCommands.Play(options.InstallFolder);
             case SetupMode.Uninstall:

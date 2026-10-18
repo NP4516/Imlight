@@ -201,7 +201,7 @@ internal static class GameClient {
     }
 
     /// <summary>
-    /// Ports on this computer that Imlight, its game files and the app need, with what uses each.
+    /// Ports on this computer that Imlight and its game files need, with what uses each.
     /// The patch files port is also the one Aurorium uses when it runs here.
     /// </summary>
     internal static Dictionary<int, string> ReservedPorts(string installFolder) {
@@ -219,10 +219,6 @@ internal static class GameClient {
         Add("Database", "EmbeddedDatabasePort", 8080, "used by your Imlight player database");
         var patchUrl = IniFile.Get(config, "Patch Server", "PatchServerInternalUrl");
         ports.TryAdd(Uri.TryCreate(patchUrl, UriKind.Absolute, out var uri) ? uri.Port : 12369, "used for game files (Imlight or Aurorium)");
-        for (var port = ControlPanel.FIRST_PORT; port < ControlPanel.FIRST_PORT + ControlPanel.PORT_TRIES; port++) {
-            ports.TryAdd(port, "kept for this app");
-        }
-
         return ports;
     }
 

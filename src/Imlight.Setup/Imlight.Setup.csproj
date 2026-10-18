@@ -11,6 +11,8 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <!-- The app window draws itself (Avalonia, with Skia); its native parts go inside the single exe. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <!-- dotnet publish -p:ImlightEdition=Manager builds ImlightManager.exe, which installs the Niduus/Imlight fork. -->
@@ -20,7 +22,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="ControlPanel.html" LogicalName="ControlPanel.html" />
+    <PackageReference Include="Avalonia" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.22" />
   </ItemGroup>
 
   <ItemGroup>

@@ -22,7 +22,7 @@ If the server asks for an area's file that the player's game hasn't downloaded y
 
 ## The app
 
-Opening `Imlight.exe` (the desktop shortcut) shows the app in its own window, using the Microsoft Edge built into Windows. Closing the window stops the server. Everything is in one place:
+Opening `Imlight.exe` (the desktop shortcut) shows the app in its own window. The window is drawn by the program itself (Avalonia), so it uses no web browser, no web view and no account. Closing the window stops the server. Everything is in one place:
 
 - **Play**: play Wizard101 on the server on this computer (it starts the server first if needed), or on another private server you save by address and port. The live game is refused, by name (`wizard101.com`, `kingsisle.com`, `gameforge.com`) and by address. A server on this computer cannot use a port Imlight needs (login, game, patch, database, game files, which is also Aurorium's, or the app's own 12380 to 12399).
 - **Command box**: paste an in-game command instead of typing it in game. It runs for the character the chosen account has logged in, with that account's permissions, and the reply shows in game. The server reads these from `Server\command-inbox`.
