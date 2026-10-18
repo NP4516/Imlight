@@ -205,6 +205,18 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         serviceComponent.OnServiceInteraction(playerActor, playerCharacter, playerObject, localIndex);
     }
 
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REFRESHSERVICEOPTIONS))]
+    private void RefreshServiceOptions(ZONE_102_PROTOCOL.MSG_REFRESHSERVICEOPTIONS message) {
+        // The client drops an NPC's options once they are used. Live sends them again when the dialog
+        // closes; without that the player has to leave the NPC's range and come back to talk again.
+        if (_serviceComponents.Count <= 0 || !_playersInInteractionRange.ContainsValue(message.PlayerActor)) {
+            return;
+        }
+
+        SendLeaveServiceRange(message.PlayerActor);
+        SendActorServiceOptions(message.PlayerActor);
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_WIZBANGUPDATEINTERVAL))]
     private void HandleWizBangUpdateInterval(ZONE_102_PROTOCOL.MSG_WIZBANGUPDATEINTERVAL message) {
         if (_serviceComponents.Count <= 0 || _playersInRenderRange.Count == 0) {
