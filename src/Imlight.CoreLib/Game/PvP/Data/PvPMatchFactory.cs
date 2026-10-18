@@ -27,8 +27,8 @@
  * if (PvPMatchFactory.TryGetMatch(message.MatchNameID, out var match)) { }
  * 
  * NOTE:
- * The id the client sends is StringHash.Compute of m_matchName. PvPLevelModifiers.xml is not a match;
- * it is the TournamentLevelModifiers table that m_levelModifiersListID names.
+ * The id the client sends is StringHash.Compute of m_matchName. One file of the directory is not a match; it is
+ * the level modifier table that m_levelModifiersListID names.
  * 
  * TODO:
  * 
@@ -49,6 +49,11 @@ using Imlight.CoreLib.Shared.Resources;
 namespace Imlight.CoreLib.Game.PvP.Data;
 
 internal sealed class PvPMatchFactory : RootDirectoryResourceSingleton<PvPMatchFactory> {
+
+    // The arena sigil seats four wizards on each of its two sides.
+    public const int MAX_TEAM_SIZE = 4;
+
+    private const uint SUPPORTED_TEAM_COUNT = 2;
 
     protected override string DirectoryName => "Matches/";
 
@@ -112,6 +117,9 @@ internal sealed class PvPMatchFactory : RootDirectoryResourceSingleton<PvPMatchF
 
     internal static bool TryGetMatch(uint nameId, out MatchTemplate match)
         => s_matchesById.TryGetValue(nameId, out match);
+
+    internal static bool IsSupportedLayout(MatchTemplate match)
+        => match.m_teamCount == SUPPORTED_TEAM_COUNT && match.m_teamSize is >= 1 and <= MAX_TEAM_SIZE;
 
     internal static bool TryGetLevelModifiers(ulong templateId, out TournamentLevelModifiers modifiers)
         => s_levelModifiers.TryGetValue(templateId, out modifiers);

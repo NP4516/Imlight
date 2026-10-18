@@ -20,24 +20,27 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Pairs the queued players of a match pool. Plain logic owned by the PvPDirector: it reads the queue and the
+ * Groups the queued players of a match pool into matches of two sides. Plain logic owned by the PvPDirector: it reads the queue and the
  * match templates, and decides, but changes nothing.
  * 
  * USAGE EXAMPLE:
- * var pairs = PvPMatchmaker.FindPairs(queue.Entries, DateTime.UtcNow, charId => isPresent(charId));
+ * var matches = PvPMatchmaker.FindMatches(queue.Entries, DateTime.UtcNow, charId => isPresent(charId));
  * 
  * NOTE:
- * The rating of practice is the level modifier of the match table at the level of the player. A player is paired
- * with the closest opponent of the pool inside a range of m_initialQueueThreshold plus m_actorQueueGrowth for every
- * second waited, or with anyone after m_actorQueueTimeout seconds or when they asked to try all opponents. Either
- * player of a pair may be the one the range allows. These semantics are inferred from the field names.
+ * The rating of practice is the level modifier of the match table at the level of the player. A match takes twice
+ * the team size of players. The longest waiting player is grouped with the closest players of the pool inside a
+ * range of m_initialQueueThreshold plus m_actorQueueGrowth for every second waited, or with anyone after
+ * m_actorQueueTimeout seconds or when they asked to try all opponents. Either player of a pair may be the one the
+ * range allows, and every pair of the group must be allowed. The group is split into two sides in snake order of
+ * rating (best, then worst and second worst to the other side, and so on) so the side sums stay close. These
+ * semantics are inferred from the field names.
  * 
  * TODO:
  * What are m_minQueueSize, m_maxQueueSize and m_queueWaitingTime for?
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/18/2026
  */
 
 using System;
@@ -80,53 +83,93 @@ internal static class PvPMatchmaker {
     }
 
     /// <summary>
-    /// Finds the pairs to start now, longest waiting player first. A player is in at most one pair.
+    /// Finds the matches to start now, longest waiting player first. A player is in at most one match. A match is
+    /// its two sides of queue entries.
     /// </summary>
-    public static List<(PvPQueueEntry First, PvPQueueEntry Second)> FindPairs(IEnumerable<PvPQueueEntry> entries, DateTime utcNow,
-                                                                              Func<ulong, bool> isAvailable) {
-        var pairs = new List<(PvPQueueEntry, PvPQueueEntry)>();
+    public static List<IReadOnlyList<IReadOnlyList<PvPQueueEntry>>> FindMatches(IEnumerable<PvPQueueEntry> entries, DateTime utcNow,
+                                                                                Func<ulong, bool> isAvailable) {
+        var matches = new List<IReadOnlyList<IReadOnlyList<PvPQueueEntry>>>();
         var pools = entries
             .Where(entry => isAvailable(entry.CharId))
-            .GroupBy(entry => (entry.RealmName, entry.TournamentNameId, entry.MatchNameId));
+            .GroupBy(entry => (entry.RealmName, entry.TournamentNameId, entry.MatchNameId, RankedLeagueId: entry.Ranked is null ? 0u : entry.LeagueId));
 
         foreach (var pool in pools) {
-            if (!PvPMatchFactory.TryGetMatch(pool.Key.MatchNameId, out var match)) {
-                Logger.Error("Queued match {MatchId} has no template.", Logger.Args(pool.Key.MatchNameId));
+            if (!PvPMatchFactory.TryGetMatch(pool.Key.MatchNameId, out var match) || !PvPMatchFactory.IsSupportedLayout(match)) {
+                Logger.Error("Queued match {MatchId} has no template of a supported team layout.", Logger.Args(pool.Key.MatchNameId));
 
                 continue;
             }
 
-            PairPool(pool, match, utcNow, pairs);
+            GroupPool(pool, match, utcNow, matches);
         }
 
-        return pairs;
+        return matches;
     }
 
-    private static void PairPool(IEnumerable<PvPQueueEntry> pool,
-                                 MatchTemplate match,
-                                 DateTime utcNow,
-                                 List<(PvPQueueEntry, PvPQueueEntry)> pairs) {
+    private static void GroupPool(IEnumerable<PvPQueueEntry> pool,
+                                  MatchTemplate match,
+                                  DateTime utcNow,
+                                  List<IReadOnlyList<IReadOnlyList<PvPQueueEntry>>> matches) {
+        var groupSize = (int) (match.m_teamSize * match.m_teamCount);
         var waiting = pool.OrderBy(entry => entry.EnteredAtUtc).ThenBy(entry => entry.CharId).ToList();
-        var paired = new HashSet<ulong>();
-        foreach (var first in waiting) {
-            if (paired.Contains(first.CharId)) {
+        var grouped = new HashSet<ulong>();
+        foreach (var anchor in waiting) {
+            if (grouped.Contains(anchor.CharId)) {
                 continue;
             }
 
-            var second = waiting
-                .Where(candidate => candidate.CharId != first.CharId && !paired.Contains(candidate.CharId))
-                .Where(candidate => Accepts(match, first, candidate, utcNow) || Accepts(match, candidate, first, utcNow))
-                .OrderBy(candidate => Math.Abs(candidate.Rating - first.Rating))
-                .FirstOrDefault();
-            if (second is null) {
+            var group = TryBuildGroup(anchor, waiting, grouped, groupSize, match, utcNow);
+            if (group is null) {
                 continue;
             }
 
-            paired.Add(first.CharId);
-            paired.Add(second.CharId);
-            pairs.Add((first, second));
+            grouped.UnionWith(group.Select(entry => entry.CharId));
+            matches.Add(SplitSides(group));
         }
     }
+
+    private static List<PvPQueueEntry> TryBuildGroup(PvPQueueEntry anchor, List<PvPQueueEntry> waiting, HashSet<ulong> grouped,
+                                                     int groupSize, MatchTemplate match, DateTime utcNow) {
+        var companions = waiting
+            .Where(candidate => candidate.CharId != anchor.CharId && !grouped.Contains(candidate.CharId))
+            .Where(candidate => AcceptsEither(match, anchor, candidate, utcNow))
+            .OrderBy(candidate => Math.Abs(candidate.Rating - anchor.Rating))
+            .Take(groupSize - 1)
+            .ToList();
+        if (companions.Count < groupSize - 1 || !AllPairsAccepted(companions, match, utcNow)) {
+            return null;
+        }
+
+        return [anchor, .. companions];
+    }
+
+    private static bool AllPairsAccepted(List<PvPQueueEntry> players, MatchTemplate match, DateTime utcNow) {
+        for (var i = 0; i < players.Count; i++) {
+            for (var j = i + 1; j < players.Count; j++) {
+                if (!AcceptsEither(match, players[i], players[j], utcNow)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static List<PvPQueueEntry>[] SplitSides(List<PvPQueueEntry> group) {
+        // todo: guess; the best and the worst player share a side, which keeps the rating sums of the sides close.
+        var sides = new[] { new List<PvPQueueEntry>(), new List<PvPQueueEntry>() };
+        var ordered = group.OrderByDescending(entry => entry.Rating).ThenBy(entry => entry.EnteredAtUtc).ThenBy(entry => entry.CharId);
+        var index = 0;
+        foreach (var entry in ordered) {
+            sides[index % 4 is 0 or 3 ? 0 : 1].Add(entry);
+            index++;
+        }
+
+        return sides;
+    }
+
+    private static bool AcceptsEither(MatchTemplate match, PvPQueueEntry first, PvPQueueEntry second, DateTime utcNow)
+        => Accepts(match, first, second, utcNow) || Accepts(match, second, first, utcNow);
 
     private static bool Accepts(MatchTemplate match, PvPQueueEntry player, PvPQueueEntry opponent, DateTime utcNow) {
         var secondsWaited = Math.Max(0, (utcNow - player.EnteredAtUtc).TotalSeconds);

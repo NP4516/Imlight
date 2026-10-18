@@ -29,7 +29,7 @@
  * IsHosted marks a player of a hosted match: they were never queued, so a cancelled match sends them idle instead
  * of back into the public queue.
  * The queue key is the realm, the tournament and the match: only players with equal keys can be paired.
- * The rating is the one of the match level table at the level the player had when they joined. The origin is
+ * The rating is the one of the match level table at the level the player had when they joined, or for a ranked entry the Elo of the player in the league. The origin is
  * the zone, its display name and the location the player queued from.
  * 
  * TODO:
@@ -37,10 +37,11 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/18/2026
  */
 
 using System;
+using Imlight.CoreLib.Game.PvP.Ranking;
 
 namespace Imlight.CoreLib.Game.PvP.Matchmaking;
 
@@ -57,4 +58,5 @@ internal sealed record PvPQueueEntry(
     string OriginZone,
     string OriginZoneDisplayName,
     string OriginLocation,
-    bool IsHosted = false);
+    bool IsHosted = false,
+    PvPRatingSnapshot Ranked = null);

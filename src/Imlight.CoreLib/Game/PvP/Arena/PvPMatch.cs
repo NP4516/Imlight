@@ -20,14 +20,14 @@
  * ========================================================================
  * 
  * PURPOSE:
- * One match between queued players, from the moment the matchmaker paired them. Plain state owned by the
+ * One match between two sides of queued players, from the moment the matchmaker grouped them. Plain state owned by the
  * PvPDirector; only the director thread uses it.
  * 
  * USAGE EXAMPLE:
- * var match = new PvPMatch(matchId, [first, second]);
+ * var match = new PvPMatch(matchId, [[first], [second]]);
  * 
  * NOTE:
- * The queue entries carry the zone, display name and location each player queued from, which is where a
+ * Side 0 is the first list of teams and side 1 the second; the side of a player is the index of their list. The queue entries carry the zone, display name and location each player queued from, which is where a
  * finished match sends them back. The instance owner id has the top bit set, which a character id can have too,
  * so only PvPRegistry says which owner ids belong to a match. The lobby session of a player is the one that was sent to the arena; a presence from another session in the
  * arena zone is the arrival.
@@ -37,7 +37,7 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/18/2026
  */
 
 using System.Collections.Generic;
@@ -47,7 +47,7 @@ using Imlight.CoreLib.Game.PvP.Matchmaking;
 
 namespace Imlight.CoreLib.Game.PvP.Arena;
 
-internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
+internal sealed class PvPMatch(ulong id, IReadOnlyList<IReadOnlyList<PvPQueueEntry>> teams) {
 
     public const ulong INSTANCE_OWNER_FLAG = 1UL << 63;
 
@@ -55,7 +55,8 @@ internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
     private readonly HashSet<ulong> _arrived = [];
 
     public ulong Id { get; } = id;
-    public IReadOnlyList<PvPQueueEntry> Entries { get; } = entries;
+    public IReadOnlyList<IReadOnlyList<PvPQueueEntry>> Teams { get; } = teams;
+    public IReadOnlyList<PvPQueueEntry> Entries { get; } = [.. teams.SelectMany(team => team)];
     public IEnumerable<ulong> CharIds => Entries.Select(entry => entry.CharId);
     public PvPMatchState State { get; set; } = PvPMatchState.Confirming;
     public string ArenaZone { get; set; }
@@ -63,6 +64,7 @@ internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
     public Dictionary<ulong, IActorRef> LobbySessions { get; } = [];
     public bool AllArrived => _arrived.Count == Entries.Count;
     public bool AllAccepted => _accepted.Count == Entries.Count;
+    public bool IsRanked => Entries.All(entry => entry.Ranked is not null);
 
     public bool HasAccepted(ulong charId)
         => _accepted.Contains(charId);
@@ -75,6 +77,9 @@ internal sealed class PvPMatch(ulong id, IReadOnlyList<PvPQueueEntry> entries) {
 
     public bool Arrive(ulong charId)
         => _arrived.Add(charId);
+
+    public int GetSideIndex(ulong charId)
+        => Teams.ToList().FindIndex(team => team.Any(entry => entry.CharId == charId));
 
     public PvPQueueEntry GetEntry(ulong charId)
         => Entries.FirstOrDefault(entry => entry.CharId == charId);

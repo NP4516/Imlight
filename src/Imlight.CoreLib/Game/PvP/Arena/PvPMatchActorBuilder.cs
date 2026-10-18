@@ -36,7 +36,7 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/18/2026
  */
 
 using System;
@@ -44,7 +44,9 @@ using Imcodec.IO;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.PvP.Data;
 using Imlight.CoreLib.Game.PvP.Matchmaking;
+using Imlight.CoreLib.Game.PvP.Ranking;
 
 namespace Imlight.CoreLib.Game.PvP.Arena;
 
@@ -66,7 +68,9 @@ internal static class PvPMatchActorBuilder {
         => Serialize(Create(charId, STATUS_IDLE, null));
 
     public static ByteString BuildQueued(PvPQueueEntry entry, int status)
-        => Serialize(Create(entry.CharId, status, entry));
+        => Serialize(entry.Ranked is null
+            ? Create(entry.CharId, status, entry)
+            : Fill(new AdvPvPActor(), entry.CharId, status, entry));
 
     /// <summary>
     /// The actor a hosted match lists for its host. The client lists a match only if some actor has a status other
@@ -128,10 +132,30 @@ internal static class PvPMatchActorBuilder {
             actor.m_allowRangeToExceedMaxForMatches = entry.ExpandSearch;
             actor.m_enteredQueue = (int) new DateTimeOffset(entry.EnteredAtUtc).ToUnixTimeSeconds();
             actor.m_rating = entry.Rating;
-            actor.m_1v1 = true;
+            actor.m_1v1 = IsOneVersusOne(entry.MatchNameId);
+            FillRanked(actor, entry.Ranked);
         }
 
         return actor;
+    }
+
+    private static bool IsOneVersusOne(uint matchNameId)
+        => !PvPMatchFactory.TryGetMatch(matchNameId, out var match) || match.m_teamSize == 1;
+
+    private static void FillRanked(MatchActor actor, PvPRatingSnapshot ranked) {
+        if (ranked is null) {
+            return;
+        }
+
+        actor.m_rating = ranked.Elo;
+        actor.m_tier = ranked.RankIndex;
+        actor.m_rank = ranked.RankIndex;
+        actor.m_matchKFactor = ranked.KFactor;
+        if (actor is AdvPvPActor advanced) {
+            advanced.m_elo = ranked.Elo;
+            advanced.m_wins = ranked.Wins;
+            advanced.m_losses = ranked.Losses;
+        }
     }
 
     private static ByteString Serialize(MatchActor actor) {

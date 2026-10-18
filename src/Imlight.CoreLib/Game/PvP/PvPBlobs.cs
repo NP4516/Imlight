@@ -34,15 +34,17 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/18/2026
  */
 
+using System.Collections.Generic;
 using System.Linq;
 using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.PvP;
 
@@ -61,8 +63,16 @@ internal static class PvPBlobs {
     /// The Elo records of a player with none: the list object behind the serializer compress marker bit,
     /// which is clear because the buffer is stored as is.
     /// </summary>
-    public static ByteString EmptyEloEntryList() {
-        var list = Serialize(new AdvPvPEloEntryListWrapper { m_entries = [] });
+    public static ByteString EmptyEloEntryList()
+        => EloEntryList([]);
+
+    /// <summary>
+    /// The Elo records of a player, in the form of <see cref="EmptyEloEntryList"/>. Each record is sent as the client
+    /// record class, because the client keeps only entries of that class.
+    /// </summary>
+    public static ByteString EloEntryList(IEnumerable<PvPEloRecord> records) {
+        var wrapper = new AdvPvPEloEntryListWrapper { m_entries = [.. records.Select(ToWireRecord)] };
+        var list = Serialize(wrapper);
 
         return new ByteString([0, .. (byte[]) list]);
     }
@@ -98,6 +108,20 @@ internal static class PvPBlobs {
 
     // The client loads the tournament info with flag 9 (a flags word, then a marker bit and the zlib buffer) and
     // property mask 0x18, and casts the root to NewListUpdate.
+    private static AdvPvPEloRecord ToWireRecord(PvPEloRecord record)
+        => new AdvPvPEloRecordClient {
+            m_eloRecordID = record.RecordId,
+            m_leagueID = record.LeagueId,
+            m_seasonID = record.SeasonId,
+            m_startTime = record.StartTime,
+            m_ended = record.Ended,
+            m_elo = record.Elo,
+            m_rankIndex = record.RankIndex,
+            m_wins = record.Wins,
+            m_losses = record.Losses,
+            m_draws = record.Draws
+        };
+
     private static ByteString SerializeCompressed(PropertyClass value)
         => Serialize(value, SerializerFlags.SerializeFlags | SerializerFlags.Compress, TOURNAMENT_PROPERTY_MASK);
 

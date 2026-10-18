@@ -189,15 +189,6 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
         });
     }
 
-    [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData))]
-    private void ReceiveAdvPvPEloData(WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData message)
-        => SendToSocket(new WIZARD3_56_PROTOCOL.MSG_AdvPvPEloData {
-            GlobalID = message.GlobalID,
-            EntryList = PvPBlobs.EmptyEloEntryList(),
-            CheckCompletion = 0,
-            RecordCacheID = 0
-        });
-
     [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_ENTERMATCH))]
     private void ReceiveEnterMatch(PVP_111_PROTOCOL.MSG_ENTERMATCH message)
         => Teleport(message.ArenaZone, doTeleportEffects: false, makePrivate: true, ownerCharId: message.InstanceOwnerId);

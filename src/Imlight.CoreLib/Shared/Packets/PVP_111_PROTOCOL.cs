@@ -36,7 +36,7 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/18/2026
  */
 
 using System.Collections.Generic;
@@ -45,6 +45,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.PvP;
 using Imlight.CoreLib.Game.PvP.Arena;
 using Imlight.CoreLib.Game.PvP.Matchmaking;
+using Imlight.CoreLib.Game.PvP.Ranking;
 using Imlight.CoreLib.Shared.Networking;
 
 namespace Imlight.CoreLib.Shared.Packets;
@@ -99,6 +100,11 @@ public sealed class PVP_111_PROTOCOL : IServerProtocol {
         public uint LeagueId;
         public uint SeasonId;
         public bool ExpandSearch;
+
+        /// <summary>
+        /// The rating of the player when the window is a ranked one; null for practice.
+        /// </summary>
+        internal PvPRatingSnapshot Ranked;
 
     }
 
@@ -261,7 +267,8 @@ public sealed class PVP_111_PROTOCOL : IServerProtocol {
     }
 
     /// <summary>
-    /// A player asking to join the hosted match with this id. The league and season are the ones of the window.
+    /// A player asking to join the hosted match with this id. The league and season are the ones of the window. The
+    /// team id is the one of the team the player clicked; the server picks the slot in it.
     /// </summary>
     public sealed class MSG_JOINHOSTED : IServerMessage {
 
@@ -273,6 +280,7 @@ public sealed class PVP_111_PROTOCOL : IServerProtocol {
         public uint TournamentNameId;
         public uint LeagueId;
         public uint SeasonId;
+        public ulong TeamId;
 
     }
 
@@ -286,6 +294,57 @@ public sealed class PVP_111_PROTOCOL : IServerProtocol {
 
         public ulong CharId;
         public uint TournamentNameId;
+
+    }
+
+    /// <summary>
+    /// Sent to the session of a player when a ranked match is decided: the session applies the result to the rating
+    /// of the league and season.
+    /// </summary>
+    public sealed class MSG_RATEDRESULT : IServerMessage {
+
+        public byte MessageOrder { get; } = 18;
+        public byte ServiceID { get; } = 111;
+
+        public ulong MatchId;
+        public uint LeagueId;
+        public uint SeasonId;
+
+        /// <summary>
+        /// The rating of the opponent, or the average of the opposing team.
+        /// </summary>
+        public double OpponentElo;
+
+        /// <summary>
+        /// 1 for a win, 0.5 for a draw and 0 for a loss or a forfeit.
+        /// </summary>
+        public double Score;
+
+    }
+
+    /// <summary>
+    /// Sent by the PvP commands: the rating service runs the action on the rating records of the player and replies
+    /// with a server message.
+    /// </summary>
+    public sealed class MSG_RATINGCOMMAND : IServerMessage {
+
+        public byte MessageOrder { get; } = 19;
+        public byte ServiceID { get; } = 111;
+
+        /// <summary>
+        /// One of: show, set, rankset, seasonreset, clear.
+        /// </summary>
+        public string Action;
+
+        /// <summary>
+        /// The rating for set, the rank index or name for rankset; empty otherwise.
+        /// </summary>
+        public string Value;
+
+        /// <summary>
+        /// The league type name; empty means the first rated league the player may use.
+        /// </summary>
+        public string League;
 
     }
 
