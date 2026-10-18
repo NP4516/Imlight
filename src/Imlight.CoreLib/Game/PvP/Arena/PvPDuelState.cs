@@ -23,7 +23,7 @@
  * The PvP side of a duel: which match it is, who plays it, and whose half of the round it is.
  * 
  * USAGE EXAMPLE:
- * var state = new PvPDuelState(matchId, roster, rules, CombatTeam.Player);
+ * var state = new PvPDuelState(matchId, tournamentNameId, leagueId, roster, rules, CombatTeam.Player);
  * 
  * NOTE:
  * A round of an alternating duel is two half turns: the team that starts acts first, then the other team. A round
@@ -46,6 +46,7 @@ namespace Imlight.CoreLib.Game.PvP.Arena;
 internal sealed class PvPDuelState(
     ulong matchId,
     uint tournamentNameId,
+    uint leagueId,
     IReadOnlyList<PvPRosterEntry> roster,
     PvPDuelRules rules,
     CombatTeam firstTeam) {
@@ -56,6 +57,7 @@ internal sealed class PvPDuelState(
 
     public ulong MatchId { get; } = matchId;
     public uint TournamentNameId { get; } = tournamentNameId;
+    public uint LeagueId { get; } = leagueId;
     public IReadOnlyList<PvPRosterEntry> Roster { get; } = roster;
     public PvPDuelRules Rules { get; } = rules;
     public CombatTeam OriginalFirstTeam { get; } = firstTeam;

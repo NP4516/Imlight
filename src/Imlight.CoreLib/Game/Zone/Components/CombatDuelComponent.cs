@@ -126,6 +126,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && x.IsAlive && x.AddedToDuel);
     public ulong SigilId => Entity.ActiveGameObject.m_globalID;
     internal bool IsPvPDuel => _pvp is not null;
+    internal uint PvPLeagueId => _pvp?.LeagueId ?? 0;
     private byte PlanningSeconds => IsPvPDuel ? PvPSettings.PracticePlanningSeconds : PLANNING_TIME;
 
     /// <summary>
@@ -814,7 +815,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         }
     };
 
-    private Duel CreateDuelWithPvPDefaults(PvPDuelRules rules) => new() {
+    private Duel CreateDuelWithPvPDefaults(PvPDuelRules rules, uint leagueId) => new() {
         m_duelID = SigilId,
         m_bPVP = true,
         m_planningTimer = PvPSettings.PracticePlanningSeconds,
@@ -836,19 +837,19 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         m_duelModifier = new DuelModifier() {
             m_battlefieldEffects = [],
             m_combatTriggers = [],
-            m_gameEffects = [],
+            m_gameEffects = PvPLeagueScaling.CreateClientEffects(leagueId),
         }
     };
 
     private void InitializePvPDuel(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH message, PvPDuelRules rules) {
-        Duel = CreateDuelWithPvPDefaults(rules);
+        Duel = CreateDuelWithPvPDefaults(rules, message.LeagueId);
         SubCircles = CreateDuelActorSubCircles(_sigilTemplate);
         CombatResolver = new Combat.CombatResolver(Duel, SubCircles);
 
         var firstTeam = DetermineFirstTeam();
         Duel.m_firstTeamToAct = (int) firstTeam;
         Duel.m_originalFirstTeamToAct = (int) firstTeam;
-        _pvp = new PvPDuelState(message.MatchId, message.TournamentNameId, message.Roster, rules, firstTeam);
+        _pvp = new PvPDuelState(message.MatchId, message.TournamentNameId, message.LeagueId, message.Roster, rules, firstTeam);
 
         // The roster is fixed: each player sits on a circle of their side and is moved onto it first, because
         // they stand wherever they arrived in the zone.
@@ -1235,8 +1236,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
     private void SendCombatStats() => EnactActionOnSubCircles(circle => {
         // Serialize participant stats and send them to the participant, locally.
-        var participantStats = circle.ParticipantGameStats;
-        var participantCombatsStats = participantStats?.GetCombatGameStats();
+        var participantCombatsStats = circle.ClientGameStats;
         if (participantCombatsStats is null) {
             Logger.Error("Failed to get combat stats for duel {0}",
                 Logger.Args(SigilId));

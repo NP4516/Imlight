@@ -797,6 +797,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
         zoneActors[0].Tell(new ZONE_102_PROTOCOL.MSG_STARTPVPMATCH {
             MatchId = match.Id,
             TournamentNameId = match.Entries[0].TournamentNameId,
+            LeagueId = match.Entries[0].LeagueId,
             Roster = roster
         });
 
