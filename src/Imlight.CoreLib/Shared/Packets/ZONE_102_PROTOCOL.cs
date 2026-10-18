@@ -536,6 +536,20 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     }
 
     /// <summary>
+    /// Sent by the <see cref="PvPDirector"/> to an arena zone when a player leaves a PvP match that is in progress:
+    /// the duel of the match forfeits that player only.
+    /// </summary>
+    public sealed class MSG_FORFEITPVPPARTICIPANT : IServerMessage {
+
+        public byte MessageOrder { get; } = 85;
+        public byte ServiceID { get; } = 102;
+
+        public ulong MatchId;
+        public ulong CharId;
+
+    }
+
+    /// <summary>
     /// Sent by an <see cref="World.InstanceContainer"/> of a PvP match to its <see cref="World.GameWorld"/> when its
     /// last zone is dropped: the world removes the container.
     /// </summary>

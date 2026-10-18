@@ -342,6 +342,20 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         ActivateSigil();
     }
 
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_FORFEITPVPPARTICIPANT))]
+    private void ReceiveForfeitPvPParticipant(ZONE_102_PROTOCOL.MSG_FORFEITPVPPARTICIPANT message) {
+        if (!IsPvPDuel || !_isActive || _pvp.MatchId != message.MatchId) {
+            return;
+        }
+
+        var subCircle = SubCircles.FirstOrDefault(circle => circle.Occupied && circle._wizard?.CharId == message.CharId);
+        if (subCircle is null) {
+            return;
+        }
+
+        ForfeitPvPDuel(subCircle);
+    }
+
     private void ActivateSigil() {
         _renderComponent.Enable();
 

@@ -26,7 +26,7 @@
  * var returnTo = PvPArenaReturn.For(queueEntry);
  *
  * NOTE:
- * A player who queued from a zone without a name returns to the arena lobby, at the spot of its kiosks.
+ * The zone and spot come from the queue entry, which takes them from the player's presence when they queue.
  *
  * TODO:
  *
@@ -42,12 +42,7 @@ namespace Imlight.CoreLib.Game.PvP.Arena;
 
 internal sealed record PvPArenaReturn(string Zone, string ZoneDisplayName, string Location) {
 
-    public const string LOBBY_ZONE = "WizardCity/WC_Duel_Arena";
-    public const string LOBBY_LOCATION = "From_PVP_Kiosk";
-
     public static PvPArenaReturn For(PvPQueueEntry entry)
-        => string.IsNullOrEmpty(entry.OriginZone)
-            ? new PvPArenaReturn(LOBBY_ZONE, string.Empty, LOBBY_LOCATION)
-            : new PvPArenaReturn(entry.OriginZone, entry.OriginZoneDisplayName, entry.OriginLocation);
+        => new(entry.OriginZone, entry.OriginZoneDisplayName, entry.OriginLocation);
 
 }

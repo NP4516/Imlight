@@ -157,6 +157,13 @@ internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor
         _pvpSigilObjectIds.OrderBy(x => x.Value).First().Key.Forward(message);
     }
 
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_FORFEITPVPPARTICIPANT))]
+    private void ReceiveForfeitPvPParticipant(ZONE_102_PROTOCOL.MSG_FORFEITPVPPARTICIPANT message) {
+        foreach (var sigil in _pvpSigilObjectIds.Keys) {
+            sigil.Forward(message);
+        }
+    }
+
     private static bool IsObjectEligibleForSpawn(CoreObjectInfo objectInfo) 
         => objectInfo is not null and CombatSigilObjectInfo;
 
