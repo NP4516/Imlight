@@ -277,15 +277,20 @@ public class CombatDuelSubCircle {
         if (gains == 0 && TotalPips(pipCount) == 0) {
             gains = 1;
         }
+        // GainSchoolPips: the archmastery gauge fills by SchoolPipChance each round; once full, the next pip
+        // comes as a school pip, no stats needed.
+        if (ArchmasterySchool != 0 && _schoolGauge < GAUGE_FULL) {
+            _schoolGauge = Math.Min(GAUGE_FULL, _schoolGauge + s_schoolPipChance);
+        }
+
         for (var i = 0; i < gains; i++) {
             if (TotalPips(pipCount) >= MAX_PIP_COUNT) {
                 return;
             }
 
-            // GainSchoolPips: a wizard's pip sometimes comes as a school pip, no stats needed.
-            if (s_gainSchoolPips && _wizard is not null && Random.Shared.Next(100) < s_schoolPipChance
-                    && SchoolPipTarget() is { } gainSchool) {
+            if (ArchmasterySchool != 0 && _schoolGauge >= GAUGE_FULL && SchoolPipTarget() is { } gainSchool) {
                 SetSchoolPips(pipCount, gainSchool, (byte) (SchoolPips(pipCount, gainSchool)!.Value + 1));
+                _schoolGauge = 0;
 
                 continue;
             }
@@ -373,16 +378,64 @@ public class CombatDuelSubCircle {
             return;
         }
 
+        // The chance fills the shadow gauge each round; a full gauge (GAUGE_FULL) gives the pip.
+        _shadowGauge += ShadowPipChance();
+        if (_shadowGauge >= GAUGE_FULL) {
+            _shadowGauge -= GAUGE_FULL;
+            pipCount.m_shadowPips++;
+        }
+    }
+
+    private int ShadowPipChance() {
         var chance = s_shadowPipChance > 0
             ? s_shadowPipChance
             : (int) Math.Round(ParticipantGameStats.m_shadowPipRating + ParticipantGameStats.m_bonusShadowPipRating);
         if (s_naturalShadowPips && _wizard is not null && chance <= 0) {
             chance = NATURAL_SHADOW_PIP_CHANCE;
         }
-        if (chance > 0 && Random.Shared.Next(100) < Math.Min(chance, 100)) {
-            pipCount.m_shadowPips++;
-        }
+
+        return Math.Clamp(chance, 0, (int) GAUGE_FULL);
     }
+
+    // Shadow and archmastery (school pip) gauges, 0 to GAUGE_FULL, shown around the pip slots.
+    private const float GAUGE_FULL = 100f;
+    // How many shadow pip slots the client lays out when there is no limit.
+    private const int SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT = 5;
+    private float _shadowGauge;
+    private float _schoolGauge;
+
+    /// <summary>
+    /// The school the archmastery gauge fills toward, as the client wants it (0 when none).
+    /// </summary>
+    internal uint ArchmasterySchool => s_gainSchoolPips && _wizard is not null ? ParticipantGameStats.m_schoolID : 0;
+
+    internal float ArchmasteryPoints => ArchmasterySchool == 0 ? 0 : _schoolGauge;
+
+    /// <summary>
+    /// Fills in what the client needs to lay out shadow pip slots and draw the shadow gauge. Wizards get
+    /// shadow magic unlocked whenever shadow pips are on.
+    /// </summary>
+    internal void ApplyPipGauges(WizGameStats stats) {
+        if (stats is null || !s_shadowPips) {
+            return;
+        }
+
+        var max = _wizard is null ? s_creatureMaxShadowPips : s_playerMaxShadowPips;
+        stats.m_shadowMagicUnlocked = true;
+        stats.m_shadowPipMax = max >= NO_SHADOW_LIMIT ? SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT : max;
+        stats.m_shadowPipRating = ShadowPipChance();
+        stats.m_shadowPipRateAccumulated = _shadowGauge;
+        stats.m_shadowPipRateThreshold = GAUGE_FULL;
+        stats.m_shadowPipRatePercentage = (int) _shadowGauge;
+    }
+
+    /// <summary>
+    /// Shown shadow pip slots in the settings the server uses, for the login stats.
+    /// </summary>
+    internal static int ShownPlayerShadowSlots
+        => s_playerMaxShadowPips >= NO_SHADOW_LIMIT ? SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT : s_playerMaxShadowPips;
+
+    internal static bool ShadowPipsOn => s_shadowPips;
 
     private static readonly MagicSchool[] s_pipSchools = [
         MagicSchool.Balance, MagicSchool.Death, MagicSchool.Fire, MagicSchool.Ice,
@@ -764,11 +817,15 @@ public class CombatDuelSubCircle {
             m_subcircle = SlotIndex,
             m_dynamicSymbol = dynamicSymbol,
             m_PipsSuspended = false,
+            m_shadowPipRateThreshold = GAUGE_FULL,
+            m_maxArchmasteryPoints = GAUGE_FULL,
+            m_archmasterySchool = ArchmasterySchool,
 
             m_color = _color,
             m_rotation = _rotation,
             m_radius = _radius,
         };
+        ApplyPipGauges(CombatParticipant.m_pGameStats);
     }
 
     private void InitializeCreatureSubCircle(bool asMinion = false, int minionOwnerSubCircle = 0) {
@@ -828,6 +885,7 @@ public class CombatDuelSubCircle {
             m_rotation = _rotation,
             m_radius = _radius,
         };
+        ApplyPipGauges(CombatParticipant.m_pGameStats);
     }
 
     private async Task PlayEntranceAnimation(CoreObject participantObject, IActorRef participantActor) {

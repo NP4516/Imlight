@@ -971,6 +971,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
             return;
         }
+        circle.ApplyPipGauges(participantCombatsStats);
 
         if (!_serializer.Serialize(participantCombatsStats, _combatParticipantStatFlags, out var buffer)) {
             Logger.Error("Failed to serialize combat stats for duel {0}",
@@ -1057,6 +1058,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             var participantPipData = new ParticipantPipData {
                 m_acq = 1,
                 m_partID = (GID) circle.ParticipantObject.m_globalID,
+                m_arch = circle.ArchmasterySchool,
+                m_archPoints = circle.ArchmasteryPoints,
                 m_pips = new PipCount() {
                     m_genericPips = current.m_genericPips,
                     m_powerPips = current.m_powerPips,
