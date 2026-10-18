@@ -31,7 +31,7 @@ using System.Threading.Tasks;
 namespace Imlight.Setup;
 
 /// <summary>What the app shows about the server.</summary>
-internal sealed record ServerStatus(bool Running, bool Ready, bool? Randomizer, bool ClientFound, string? IdLookupPage);
+internal sealed record ServerStatus(bool Running, bool Ready, bool? Randomizer, bool ClientFound);
 
 /// <summary>One setting in Imlight.ini, with the comment above it as help.</summary>
 internal sealed record Setting(string Section, string Key, string Value, string Help);
@@ -41,13 +41,12 @@ internal sealed record LogLine(string Text, string Message, string Level, int Co
 
 /// <summary>
 /// Everything the app does with an installed server: start and stop it, read its log and settings,
-/// manage accounts, play Wizard101 and send in-game commands. Problems are reported as
+/// manage accounts and play Wizard101. Problems are reported as
 /// <see cref="PanelException"/> with a message written for the person using the app.
 /// </summary>
 internal sealed partial class ServerManager(string installFolder) {
 
     private const int LOG_TAIL_BYTES = 512 * 1024;
-    private const string COMMAND_INBOX = "command-inbox";
 
     internal string InstallFolder { get; } = Path.GetFullPath(installFolder);
 
@@ -71,8 +70,7 @@ internal sealed partial class ServerManager(string installFolder) {
             running,
             running && IsListening(LoginPort),
             randomizer is null ? null : randomizer.Equals("true", StringComparison.OrdinalIgnoreCase),
-            GameClient.ClientExe(InstallFolder) is not null,
-            IdLookupPage());
+            GameClient.ClientExe(InstallFolder) is not null);
     }
 
     internal string StartServer() {
@@ -153,7 +151,7 @@ internal sealed partial class ServerManager(string installFolder) {
     /// </summary>
     internal async Task<string> PlayHereAsync() {
         if (GameClient.ClientExe(InstallFolder) is null) {
-            throw new PanelException("Wizard101 could not be found. Run \"Update Imlight\" from the Start menu once, then try again.");
+            throw new PanelException("Wizard101 could not be found. Click \"Update Imlight\" on the Tools tab of the app once, then try again.");
         }
 
         if (IsListening(LoginPort)) {
@@ -175,51 +173,6 @@ internal sealed partial class ServerManager(string installFolder) {
         });
 
         return "Starting the server first. Wizard101 opens by itself when the server is ready.";
-    }
-
-    /// <summary>
-    /// Runs an in-game command for an account's character through the server's command inbox.
-    /// </summary>
-    internal async Task<string> SendCommandAsync(string username, string command) {
-        if (username.Trim().Length == 0 || command.Trim().Length == 0) {
-            throw new PanelException("Choose an account and type a command.");
-        }
-
-        if (!IsListening(LoginPort)) {
-            throw new PanelException("Start the server and log in with a character first.");
-        }
-
-        var inbox = Path.Combine(ServerFolder, COMMAND_INBOX);
-        if (!Directory.Exists(inbox)) {
-            throw new PanelException("This server is too old for the command box. Run \"Update Imlight\" from the Start menu, then try again.");
-        }
-
-        // Written elsewhere and moved in whole, so the server never reads half a request.
-        var id = Guid.NewGuid().ToString("N");
-        var staging = Path.Combine(Path.GetTempPath(), $"imlight-command-{id}.tmp");
-        await File.WriteAllTextAsync(staging, JsonSerializer.Serialize(new { Username = username, Command = command }));
-        File.Move(staging, Path.Combine(inbox, id + ".json"));
-
-        var resultFile = Path.Combine(inbox, id + ".result.json");
-        for (var waited = 0; waited < 50; waited++) {
-            await Task.Delay(200);
-            if (!File.Exists(resultFile)) {
-                continue;
-            }
-
-            try {
-                var result = JsonSerializer.Deserialize<JsonObject>(await File.ReadAllTextAsync(resultFile));
-                File.Delete(resultFile);
-                var message = (string?) result?["Message"] ?? "Done.";
-
-                return result?["Ok"]?.GetValue<bool>() == true ? message : throw new PanelException(message);
-            }
-            catch (IOException) {
-                // Still being written; read it on the next try.
-            }
-        }
-
-        throw new PanelException("The server did not pick up the command. Check that it is running, then try again.");
     }
 
     // ---------------------------------------------------------------------
@@ -361,15 +314,28 @@ internal sealed partial class ServerManager(string installFolder) {
     // Tools
     // ---------------------------------------------------------------------
 
-    private string? IdLookupPage() {
-        var output = IniFile.Get(ConfigFile, "ID Lookup", "OutputPath");
-        if (output is null) {
-            return null;
+    /// <summary>
+    /// Where the server writes its lists of IDs, zones and quests.
+    /// </summary>
+    internal string IdLookupFolder
+        => Path.GetFullPath(Path.Combine(ServerFolder, IniFile.Get(ConfigFile, "ID Lookup", "OutputPath") ?? "./id-lookup"));
+
+    /// <summary>
+    /// Stops the server and opens Imlight.exe in its own window to update (--update) or uninstall (--uninstall).
+    /// The app closes afterwards, so the files it uses can be replaced or removed.
+    /// </summary>
+    internal void RunInstaller(string mode) {
+        var exe = Path.Combine(InstallFolder, InstalledCommands.INSTALLED_EXE);
+        if (!File.Exists(exe)) {
+            throw new PanelException($"{exe} is missing. Run {Edition.RELEASE_ASSET} again to repair Imlight.");
         }
 
-        var page = Path.Combine(Path.GetFullPath(Path.Combine(ServerFolder, output)), "index.html");
-
-        return File.Exists(page) ? page : null;
+        StopServer();
+        Process.Start(new ProcessStartInfo(exe) {
+            Arguments = $"{mode} --dir \"{InstallFolder}\"",
+            WorkingDirectory = InstallFolder,
+            UseShellExecute = true,
+        })?.Dispose();
     }
 
     internal string LogFolder => Path.Combine(ServerFolder, "logs");

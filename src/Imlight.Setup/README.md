@@ -12,7 +12,7 @@ The same program also builds as **ImlightManager.exe**, which installs this fork
 4. **Reads the game files Imcodec needs** (`*Messages*.xml`) straight out of the player's own `Root.wad`, and uses the type dump Imcodec ships. Nothing copyrighted is downloaded or shared.
 5. **Builds the server** into `%LOCALAPPDATA%\ImlightServer\Server`.
 6. **Asks for an admin account** on a first install.
-7. **Installs `Imlight.exe`, the app, and opens it**. One desktop shortcut opens the app; the Start menu also has Start Imlight Server (the server in a plain window), Server Settings, Server Logs, Setup Log, Update Imlight and Uninstall Imlight. Imlight is also listed under **Settings > Apps**, so it can be uninstalled from there.
+7. **Installs `Imlight.exe`, the app, and opens it**. The only shortcut is the app's, on the desktop; everything else is inside the app. Shortcuts and the Start menu folder from earlier versions are removed. Imlight is also listed under **Settings > Apps**, so it can be uninstalled from there.
 
 ## No patch server needed
 
@@ -22,22 +22,18 @@ If the server asks for an area's file that the player's game hasn't downloaded y
 
 ## The app
 
-Opening `Imlight.exe` (the desktop shortcut) shows the app in its own window. The window is drawn by the program itself (Avalonia), so it uses no web browser, no web view and no account. Closing the window stops the server. Everything is in one place:
+Opening `Imlight.exe` (the desktop shortcut) shows the app in its own dark window. The window is drawn by the program itself (Avalonia), so it uses no web browser, no web view and no account. Closing the window stops the server. Everything is in one place:
 
 - **Play**: play Wizard101 on the server on this computer (it starts the server first if needed), or on another private server you save by address and port. The live game is refused, by name (`wizard101.com`, `kingsisle.com`, `gameforge.com`) and by address. A server on this computer cannot use a port Imlight needs (login, game, patch, database, game files, which is also Aurorium's, or the app's own 12380 to 12399).
-- **Command box**: paste an in-game command instead of typing it in game. It runs for the character the chosen account has logged in, with that account's permissions, and the reply shows in game. The server reads these from `Server\command-inbox`.
+- **Lookup**: every in-game command with a plain name, what to type and who may use it, plus every item, spell, creature, NPC, zone and quest with its ID or name and the command that uses it. One search box covers all of it, with a filter by kind and Copy buttons. The game lists come from files the server writes to its ID lookup folder (`ids.csv`, `zones.txt`, `quests.csv`).
 - **Server**: start, stop and restart the server, switch randomizer mode on or off, and read the log with repeated lines folded into one (`×30`) and debug lines hidden.
 - **Settings**: change any setting in `Config\Imlight.ini`, with each setting's help text.
 - **Accounts**: create accounts, change their level or password, and lock or unlock them (the server must be running).
+- **Tools**: update or uninstall Imlight, and open the log, settings and install folders.
 
-## Shortcuts
+## Update and uninstall
 
-| Shortcut | What it does |
-| --- | --- |
-| Imlight Server (or Imlight Manager) | Opens the app described above. |
-| Start Imlight Server | Serves the game files and runs the server in a plain window. Close the window to stop it. |
-| Update Imlight | Gets the newest setup if there is one, downloads the latest Imlight and rebuilds. `Config\Imlight.ini`, the logs and the player database are kept. |
-| Uninstall Imlight | Removes Imlight, its shortcuts and its Apps entry. It asks before deleting accounts and characters. Wizard101 is not touched. |
+**Update Imlight** on the Tools tab gets the newest setup if there is one, downloads the latest Imlight and rebuilds. `Config\Imlight.ini`, the logs and the player database are kept. **Uninstall Imlight** removes Imlight, its shortcut and its Apps entry; it asks before deleting accounts and characters, and Wizard101 is not touched. Both stop the server and close the app first.
 
 Everything it does is written to `setup-log.txt` in the install folder. If setup fails, that file says why. Share it when asking for help.
 
@@ -51,7 +47,9 @@ ImlightSetup --dir <folder>          Install somewhere else.
              --branch <name>         Build a different branch.
              --yes --admin-password <text>   Install without asking anything.
              --panel                 Open the app (the installed Imlight.exe does this with no option).
-             --update                Update Imlight (what the Update Imlight shortcut runs).
+             --update                Update Imlight (what Update Imlight on the Tools tab runs).
+             --start                 Run the server in a plain window, without the app.
+             --uninstall             Uninstall Imlight.
 ```
 
 ## Building it

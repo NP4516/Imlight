@@ -67,7 +67,7 @@ internal static class GameClient {
     /// </summary>
     internal static async Task LaunchAsync(string installFolder, string host, int port) {
         var client = ClientExe(installFolder)
-            ?? throw new PanelException("Wizard101 could not be found. Run \"Update Imlight\" from the Start menu once, then try again.");
+            ?? throw new PanelException("Wizard101 could not be found. Click \"Update Imlight\" on the Tools tab of the app once, then try again.");
         if (await IsLiveRealmAsync(host)) {
             throw new PanelException("That is the live Wizard101 game. This app only plays on private servers.");
         }
@@ -246,7 +246,7 @@ internal static class GameClient {
     internal static object ReadClientLog(string installFolder) {
         var game = InstallInfo.Load(installFolder).GameFolder;
         if (game is null || !Directory.Exists(game)) {
-            return new { file = (string?) null, text = "", reason = "Wizard101 could not be found. Run \"Update Imlight\" from the Start menu once." };
+            return new { file = (string?) null, text = "", reason = "Wizard101 could not be found. Click \"Update Imlight\" on the Tools tab of the app once." };
         }
 
         var file = new[] { Path.Combine(game, "Bin", "logs"), Path.Combine(game, "Bin"), Path.Combine(game, "logs"), game }

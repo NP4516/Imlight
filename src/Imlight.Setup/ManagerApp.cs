@@ -78,7 +78,8 @@ internal sealed class ManagerApp : Application {
 
     public override void Initialize() {
         Styles.Add(new FluentTheme());
-        RequestedThemeVariant = ThemeVariant.Default;
+        // Always dark, whatever Windows is set to.
+        RequestedThemeVariant = ThemeVariant.Dark;
         Name = Edition.NAME;
     }
 

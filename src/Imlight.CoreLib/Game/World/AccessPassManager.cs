@@ -88,6 +88,17 @@ internal class AccessPassManager : RootSingleResourceSingleton<AccessPassManager
     internal static string GetContainedZoneName(string partialZoneName)
         => s_zones.FirstOrDefault(zone => zone.Contains(partialZoneName, System.StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// Every zone name, as the teleport command accepts it.
+    /// </summary>
+    internal static IReadOnlyList<string> Zones {
+        get {
+            _ = Instance;
+
+            return s_zones ?? [];
+        }
+    }
+
     void IMemoryStreamDisposable.DisposeStream() => base.Stream?.Dispose();
 
 }

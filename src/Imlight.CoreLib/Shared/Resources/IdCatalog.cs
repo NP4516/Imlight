@@ -32,7 +32,8 @@
  * - Building reads every template from the game client's archives, so it runs
  *   in the background and is cached on disk per game revision.
  * - The output folder holds ids.csv (opens in a spreadsheet) and index.html
- *   (opens in a browser with a search box).
+ *   (opens in a browser with a search box), plus zones.txt and quests.csv,
+ *   which the app's Lookup tab reads alongside ids.csv.
  *
  * TODO:
  *
@@ -76,6 +77,8 @@ public static class IdCatalog {
     private const string CSV_NAME = "ids.csv";
     private const string HTML_NAME = "index.html";
     private const string REVISION_NAME = "revision.txt";
+    private const string ZONES_NAME = "zones.txt";
+    private const string QUESTS_NAME = "quests.csv";
     private const string CSV_HEADER = "Id,Kind,Name,School,Level,Path";
     private const int INFORM_ALIVE_INTERVAL = 10000;
 
@@ -109,6 +112,7 @@ public static class IdCatalog {
             return;
         }
 
+        _ = Task.Run(WriteZonesAndQuests);
         _ = Task.Run(() => {
             try {
                 if (TryLoadFromDisk()) {
@@ -291,6 +295,33 @@ public static class IdCatalog {
 
         // Written last so an interrupted build is redone on the next boot.
         File.WriteAllText(Path.Combine(OutputPath, REVISION_NAME), s_gameRevision);
+    }
+
+    /// <summary>
+    /// Writes the zone names the teleport command takes and the quest names the quest commands take.
+    /// They are quick to read, so they are rewritten on every boot.
+    /// </summary>
+    private static void WriteZonesAndQuests() {
+        try {
+            Directory.CreateDirectory(OutputPath);
+            var zones = Imlight.CoreLib.Game.World.AccessPassManager.Zones.OrderBy(z => z, StringComparer.OrdinalIgnoreCase);
+            File.WriteAllLines(Path.Combine(OutputPath, ZONES_NAME), zones);
+
+            var quests = new StringBuilder().AppendLine("Name,Title");
+            foreach (var quest in Imlight.CoreLib.WizardData.Collections.QuestTemplateCollection.GetAllQuests()) {
+                string name = quest.m_questName;
+                string titleKey = quest.m_questTitle;
+                if (string.IsNullOrEmpty(name)) {
+                    continue;
+                }
+
+                quests.Append(CsvField(name)).Append(',').AppendLine(CsvField(NameOf(titleKey, "")));
+            }
+            File.WriteAllText(Path.Combine(OutputPath, QUESTS_NAME), quests.ToString());
+        }
+        catch (Exception ex) {
+            Logger.Warning("Could not write the zone and quest lists for the app. {Exception}", Logger.Args(ex));
+        }
     }
 
     private static string CsvField(string value) {

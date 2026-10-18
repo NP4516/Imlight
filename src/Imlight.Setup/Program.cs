@@ -29,7 +29,7 @@
  * The installed copy, Imlight.exe, is the app: it runs the server with the
  * game files from the person's own Wizard101 folder (so no separate patch
  * server is needed), plays Wizard101 on it or on another private server
- * (never the live game), sends in-game commands, and uninstalls.
+ * (never the live game), lists every command and ID, and uninstalls.
  *
  * NOTE:
  * Nothing copyrighted is downloaded or shipped: the game files come from
@@ -135,9 +135,9 @@ internal static class Program {
         SetupLog.Info("");
         SetupLog.Info("Imlight is installed. Everything it needs is set up, including the game files from your Wizard101.");
         SetupLog.Info($"Open \"{Edition.NAME}\" on your desktop any time. From there you can start the server, play Wizard101 on it");
-        SetupLog.Info("or on another private server, send in-game commands, change settings and manage accounts.");
-        SetupLog.Info("To update later, use \"Update Imlight\" in the Start menu. To remove it, use \"Uninstall Imlight\" there,");
-        SetupLog.Info($"or uninstall \"{Edition.NAME}\" from Settings > Apps.");
+        SetupLog.Info("or on another private server, look up commands and IDs, change settings and manage accounts.");
+        SetupLog.Info("To update or uninstall later, use the Tools tab in the app. You can also uninstall");
+        SetupLog.Info($"\"{Edition.NAME}\" from Settings > Apps.");
         if (!options.Unattended && OperatingSystem.IsWindows()) {
             OpenApp(options.InstallFolder);
             SetupLog.Info($"{Edition.NAME} is opening now.");
