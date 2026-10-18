@@ -16,7 +16,6 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
-using Imcodec.Cryptography;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
@@ -406,6 +405,16 @@ public class Wizard {
 
         return AddItemToInventory(item);
     }
+
+    public bool AddItemToInventory(ulong itemId, int primaryColor, int secondaryColor, out WizClientObjectItem item) {
+        item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemId);
+        item.m_characterId = (GID) CharId;
+        item.m_primaryColor = primaryColor;
+        item.m_secondaryColor = secondaryColor;
+
+        return AddItemToInventory(item);
+    }
+
 
     public bool AddItemToInventory(WizClientObjectItem item) {
         if (item is null) {

@@ -42,6 +42,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Akka.Actor;
 using Imcodec.CoreObject;
 using Imcodec.MessageLayer.Generated;
@@ -301,6 +302,13 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                 case TourneyTokensAmountTemplate tourneyToken:
                     // TODO
                     return;
+                case ItemBundleTemplate itemBundle:
+                    for (uint i = 0; i < message.Count; i++) {
+                        foreach (var templateId in itemBundle.m_bundleItems) {
+                            AddItemToInventory(wizard, templateId, message.Texture, message.Decal);
+                        }
+                    }
+                    return;
                 case WizItemTemplate wizItemTemplate:
                     // Check if the item is an Elixir.
                     var elixirBehavior = wizItemTemplate.m_behaviors?.OfType<ElixirBehaviorTemplate>().FirstOrDefault();
@@ -334,31 +342,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
                     // todo: serialize the item only once
                     for (uint i = 0; i < message.Count; i++) {
-                        if (!wizard.AddItemToInventory(message.Item, out WizClientObjectItem itemCoreObject)) {
-                            Logger.Warning("Could not add item to inventory.");
-
-                            SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_RESPONSE {
-                                Error = 1,
-                            });
-                            return;
-                        }
-
-                        if (!s_coreObjectSerializer.Serialize(itemCoreObject, 24, out var serializedItem)) {
-                            Logger.Warning("Failed to serialize core object.");
-                            return;
-                        }
-
-                        SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
-                            GlobalID = wizard.GameObjectID,
-                            SerializedItem = serializedItem
-                        });
-
-                        // This adds the item to 'REVIEW MY ORDER'
-                        SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-                            ItemGlobalID = itemCoreObject.m_globalID,
-                            ItemLocation = 1,
-                            ItemTemplateID = (uint) message.Item
-                        });
+                        AddItemToInventory(wizard, message.Item, message.Texture, message.Decal);
                     }
                     return;
                 default:
@@ -412,6 +396,33 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                 });
             }
         }
+    }
+
+    private void AddItemToInventory(Wizard wizard, ulong itemTemplateId, int texture, int decal) {
+        if (!wizard.AddItemToInventory(itemTemplateId, texture, decal, out WizClientObjectItem itemCoreObject)) {
+            Logger.Warning("Could not add item to inventory.");
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_RESPONSE {
+                Error = 1,
+            });
+            return;
+        }
+
+        if (!s_coreObjectSerializer.Serialize(itemCoreObject, 24, out var serializedItem)) {
+            Logger.Warning("Failed to serialize core object.");
+            return;
+        }
+
+        SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+            GlobalID = wizard.GameObjectID,
+            SerializedItem = serializedItem
+        });
+
+        // This adds the item to 'REVIEW MY ORDER'
+        SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+            ItemGlobalID = itemCoreObject.m_globalID,
+            ItemLocation = 1,
+            ItemTemplateID = (uint) itemTemplateId
+        });
     }
 
     private bool TryEquipElixir(Wizard wizard,
@@ -531,7 +542,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST))]
     private void ReceiveWishlistUpdate(WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST message) {
-
+        Logger.Warning($"{JsonSerializer.Serialize(message)}");
     }
 
     [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_CrownShopLogging))]
