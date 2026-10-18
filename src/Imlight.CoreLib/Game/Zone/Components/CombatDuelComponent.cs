@@ -97,6 +97,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private const double MINION_SUMMON_ANIMATION_DELAY = 5.5;
     private const string GROUP_JOIN_PROMPT_KEY = "GUI_GotoFriendQuestion";
     private const string PVP_RETURN_GRACE_KEY = "PvPReturnGrace";
+    private const double PVP_RETURN_GRACE_SECONDS = 0; // todo: measure in game
 
     public bool NoTransfer { get; set; } = false;
     public ITimerScheduler Timers { get; set; }
@@ -847,8 +848,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         var firstTeam = DetermineFirstTeam();
         Duel.m_firstTeamToAct = (int) firstTeam;
         Duel.m_originalFirstTeamToAct = (int) firstTeam;
-        _pvp = new PvPDuelState(message.MatchId, message.TournamentNameId, message.Roster, rules, firstTeam,
-            PvPSettings.SwapFirstTeamEachRound);
+        _pvp = new PvPDuelState(message.MatchId, message.TournamentNameId, message.Roster, rules, firstTeam);
 
         // The roster is fixed: each player sits on a circle of their side and is moved onto it first, because
         // they stand wherever they arrived in the zone.
@@ -1741,7 +1741,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
         // Each client reports when its victory scene is over; a draw plays none and reports nothing, so the wait is
         // bounded by the grace period either way.
-        var grace = PvPSettings.ReturnGrace;
+        var grace = TimeSpan.FromSeconds(PVP_RETURN_GRACE_SECONDS);
         if (grace > TimeSpan.Zero && _pvp.HasSessionsToWaitFor) {
             Timers.StartSingleTimer(PVP_RETURN_GRACE_KEY, new COMBAT_106_PROTOCOL.MSG_PVPENDGRACEOVER(), grace);
 

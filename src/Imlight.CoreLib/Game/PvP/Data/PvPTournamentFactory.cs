@@ -90,11 +90,6 @@ internal sealed class PvPTournamentFactory : RootDirectoryResourceSingleton<PvPT
         => tournament.m_useEloBehavior && tournament.m_updateLadder && !tournament.m_isBracketTournament;
 
     internal static bool TryGetRankedTournament(out TournamentTemplate tournament) {
-        var configured = PvPSettings.RankedTournament;
-        if (!string.IsNullOrEmpty(configured)) {
-            return TryGetTournament(configured, out tournament);
-        }
-
         tournament = s_tournamentsByName.Values
             .Where(IsRanked)
             .OrderBy(candidate => (string) candidate.m_tournamentName, StringComparer.Ordinal)

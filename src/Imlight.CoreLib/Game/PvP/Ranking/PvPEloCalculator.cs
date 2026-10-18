@@ -47,6 +47,7 @@ internal static class PvPEloCalculator {
     public const double WIN = 1;
     public const double DRAW = 0.5;
     public const double LOSS = 0;
+    public const double ELO_SCALE = 400;
 
     public static double GetExpectedScore(double rating, double opponentRating, double scale)
         => 1 / (1 + Math.Pow(10, (opponentRating - rating) / scale));

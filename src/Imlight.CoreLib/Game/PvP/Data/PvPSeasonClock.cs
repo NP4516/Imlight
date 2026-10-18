@@ -62,28 +62,12 @@ internal static class PvPSeasonClock {
     }
 
     /// <summary>
-    /// Gets the season of a league the checks treat as current: the forced one, or the one running at the PvP time.
-    /// </summary>
-    public static bool TryGetCurrentSeason(PvPLeagueTemplate league, DateTime utcNow, out PvPSeasonEntry season) {
-        season = null;
-        if (PvPSettings.SeasonIndex is not { } index) {
-            return TryGetActiveSeason(league, GetNow(utcNow), out season);
-        }
-
-        int count = league.m_seasonList.Count;
-        int position = index < 0 ? count + index : index;
-
-        return position >= 0 && position < count && PvPLeagueFactory.TryGetSeason((string) league.m_seasonList[position], out season);
-    }
-
-    /// <summary>
     /// Gets the start of the season in Unix seconds, which is what the client compares with its own season start. A
     /// season that repeats every year starts in the year of the window around the PvP time.
     /// </summary>
     public static uint GetStartUnix(PvPSeasonEntry entry, DateTime utcNow) {
-        var now = GetNow(utcNow);
-        var window = GetWindows(entry, now)
-            .Where(window => window.Start <= now)
+        var window = GetWindows(entry, utcNow)
+            .Where(window => window.Start <= utcNow)
             .OrderByDescending(window => window.Start)
             .FirstOrDefault();
         if (window == default) {
@@ -94,28 +78,13 @@ internal static class PvPSeasonClock {
     }
 
     /// <summary>
-    /// Gets the time the season checks use: the configured instant, or the given time plus the configured offset.
+    /// Checks that a league is open: one of its seasons is running now.
     /// </summary>
-    public static DateTime GetNow(DateTime utcNow)
-        => PvPSettings.SeasonNow ?? utcNow.AddDays(PvPSettings.SeasonOffsetDays);
+    public static bool IsLeagueOpen(PvPLeagueTemplate league)
+        => TryGetActiveSeason(league, DateTime.UtcNow, out _);
 
     /// <summary>
-    /// Checks that the configuration leaves a league open.
-    /// </summary>
-    public static bool IsLeagueOpen(PvPLeagueTemplate league) {
-        string leagueType = league.m_leagueType;
-        if (PvPSettings.LeaguesClosed.Contains(leagueType, StringComparer.OrdinalIgnoreCase)) {
-            return false;
-        }
-
-        var open = PvPSettings.LeaguesOpen;
-
-        return open.Count == 0 || open.Contains(leagueType, StringComparer.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Checks that a season belongs to a league and is running, or ended within the league grace period. A forced
-    /// season index accepts only the season at that position, whatever its dates.
+    /// Checks that a season belongs to a league and is running, or ended within the league grace period.
     /// </summary>
     public static bool IsOpen(PvPLeagueTemplate league, uint seasonId, DateTime utcNow) {
         if (!PvPLeagueFactory.TryGetSeason(seasonId, out var entry)) {
@@ -127,14 +96,9 @@ internal static class PvPSeasonClock {
             return false;
         }
 
-        if (PvPSettings.SeasonIndex is { } index) {
-            return IsForcedSeason(league, seasonName, index);
-        }
-
-        var now = GetNow(utcNow);
         var grace = TimeSpan.FromDays(Math.Max(0, league.m_gracePeriodDays));
 
-        return GetWindows(entry, now).Any(window => now >= window.Start && now < window.End + grace);
+        return GetWindows(entry, utcNow).Any(window => utcNow >= window.Start && utcNow < window.End + grace);
     }
 
     public static bool IsActive(PvPSeasonEntry entry, DateTime utcNow)
@@ -152,21 +116,6 @@ internal static class PvPSeasonClock {
 
     private static uint ToUnix(DateTime utc)
         => (uint) Math.Max(0, new DateTimeOffset(utc).ToUnixTimeSeconds());
-
-    private static bool IsForcedSeason(PvPLeagueTemplate league, string seasonName, int index) {
-        int count = league.m_seasonList.Count;
-        int position = index < 0 ? count + index : index;
-        if (position < 0 || position >= count) {
-            if (!s_warnedIndexOutOfRange) {
-                s_warnedIndexOutOfRange = true;
-                Logger.Warning("PvP.Season.Index {Index} is outside the season list of a league; that league is closed.", Logger.Args(index));
-            }
-
-            return false;
-        }
-
-        return (string) league.m_seasonList[position] == seasonName;
-    }
 
     private static IEnumerable<(DateTime Start, DateTime End)> GetWindows(PvPSeasonEntry entry, DateTime utcNow) {
         int[] years = entry.Year is { } year ? [year] : [utcNow.Year - 1, utcNow.Year];
@@ -203,7 +152,5 @@ internal static class PvPSeasonClock {
 
         return true;
     }
-
-    private static bool s_warnedIndexOutOfRange;
 
 }

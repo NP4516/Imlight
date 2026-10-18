@@ -51,7 +51,6 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
-using Imlight.CoreLib.Game.PvP.Data;
 using Imlight.CoreLib.Game.World;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
@@ -167,7 +166,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
         _loginCompleteMessage = new GAME_5_PROTOCOL.MSG_LOGINCOMPLETE() {
             RealmName = realmName,
-            ServerTime = GetClientTime(),
+            ServerTime = (uint) DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
 
             // Set character data.
             Data = Compression.CompressWithLength(localGameObjectData),
@@ -203,12 +202,6 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
         Logger.Information("Session {SessionId} MSG_ATTACH accepted: zone {Zone}, character {CharId}, PRELOGIN in {Delay}ms",
             Logger.Args(SessionActor.SessionID, zoneName, _wizard.CharId, (int) preLoginDelay.TotalMilliseconds));
-    }
-
-    private static uint GetClientTime() {
-        var now = DateTime.UtcNow;
-
-        return (uint) new DateTimeOffset(PvPSettings.ShiftClientClock ? PvPSeasonClock.GetNow(now) : now).ToUnixTimeSeconds();
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PRELOGIN))]

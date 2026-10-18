@@ -23,11 +23,11 @@
  * The PvP side of a duel: which match it is, who plays it, and whose half of the round it is.
  * 
  * USAGE EXAMPLE:
- * var state = new PvPDuelState(matchId, roster, rules, CombatTeam.Player, swapFirstTeamEachRound: true);
+ * var state = new PvPDuelState(matchId, roster, rules, CombatTeam.Player);
  * 
  * NOTE:
- * A round of an alternating duel is two half turns: the team that starts acts first, then the other team. The
- * starting team swaps every round when the setting asks for it.
+ * A round of an alternating duel is two half turns: the team that starts acts first, then the other team. A round
+ * that does not alternate swaps its starting team every round.
  * 
  * TODO:
  * Is the swap of the starting team every round what live does? No client code reads the initiative switch fields.
@@ -48,8 +48,7 @@ internal sealed class PvPDuelState(
     uint tournamentNameId,
     IReadOnlyList<PvPRosterEntry> roster,
     PvPDuelRules rules,
-    CombatTeam firstTeam,
-    bool swapFirstTeamEachRound) {
+    CombatTeam firstTeam) {
 
     private readonly HashSet<ulong> _forfeitedCharIds = [];
     private readonly HashSet<IActorRef> _disconnectedSessions = [];
@@ -72,7 +71,7 @@ internal sealed class PvPDuelState(
 
     public void BeginRound(int roundNumber) {
         // An alternating duel keeps its starter, otherwise a team would act last in a round and first in the next.
-        if (roundNumber > 1 && swapFirstTeamEachRound && !Rules.AlternateTurns) {
+        if (roundNumber > 1 && !Rules.AlternateTurns) {
             RoundStarter = Opposite(RoundStarter);
         }
 

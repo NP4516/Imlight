@@ -118,7 +118,6 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
             Logger.Error("The PvP Elo config is missing from the game data.");
         }
 
-        LogSeasonSelection(leaguesByName.Values);
     }
 
     private static void BuildRankTables(EloConfig eloConfig, IEnumerable<string> leagueTypes) {
@@ -165,16 +164,6 @@ internal sealed partial class PvPLeagueFactory : RootDirectoryResourceSingleton<
         var withoutTable = leagues.Where(league => !s_rankTablesByLeagueType.ContainsKey(league)).ToList();
         if (withoutTable.Count > 0) {
             Logger.Information("PvP leagues without their own rating table, which use the default one: {Leagues}.", Logger.Args(string.Join(", ", withoutTable)));
-        }
-    }
-
-    private static void LogSeasonSelection(IEnumerable<PvPLeagueTemplate> leagues) {
-        int open = leagues.Count(PvPSeasonClock.IsLeagueOpen);
-        Logger.Information("PvP season selection: index {Index}, clock {Clock}, offset {Offset} days, {OpenCount} of {LeagueCount} leagues open.",
-            Logger.Args(PvPSettings.SeasonIndex?.ToString() ?? "by time", PvPSettings.SeasonNow is null ? "real" : "pinned",
-                PvPSettings.SeasonOffsetDays, open, leagues.Count()));
-        if (PvPSettings.ShiftClientClock) {
-            Logger.Warning("PvP.Season.ShiftClientClock is on: the login time sent to every client follows the PvP season clock. Test only.");
         }
     }
 

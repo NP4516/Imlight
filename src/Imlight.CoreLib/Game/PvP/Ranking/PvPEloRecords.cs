@@ -76,9 +76,9 @@ internal static class PvPEloRecords {
     public static void Clear(ServerPvPEloBehavior behavior, uint leagueId)
         => behavior.Records.RemoveAll(record => record.LeagueId == leagueId);
 
-    public static Change Apply(PvPEloRecord record, PvPRankTable table, double score, double opponentElo, double scale, int kFactorOverride) {
-        var kFactor = kFactorOverride > 0 ? kFactorOverride : table.GetKFactor(record.RankIndex);
-        var delta = PvPEloCalculator.GetDelta(record.Elo, opponentElo, score, kFactor, scale);
+    public static Change Apply(PvPEloRecord record, PvPRankTable table, double score, double opponentElo) {
+        var kFactor = table.GetKFactor(record.RankIndex);
+        var delta = PvPEloCalculator.GetDelta(record.Elo, opponentElo, score, kFactor, PvPEloCalculator.ELO_SCALE);
         var change = Move(record, table, PvPEloCalculator.GetNewRating(record.Elo, delta, table.MinElo));
 
         if (score >= PvPEloCalculator.WIN) {

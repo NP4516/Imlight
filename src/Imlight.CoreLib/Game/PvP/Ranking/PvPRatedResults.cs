@@ -60,13 +60,13 @@ internal static class PvPRatedResults {
         var startTime = PvPSeasonClock.GetStartUnix(season, DateTime.UtcNow);
         var record = PvPEloRecords.GetOrCreate(behavior, leagueId, seasonId, startTime, table, out _);
 
-        return PvPEloRecords.Apply(record, table, score, opponentElo, PvPSettings.EloScale, PvPSettings.KFactorOverride);
+        return PvPEloRecords.Apply(record, table, score, opponentElo);
     }
 
     public static void ApplyOffline(ulong charId, PVP_111_PROTOCOL.MSG_RATEDRESULT result) {
         var saved = WizardCollection.UpdateCharacterWithSession(charId, (_, stored) => {
             var change = Apply(stored.PvPEloBehavior, result.LeagueId, result.SeasonId, result.OpponentElo, result.Score, out var table);
-            if (change is not null && PvPSettings.RankedAwardBadges) {
+            if (change is not null) {
                 AwardBadges(stored, table, change.NewRankIndex);
             }
 

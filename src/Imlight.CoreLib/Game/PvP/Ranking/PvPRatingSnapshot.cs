@@ -60,7 +60,7 @@ internal sealed record PvPRatingSnapshot(int Elo, int RankIndex, int Wins, int L
             WizardCollection.UpdateCharacterPvPEloBehavior(wizard);
         }
 
-        var kFactor = PvPSettings.KFactorOverride > 0 ? PvPSettings.KFactorOverride : table.GetKFactor(record.RankIndex);
+        var kFactor = table.GetKFactor(record.RankIndex);
         snapshot = new PvPRatingSnapshot(record.Elo, record.RankIndex, record.Wins, record.Losses, kFactor);
 
         return true;

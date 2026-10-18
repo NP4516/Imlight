@@ -199,10 +199,6 @@ internal class PvPRatingService(SessionActor sessionActor) : MessageService(sess
     }
 
     private void AwardRankBadges(Wizard wizard, PvPRankTable table, int rankIndex) {
-        if (!PvPSettings.RankedAwardBadges) {
-            return;
-        }
-
         foreach (var badgeId in PvPRankBadges.GetAwardIds(table, rankIndex).Where(id => !wizard.BadgeBehavior.Earned.ContainsKey(id))) {
             TellOtherServices(new CHARACTER_103_PROTOCOL.MSG_BADGEEVENT { Kind = BadgeEventKind.Award, BadgeId = badgeId });
         }
@@ -246,7 +242,7 @@ internal class PvPRatingService(SessionActor sessionActor) : MessageService(sess
         if (!PvPSeasonClock.IsLeagueOpen(league)
             || !PvPLeagueFactory.TryGetRankTable(league.m_leagueType, out var table)
             || !table.IsRated
-            || !PvPSeasonClock.TryGetCurrentSeason(league, DateTime.UtcNow, out var season)) {
+            || !PvPSeasonClock.TryGetActiveSeason(league, DateTime.UtcNow, out var season)) {
             return false;
         }
 
