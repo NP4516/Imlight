@@ -169,6 +169,20 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         TellOtherServices(msg);
 
         GrantMobLoot(message.MobTemplateIds);
+        TeachSpellAfterBattle();
+    }
+
+    private void TeachSpellAfterBattle() {
+        // Randomizer mode: a win can teach a random battle spell from anywhere in the game.
+        var wizard = GetActiveWizard();
+        if (Randomization.Randomizer.PickSpellAfterBattle(wizard) is not { } pick) {
+            return;
+        }
+
+        var result = Imlight.CoreLib.Game.Spells.SpellTeacher.TryTeach(SessionActor.ActorRef, wizard, pick.TemplateId, randomize: false);
+        if (result == Imlight.CoreLib.Game.Spells.SpellTeachResult.Learned) {
+            InformGameClient($"Randomizer: you learned {pick.Name} from that battle!");
+        }
     }
 
     private void GrantMobLoot(ulong[] defeatedMobTemplateIds) {

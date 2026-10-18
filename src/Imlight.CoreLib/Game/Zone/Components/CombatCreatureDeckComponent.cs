@@ -133,6 +133,12 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
             return;
         }
 
+        // Randomizer mode may swap it for another spell of the same type and pip cost.
+        var rolled = Randomization.Randomizer.RollCreatureSpell(spellId);
+        if (rolled != spellId && SpellFactory.GetSpell(rolled) is not null && Spells.All(x => x.m_templateID != rolled)) {
+            spellId = rolled;
+        }
+
         // Creatures have infinite spells in their spellbook.
         Spells.Add(new SpellData {
             m_templateID = spellId,

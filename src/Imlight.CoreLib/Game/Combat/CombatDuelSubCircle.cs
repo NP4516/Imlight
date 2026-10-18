@@ -264,12 +264,20 @@ public class CombatDuelSubCircle {
             return;
         }
 
-        var gainedPowerPip = DeterminePowerPipGain(CombatParticipant);
-        if (gainedPowerPip) {
-            CombatParticipant.m_pipCount.m_powerPips++;
-        }
-        else {
-            CombatParticipant.m_pipCount.m_genericPips++;
+        // Randomizer mode rolls how many pips come this round; otherwise it is one.
+        var gains = Randomization.Randomizer.RandomizePips ? Randomization.Randomizer.RollPipGain() : 1;
+        for (var i = 0; i < gains; i++) {
+            if (CombatParticipant.m_pipCount.m_genericPips + CombatParticipant.m_pipCount.m_powerPips >= MAX_PIP_COUNT) {
+                return;
+            }
+
+            var gainedPowerPip = DeterminePowerPipGain(CombatParticipant);
+            if (gainedPowerPip) {
+                CombatParticipant.m_pipCount.m_powerPips++;
+            }
+            else {
+                CombatParticipant.m_pipCount.m_genericPips++;
+            }
         }
     }
 
@@ -528,14 +536,17 @@ public class CombatDuelSubCircle {
                 continue;
             }
 
+            // Randomizer mode may swap each gear card for another spell of the same type and pip cost.
+            var itemCardId = Randomization.Randomizer.RollItemCard(tempSpell.m_templateID);
+
             // If the spell data already exists, increase the quantity.. otherwise add it.
-            var existingSpell = temporarySpells.Find(s => s.TemplateId == tempSpell.m_templateID);
+            var existingSpell = temporarySpells.Find(s => s.TemplateId == itemCardId);
             if (existingSpell is not null) {
                 existingSpell.Quantity++;
             }
             else {
                 temporarySpells.Add(new CombatDeckSpellData {
-                    TemplateId = tempSpell.m_templateID,
+                    TemplateId = itemCardId,
                     Quantity = 1,
                     IsItemCard = true
                 });

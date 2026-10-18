@@ -107,6 +107,7 @@ internal static class CharacterHelper {
         var wizardAvatar = creationInfo.m_avatarBehavior;
         var nameIndices = creationInfo.m_nameIndices;
         var character = new Wizard(school, wizardAvatar, nameIndices);
+        Randomizer.GiveStartingSpells(character);
 
         return character;
     }
