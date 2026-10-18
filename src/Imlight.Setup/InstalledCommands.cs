@@ -83,12 +83,46 @@ internal static class InstalledCommands {
         await server.WaitForExitAsync();
 
         Console.WriteLine();
+        if (server.ExitCode != 0) {
+            ShowLastErrors(installFolder);
+        }
+
         Console.WriteLine($"The server stopped (exit code {server.ExitCode}). Its log is in {Path.Combine(ServerFolder(installFolder), "logs")}.");
         if (!noWait) {
             WaitForKey();
         }
 
         return server.ExitCode;
+    }
+
+    /// <summary>
+    /// Prints the end of the newest server log after a crash, so the reason is on screen for a screenshot.
+    /// </summary>
+    private static void ShowLastErrors(string installFolder) {
+        var logs = Path.Combine(ServerFolder(installFolder), "logs");
+        var file = Directory.Exists(logs)
+            ? new DirectoryInfo(logs).EnumerateFiles().OrderByDescending(f => f.LastWriteTimeUtc).FirstOrDefault()
+            : null;
+        if (file is null) {
+            return;
+        }
+
+        try {
+            using var stream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            var lines = reader.ReadToEnd().ReplaceLineEndings("\n").TrimEnd().Split('\n');
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("The last lines the server wrote before it stopped:");
+            Console.ResetColor();
+            foreach (var line in lines.TakeLast(25)) {
+                Console.WriteLine(line);
+            }
+
+            Console.WriteLine();
+        }
+        catch (IOException) {
+            // The log could not be read; its folder is printed below.
+        }
     }
 
     private static GameDataServer? StartGameDataServer(string installFolder) {

@@ -25,7 +25,8 @@ namespace Imlight.Setup;
 
 /// <summary>
 /// Shows the app's page in a window of its own, with no tabs or address bar, using the Microsoft Edge
-/// that comes with Windows. It keeps its own profile, so it never mixes with the person's browsing.
+/// that comes with Windows. It is an InPrivate window with its own profile folder, so Edge never signs it
+/// in to the person's Microsoft account and it never mixes with their browsing.
 /// </summary>
 internal static class AppWindow {
 
@@ -41,8 +42,9 @@ internal static class AppWindow {
             Directory.CreateDirectory(profileFolder);
             var startInfo = new ProcessStartInfo(edge) { UseShellExecute = false };
             foreach (var arg in new[] {
-                         $"--app={url}", $"--user-data-dir={profileFolder}", "--window-size=1200,860",
-                         "--no-first-run", "--no-default-browser-check", "--disable-features=Translate",
+                         $"--app={url}", $"--user-data-dir={profileFolder}", "--inprivate", "--window-size=1200,860",
+                         "--no-first-run", "--no-default-browser-check", "--disable-sync",
+                         "--disable-features=Translate,msImplicitSignin",
                      }) {
                 startInfo.ArgumentList.Add(arg);
             }
