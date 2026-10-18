@@ -75,6 +75,7 @@ The `[Battle]` section works with or without randomizer mode, with switches on t
 | Setting | Default | What it does |
 | ------- | ------- | ------------ |
 | `ManaOnFizzle` | `false` | A spell that fizzles still costs its mana, the same as if it had worked. |
+| `FullPipConserve` | `false` | Wizards keep their pips when they cast, like having 100% pip conserve. |
 | `SchoolPips` | `true` | Once every pip slot is full, each round turns one power pip into a school pip of the wizard's own school. School pips pay for the school pip cost some higher level spells have. |
 
 ## World
