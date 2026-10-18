@@ -24,7 +24,7 @@ namespace Imlight.Setup;
 /// <summary>
 /// What the program was asked to do. Install also updates an existing install.
 /// </summary>
-internal enum SetupMode { Install, Start, Play, Uninstall }
+internal enum SetupMode { Install, Start, Play, Uninstall, Panel }
 
 /// <summary>
 /// What setup installs and where, from the command line. The defaults install original Imlight.
@@ -35,7 +35,7 @@ internal sealed class SetupOptions {
     public SetupMode Mode { get; private set; } = SetupMode.Install;
 
     /// <summary>The GitHub repository (owner/repo) to build Imlight from.</summary>
-    public string Repository { get; private set; } = "Revive101/Imlight";
+    public string Repository { get; private set; } = Edition.DEFAULT_REPOSITORY;
 
     /// <summary>The branch to build.</summary>
     public string Branch { get; private set; } = "quality-assurance";
@@ -52,6 +52,9 @@ internal sealed class SetupOptions {
     /// <summary>The admin password, for unattended installs.</summary>
     public string? AdminPassword { get; private set; }
 
+    /// <summary>If true, Start closes as soon as the server stops instead of waiting for a key.</summary>
+    public bool NoWait { get; private set; }
+
     /// <summary>If true, setup never stops to ask anything.</summary>
     public bool Unattended { get; private set; }
 
@@ -61,7 +64,7 @@ internal sealed class SetupOptions {
           --dir <folder>             Where to install. Default: %LOCALAPPDATA%\ImlightServer
           --game <folder>            Your Wizard101 folder, if setup cannot find it.
           --type-dump <file>         A wiztype type dump to use instead of the bundled one.
-          --repo <owner/repo>        Build from another GitHub repository. Default: Revive101/Imlight
+          --repo <owner/repo>        Build from another GitHub repository. Default: Revive101/Imlight (Niduus/Imlight for Imlight Manager)
           --branch <name>            Build another branch. Default: quality-assurance
           --admin-password <text>    The admin password, for --yes installs.
           --yes                      Do not ask anything; use the defaults.
@@ -70,6 +73,7 @@ internal sealed class SetupOptions {
           --start                    Start the server, with game files from your Wizard101 folder.
           --play                     Start Wizard101 connected to the server on this computer.
           --uninstall                Remove Imlight from this computer.
+          --panel                    Open the control panel in your browser.
         """;
 
     internal static SetupOptions Parse(string[] args) {
@@ -90,6 +94,8 @@ internal sealed class SetupOptions {
                 case "--start": options.Mode = SetupMode.Start; break;
                 case "--play": options.Mode = SetupMode.Play; break;
                 case "--uninstall": options.Mode = SetupMode.Uninstall; break;
+                case "--panel": options.Mode = SetupMode.Panel; break;
+                case "--no-wait": options.NoWait = true; break;
                 default: throw new SetupException($"Unknown option {args[i]}.\n\n{USAGE}");
             }
         }
@@ -106,7 +112,7 @@ internal sealed class SetupOptions {
             return ownFolder;
         }
 
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ImlightServer");
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Edition.INSTALL_FOLDER_NAME);
     }
 
 }

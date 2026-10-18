@@ -34,10 +34,11 @@ namespace Imlight.Setup;
 internal static class InstalledCommands {
 
     internal const string INSTALLED_EXE = "Imlight.exe";
-    internal const string SHORTCUT_FOLDER = "Imlight Server";
-    internal const string START_SHORTCUT = "Start Imlight Server.lnk";
-    internal const string PLAY_SHORTCUT = "Play Wizard101 on Imlight.lnk";
-    private const string UNINSTALL_KEY = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\ImlightServer";
+    internal const string SHORTCUT_FOLDER = Edition.NAME;
+    internal const string START_SHORTCUT = "Start " + Edition.NAME + ".lnk";
+    internal const string PLAY_SHORTCUT = "Play Wizard101 on " + Edition.NAME + ".lnk";
+    internal const string PANEL_SHORTCUT = Edition.NAME + " Control Panel.lnk";
+    private const string UNINSTALL_KEY = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\" + Edition.REGISTRY_KEY;
     private const string DEFAULT_PATCH_URL = "http://127.0.0.1:12369";
 
     internal static string ServerFolder(string installFolder) => Path.Combine(installFolder, "Server");
@@ -54,11 +55,11 @@ internal static class InstalledCommands {
     /// <summary>
     /// Serves the game files from the player's Wizard101 folder, then runs the server until it closes.
     /// </summary>
-    internal static async Task<int> StartAsync(string installFolder) {
-        Console.Title = "Imlight Server";
+    internal static async Task<int> StartAsync(string installFolder, bool noWait = false) {
+        Console.Title = Edition.NAME;
         var serverExe = ServerExe(installFolder);
         if (!File.Exists(serverExe)) {
-            return Fail("Imlight is not installed in this folder yet. Run ImlightSetup.exe first.");
+            return Fail($"Imlight is not installed in this folder yet. Run {Edition.RELEASE_ASSET} first.");
         }
 
         if (IsServerRunning(installFolder)) {
@@ -82,7 +83,9 @@ internal static class InstalledCommands {
 
         Console.WriteLine();
         Console.WriteLine($"The server stopped (exit code {server.ExitCode}). Its log is in {Path.Combine(ServerFolder(installFolder), "logs")}.");
-        WaitForKey();
+        if (!noWait) {
+            WaitForKey();
+        }
 
         return server.ExitCode;
     }
@@ -127,7 +130,7 @@ internal static class InstalledCommands {
         var portText = IniFile.Get(ConfigFile(installFolder), "Login Server", "LoginServerPort");
         var port = int.TryParse(portText, out var parsed) ? parsed : 12000;
         if (!IsListening(port)) {
-            return Fail("The Imlight server is not running yet. Open \"Start Imlight Server\", wait until it says " +
+            return Fail($"The Imlight server is not running yet. Open \"Start {Edition.NAME}\", wait until it says " +
                 "\"Imlight may now be connected to.\", then try again.");
         }
 
@@ -163,7 +166,7 @@ internal static class InstalledCommands {
     /// Removes Imlight, its shortcuts and its Apps entry. Accounts and characters are kept unless the person says otherwise.
     /// </summary>
     internal static int Uninstall(string installFolder, bool unattended) {
-        Console.Title = "Uninstall Imlight";
+        Console.Title = "Uninstall " + Edition.NAME;
         Console.WriteLine($"This removes the Imlight server from {installFolder}.");
         Console.WriteLine("Wizard101 itself is not touched.");
         if (!unattended && !Prompt.YesNo("Uninstall Imlight?", false)) {
@@ -250,7 +253,7 @@ internal static class InstalledCommands {
                 Directory.Delete(startMenu, recursive: true);
             }
 
-            foreach (var name in new[] { START_SHORTCUT, PLAY_SHORTCUT }) {
+            foreach (var name in new[] { START_SHORTCUT, PLAY_SHORTCUT, PANEL_SHORTCUT }) {
                 File.Delete(Path.Combine(desktop, name));
             }
         }
@@ -266,7 +269,7 @@ internal static class InstalledCommands {
     internal static void RegisterUninstaller(string installFolder, string version) {
         var exe = Path.Combine(installFolder, INSTALLED_EXE);
         using var key = Registry.CurrentUser.CreateSubKey(UNINSTALL_KEY);
-        key.SetValue("DisplayName", "Imlight Server");
+        key.SetValue("DisplayName", Edition.NAME);
         key.SetValue("DisplayVersion", version);
         key.SetValue("Publisher", "Imlight");
         key.SetValue("InstallLocation", installFolder);

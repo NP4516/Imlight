@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{EDITION}} Control Panel</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --text: #1d2330; --muted: #5f6b7d; --line: #dfe3ea;
+    --accent: #5b4bd6; --accent-text: #ffffff; --good: #1f8a4c; --warn: #a96500; --bad: #c0362c;
+    --chip: #eef0f4; --log-bg: #11151c; --log-text: #d8dee9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b2029; --text: #e6e9ef; --muted: #9aa5b5; --line: #2c3340;
+      --accent: #8b7ff0; --accent-text: #12151b; --good: #4cc27f; --warn: #e0a24a; --bad: #f0716a;
+      --chip: #252b36; --log-bg: #0b0e13; --log-text: #d8dee9;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; }
+  .status { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .dot.ready { background: var(--good); } .dot.starting { background: var(--warn); }
+  nav { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+  nav button { background: none; border: 0; padding: 8px 14px; border-radius: 8px; color: var(--muted); font: inherit; cursor: pointer; }
+  nav button.active { background: var(--chip); color: var(--text); font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
+  section.tab { display: none; } section.tab.active { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 16px; margin: 0 0 4px; } .card p.sub { margin: 0 0 14px; color: var(--muted); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button.btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 8px 14px; border-radius: 8px; font: inherit; cursor: pointer; }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  button.btn.danger { color: var(--bad); }
+  button.btn:disabled { opacity: .5; cursor: default; }
+  input, select { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; min-width: 0; }
+  label.check { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+  #log { background: var(--log-bg); color: var(--log-text); font: 12.5px/1.5 ui-monospace, Consolas, monospace; border-radius: 10px; padding: 12px; height: 460px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  #log .WRN { color: #e7b85c; } #log .ERR, #log .FTL { color: #ff7b72; } #log .DBG, #log .VRB { color: #8b95a7; }
+  #log .count { display: inline-block; margin-left: 8px; padding: 0 6px; border-radius: 6px; background: #3a3f4b; color: #fff; font-size: 11px; }
+  .big-toggle { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .switch { position: relative; width: 52px; height: 30px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; background: var(--line); border-radius: 30px; cursor: pointer; transition: .15s; }
+  .switch span::before { content: ""; position: absolute; width: 24px; height: 24px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .15s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::before { transform: translateX(22px); }
+  details.section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; }
+  details.section summary { padding: 12px 16px; cursor: pointer; font-weight: 600; }
+  .setting { display: grid; grid-template-columns: minmax(160px, 260px) 1fr; gap: 6px 16px; padding: 10px 16px; border-top: 1px solid var(--line); align-items: center; }
+  .setting .key { font-weight: 500; overflow-wrap: anywhere; }
+  .setting .help { grid-column: 1 / -1; color: var(--muted); font-size: 13px; margin-top: -4px; }
+  .setting input[type=text], .setting input[type=number], .setting input[type=password] { width: 100%; }
+  .setting.changed { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  #savebar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); padding: 10px 16px; display: none; justify-content: center; gap: 12px; align-items: center; }
+  #savebar.show { display: flex; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: var(--chip); }
+  .pill.locked { color: var(--bad); }
+  #toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; display: none; max-width: 90vw; z-index: 10; }
+  #toast.error { background: var(--bad); color: #fff; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  @media (max-width: 640px) {
+    header { padding: 12px 16px; } nav { margin-left: 0; width: 100%; }
+    .setting { grid-template-columns: 1fr; } .table-wrap { overflow-x: auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{EDITION}}</h1>
+  <div class="status"><span id="dot" class="dot"></span><span id="statusText">Checking…</span></div>
+  <nav>
+    <button data-tab="server" class="active">Server</button>
+    <button data-tab="settings">Settings</button>
+    <button data-tab="accounts">Accounts</button>
+    <button data-tab="tools">Tools</button>
+  </nav>
+</header>
+<div id="toast"></div>
+<main>
+  <section id="server" class="tab active">
+    <div class="card">
+      <h2>Server</h2>
+      <p class="sub" id="serverHelp">Start the server here. It gets the game files from your Wizard101 folder by itself.</p>
+      <div class="row">
+        <button class="btn primary" id="startBtn">Start server</button>
+        <button class="btn" id="restartBtn">Restart</button>
+        <button class="btn danger" id="stopBtn">Stop server</button>
+      </div>
+    </div>
+    <div class="card" id="randomizerCard" hidden>
+      <div class="big-toggle">
+        <div>
+          <h2>Randomizer mode</h2>
+          <p class="sub" style="margin:0">Shuffles schools, spells, drops and more for every character, kept balanced. Fine-tune it under Settings, Randomizer.</p>
+        </div>
+        <label class="switch"><input type="checkbox" id="randomizerToggle"><span></span></label>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content: space-between; margin-bottom: 10px">
+        <h2 style="margin:0">Log</h2>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="hideDebug" checked> Hide debug lines</label>
+          <label class="check"><input type="checkbox" id="hideWarn"> Hide warnings</label>
+          <label class="check"><input type="checkbox" id="follow" checked> Follow</label>
+        </div>
+      </div>
+      <div id="log"><span class="muted">No log yet. Start the server to see it here.</span></div>
+      <p class="sub" style="margin:8px 0 0">The same message repeated in a row shows once, with how many times it happened.</p>
+    </div>
+  </section>
+
+  <section id="settings" class="tab">
+    <div class="card">
+      <h2>Settings</h2>
+      <p class="sub">Every setting in the server's Imlight.ini. Changes apply the next time the server starts.</p>
+      <div class="row"><input id="settingSearch" type="search" placeholder="Search settings" style="flex:1; min-width: 200px"></div>
+    </div>
+    <div id="settingsList"></div>
+  </section>
+
+  <section id="accounts" class="tab">
+    <div class="card">
+      <h2>New account</h2>
+      <p class="sub">Accounts can only be changed while the server is running.</p>
+      <form id="createForm" class="row">
+        <input name="username" placeholder="Username" autocomplete="off" required>
+        <input name="password" type="password" placeholder="Password" autocomplete="new-password" required>
+        <select name="level" id="createLevel"></select>
+        <button class="btn primary" type="submit">Create account</button>
+      </form>
+    </div>
+    <div class="card">
+      <div class="row" style="justify-content: space-between">
+        <h2 style="margin:0">Accounts</h2>
+        <button class="btn" id="refreshAccounts">Refresh</button>
+      </div>
+      <p class="sub" id="accountsNote" style="margin-top:8px"></p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Username</th><th>Level</th><th>Characters</th><th>Last login</th><th>Status</th><th></th></tr></thead>
+          <tbody id="accountRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="tools" class="tab">
+    <div class="card">
+      <h2>Tools</h2>
+      <p class="sub">Shortcuts to the server's files and pages.</p>
+      <div class="row">
+        <a class="btn" id="idLink" href="/ids" target="_blank" hidden>Spell, item and creature IDs</a>
+        <button class="btn" data-open="logs">Open log folder</button>
+        <button class="btn" data-open="config">Open settings folder</button>
+        <button class="btn" data-open="install">Open install folder</button>
+        <a class="btn" id="dbLink" target="_blank" rel="noopener">Database (advanced)</a>
+      </div>
+      <p class="sub" style="margin-top:14px" id="aboutText"></p>
+    </div>
+  </section>
+</main>
+<div id="savebar"><span id="saveCount"></span><button class="btn" id="discardBtn">Discard</button><button class="btn primary" id="saveBtn">Save changes</button></div>
+
+<script>
+const KEY = "{{PANEL_KEY}}";
+const $ = s => document.querySelector(s);
+let status = {}, settings = [], pending = new Map(), levels = [];
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "X-Panel-Key": KEY, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({ error: "The panel did not answer. Is its window still open?" }));
+  if (!res.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+
+function toast(text, isError) {
+  const t = $("#toast"); t.textContent = text; t.className = isError ? "error" : ""; t.style.display = "block";
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = "none", isError ? 7000 : 3500);
+}
+
+async function act(fn) {
+  try { const r = await fn(); if (r && r.message) toast(r.message); return r; }
+  catch (e) { toast(e.message, true); }
+}
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll("section.tab").forEach(s => s.classList.toggle("active", s.id === b.dataset.tab));
+  if (b.dataset.tab === "accounts") loadAccounts();
+  if (b.dataset.tab === "settings" && !settings.length) loadSettings();
+});
+
+async function refreshStatus() {
+  try { status = await api("/api/status"); } catch { $("#statusText").textContent = "Panel closed"; return; }
+  const dot = $("#dot");
+  dot.className = "dot" + (status.ready ? " ready" : status.running ? " starting" : "");
+  $("#statusText").textContent = status.ready ? "Running, ready for players" : status.running ? "Starting…" : "Stopped";
+  $("#startBtn").disabled = status.running; $("#stopBtn").disabled = !status.running; $("#restartBtn").disabled = !status.running;
+  $("#randomizerCard").hidden = status.randomizer === null;
+  if (status.randomizer !== null && !pending.size) $("#randomizerToggle").checked = status.randomizer;
+  $("#idLink").hidden = !status.idLookup;
+  $("#dbLink").href = status.databaseUrl;
+  $("#aboutText").textContent = `${status.edition} ${status.version}, installed in ${status.installFolder}.`;
+}
+
+$("#startBtn").onclick = () => act(() => api("/api/server/start", {})).then(refreshStatus);
+$("#stopBtn").onclick = () => confirm("Stop the server? Everyone playing is disconnected.") && act(() => api("/api/server/stop", {})).then(refreshStatus);
+$("#restartBtn").onclick = () => confirm("Restart the server? Everyone playing is disconnected.") && act(() => api("/api/server/restart", {})).then(refreshStatus);
+
+$("#randomizerToggle").onchange = async e => {
+  const on = e.target.checked;
+  const r = await act(() => api("/api/settings", { changes: [{ section: "Randomizer", key: "Enabled", value: on ? "true" : "false" }] }));
+  if (!r) { e.target.checked = !on; return; }
+  settings = [];
+  if (r.restartNeeded && confirm(`Randomizer mode is now ${on ? "on" : "off"}. Restart the server now to use it?`)) {
+    act(() => api("/api/server/restart", {})).then(refreshStatus);
+  }
+};
+
+async function refreshLog() {
+  let data; try { data = await api("/api/log"); } catch { return; }
+  const box = $("#log");
+  if (!data.lines.length) return;
+  const hideDebug = $("#hideDebug").checked, hideWarn = $("#hideWarn").checked;
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  const frag = document.createDocumentFragment();
+  for (const l of data.lines) {
+    if (hideDebug && (l.level === "DBG" || l.level === "VRB")) continue;
+    if (hideWarn && l.level === "WRN") continue;
+    const div = document.createElement("div"); div.className = l.level; div.textContent = l.text;
+    if (l.count > 1) { const c = document.createElement("span"); c.className = "count"; c.textContent = `×${l.count}`; div.appendChild(c); }
+    frag.appendChild(div);
+  }
+  box.replaceChildren(frag);
+  if ($("#follow").checked && atBottom || refreshLog.first !== false) box.scrollTop = box.scrollHeight;
+  refreshLog.first = false;
+}
+["#hideDebug", "#hideWarn"].forEach(s => $(s).onchange = refreshLog);
+
+async function loadSettings() {
+  const data = await act(() => api("/api/settings")); if (!data) return;
+  settings = data.sections; pending.clear(); updateSaveBar(); renderSettings();
+}
+
+function renderSettings() {
+  const q = $("#settingSearch").value.trim().toLowerCase();
+  const list = $("#settingsList"); list.replaceChildren();
+  for (const s of settings) {
+    const entries = s.entries.filter(e => !q || `${s.name} ${e.key} ${e.help}`.toLowerCase().includes(q));
+    if (!entries.length) continue;
+    const d = document.createElement("details"); d.className = "section";
+    d.open = !!q || s.name === "Randomizer";
+    const sum = document.createElement("summary"); sum.textContent = s.name; d.appendChild(sum);
+    for (const e of entries) d.appendChild(settingRow(s.name, e));
+    list.appendChild(d);
+  }
+}
+
+function settingRow(section, e) {
+  const row = document.createElement("div"); row.className = "setting";
+  const id = `${section}\u0000${e.key}`;
+  const key = document.createElement("div"); key.className = "key"; key.textContent = e.key;
+  const current = pending.has(id) ? pending.get(id).value : e.value;
+  let input;
+  const isBool = /^(true|false)$/i.test(e.value);
+  if (isBool) {
+    const label = document.createElement("label"); label.className = "switch";
+    input = document.createElement("input"); input.type = "checkbox"; input.checked = /^true$/i.test(current);
+    label.append(input, document.createElement("span"));
+    input.onchange = () => change(section, e, input.checked ? "true" : "false", row);
+    row.append(key, label);
+  } else {
+    input = document.createElement("input");
+    input.type = /password/i.test(e.key) ? "password" : /^-?\d+(\.\d+)?$/.test(e.value) ? "number" : "text";
+    if (input.type === "number") input.step = "any";
+    input.value = current;
+    input.oninput = () => change(section, e, input.value, row);
+    row.append(key, input);
+  }
+  if (pending.has(id)) row.classList.add("changed");
+  if (e.help) { const h = document.createElement("div"); h.className = "help"; h.textContent = e.help; row.appendChild(h); }
+  return row;
+}
+
+function change(section, e, value, row) {
+  const id = `${section}\u0000${e.key}`;
+  if (value === e.value) pending.delete(id); else pending.set(id, { section, key: e.key, value });
+  row.classList.toggle("changed", pending.has(id)); updateSaveBar();
+}
+
+function updateSaveBar() {
+  $("#savebar").classList.toggle("show", pending.size > 0);
+  $("#saveCount").textContent = `${pending.size} unsaved change${pending.size === 1 ? "" : "s"}`;
+}
+
+$("#settingSearch").oninput = renderSettings;
+$("#discardBtn").onclick = () => { pending.clear(); updateSaveBar(); renderSettings(); };
+$("#saveBtn").onclick = async () => {
+  const r = await act(() => api("/api/settings", { changes: [...pending.values()] })); if (!r) return;
+  await loadSettings(); refreshStatus();
+  if (r.restartNeeded && confirm("Restart the server now to use the new settings? Everyone playing is disconnected.")) {
+    act(() => api("/api/server/restart", {})).then(refreshStatus);
+  }
+};
+
+async function loadAccounts() {
+  const rows = $("#accountRows"); const note = $("#accountsNote");
+  let data;
+  try { data = await api("/api/accounts"); } catch (e) { rows.replaceChildren(); note.textContent = e.message; return; }
+  levels = data.levels; note.textContent = `${data.accounts.length} account${data.accounts.length === 1 ? "" : "s"}. Level changes apply the next time that player logs in. To delete an account, use .account delete in game.`;
+  const createLevel = $("#createLevel");
+  if (!createLevel.options.length) for (const l of levels) createLevel.add(new Option(levelName(l), l));
+  rows.replaceChildren(...data.accounts.map(accountRow));
+}
+
+function levelName(l) { return { None: "Player", QualityAssurance: "Quality assurance", HallMonitor: "Hall monitor", Developer: "Developer", Administrator: "Administrator" }[l] || l; }
+
+function accountRow(a) {
+  const tr = document.createElement("tr");
+  const cell = (text) => { const td = document.createElement("td"); td.textContent = text; return td; };
+  const levelTd = document.createElement("td");
+  const sel = document.createElement("select");
+  for (const l of levels) sel.add(new Option(levelName(l), l, false, l === a.authLevel));
+  sel.onchange = () => act(() => api("/api/accounts/level", { username: a.username, level: sel.value })).then(loadAccounts);
+  levelTd.appendChild(sel);
+  const statusTd = document.createElement("td");
+  const pill = document.createElement("span"); pill.className = "pill" + (a.isLocked ? " locked" : ""); pill.textContent = a.isLocked ? "Locked" : "Active";
+  statusTd.appendChild(pill);
+  const actions = document.createElement("td"); actions.className = "row";
+  const pw = document.createElement("button"); pw.className = "btn"; pw.textContent = "New password";
+  pw.onclick = () => { const p = prompt(`New password for ${a.username}`); if (p) act(() => api("/api/accounts/password", { username: a.username, password: p })); };
+  const lock = document.createElement("button"); lock.className = "btn" + (a.isLocked ? "" : " danger"); lock.textContent = a.isLocked ? "Unlock" : "Lock";
+  lock.onclick = () => (a.isLocked || confirm(`Lock ${a.username}? They cannot log in until unlocked.`)) &&
+    act(() => api("/api/accounts/lock", { username: a.username, locked: !a.isLocked })).then(loadAccounts);
+  actions.append(pw, lock);
+  const last = a.lastLoginTime && !a.lastLoginTime.startsWith("0001") ? new Date(a.lastLoginTime).toLocaleString() : "Never";
+  tr.append(cell(a.username), levelTd, cell(String(a.characters)), cell(last), statusTd, actions);
+  return tr;
+}
+
+$("#refreshAccounts").onclick = loadAccounts;
+$("#createForm").onsubmit = async e => {
+  e.preventDefault(); const f = e.target;
+  const r = await act(() => api("/api/accounts", { username: f.username.value, password: f.password.value, level: f.level.value }));
+  if (r) { f.reset(); loadAccounts(); }
+};
+document.querySelectorAll("[data-open]").forEach(b => b.onclick = () => act(() => api("/api/open", { what: b.dataset.open })));
+
+refreshStatus(); refreshLog();
+setInterval(refreshStatus, 3000); setInterval(refreshLog, 2000);
+</script>
+</body>
+</html>

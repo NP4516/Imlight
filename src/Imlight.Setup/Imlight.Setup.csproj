@@ -13,6 +13,16 @@
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
   </PropertyGroup>
 
+  <!-- dotnet publish -p:ImlightEdition=Manager builds ImlightManager.exe, which installs the Niduus/Imlight fork. -->
+  <PropertyGroup Condition="'$(ImlightEdition)' == 'Manager'">
+    <AssemblyName>ImlightManager</AssemblyName>
+    <DefineConstants>$(DefineConstants);MANAGER_EDITION</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="ControlPanel.html" LogicalName="ControlPanel.html" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Only the archive reader: it needs no game data to build. -->
     <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.Wad\Imcodec.Wad.csproj" />

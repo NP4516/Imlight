@@ -58,19 +58,21 @@ internal static class Program {
 
         switch (options.Mode) {
             case SetupMode.Start:
-                return await InstalledCommands.StartAsync(options.InstallFolder);
+                return await InstalledCommands.StartAsync(options.InstallFolder, options.NoWait);
+            case SetupMode.Panel:
+                return await ControlPanel.RunAsync(options.InstallFolder);
             case SetupMode.Play:
                 return InstalledCommands.Play(options.InstallFolder);
             case SetupMode.Uninstall:
                 return InstalledCommands.Uninstall(options.InstallFolder, options.Unattended);
         }
 
-        Console.Title = "Imlight Setup";
+        Console.Title = Edition.NAME + " Setup";
         if (await SelfUpdate.TryRunNewerAsync(args)) {
             return 0;
         }
 
-        Console.WriteLine("Imlight Setup");
+        Console.WriteLine(Edition.NAME + " Setup");
         Console.WriteLine($"This installs an Imlight server from github.com/{options.Repository} into {options.InstallFolder}.");
         Console.WriteLine("If Imlight is already there, it is updated and your settings and characters are kept.");
         if (!options.Unattended && !Prompt.YesNo("Continue?", true)) {
@@ -123,10 +125,12 @@ internal static class Program {
 
         SetupLog.Info("");
         SetupLog.Info("Imlight is installed. Everything it needs is set up, including the game files from your Wizard101.");
-        SetupLog.Info("1. Double-click \"Start Imlight Server\" on your desktop and wait for \"Imlight may now be connected to.\"");
-        SetupLog.Info("2. Double-click \"Play Wizard101 on Imlight\" and log in with your admin account.");
+        SetupLog.Info($"1. Double-click \"{Edition.NAME} Control Panel\" on your desktop and click Start server.");
+        SetupLog.Info($"   (Or double-click \"Start {Edition.NAME}\" to run it in a window.) Wait for \"Imlight may now be connected to.\"");
+        SetupLog.Info($"2. Double-click \"Play Wizard101 on {Edition.NAME}\" and log in with your admin account.");
+        SetupLog.Info("The control panel also changes settings, manages accounts and shows the log.");
         SetupLog.Info("To update later, use \"Update Imlight\" in the Start menu. To remove it, use \"Uninstall Imlight\" there,");
-        SetupLog.Info("or uninstall \"Imlight Server\" from Settings > Apps.");
+        SetupLog.Info($"or uninstall \"{Edition.NAME}\" from Settings > Apps.");
         WaitForKey(options);
 
         return 0;
