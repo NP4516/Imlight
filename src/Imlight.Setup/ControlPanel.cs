@@ -79,7 +79,9 @@ internal sealed partial class ControlPanel {
         });
 
         // In its own window, the server lives as long as the app: closing the window stops it.
-        var window = AppWindow.Open(url, Path.Combine(panel._installFolder, "AppWindow"));
+        // Versions before 0.4.2 used a normal profile here, which Edge signed in to the person's account.
+        TryDeleteFolder(Path.Combine(panel._installFolder, "AppWindow"));
+        var window = AppWindow.Open(url, Path.Combine(panel._installFolder, "AppWindowPrivate"));
         if (window is not null) {
             AppWindow.HideConsole();
             await window.WaitForExitAsync();
@@ -94,6 +96,17 @@ internal sealed partial class ControlPanel {
         await Task.Delay(Timeout.Infinite);
 
         return 0;
+    }
+
+    private static void TryDeleteFolder(string folder) {
+        try {
+            if (Directory.Exists(folder)) {
+                Directory.Delete(folder, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // Still in use by an open window; removed next time.
+        }
     }
 
     private HttpListener Listen() {
