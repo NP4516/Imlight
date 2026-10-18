@@ -321,10 +321,14 @@ public class CombatDuelSubCircle {
 
     // [Battle] ShadowPips: shadow pips, which shadow spells cost, kept in their own slots.
     private static readonly bool s_shadowPips = ConfigurationManager.GetValue("Battle.ShadowPips", true);
+    // 0 means no limit (up to NO_SHADOW_LIMIT, which keeps the count inside a byte).
+    private const int NO_SHADOW_LIMIT = 50;
     private static readonly int s_playerMaxShadowPips
-        = Math.Clamp(ConfigurationManager.GetValue("Battle.PlayerMaxShadowPips", 2), 0, 10);
+        = ShadowLimit(ConfigurationManager.GetValue("Battle.PlayerShadowPipLimit", 0));
     private static readonly int s_creatureMaxShadowPips
-        = Math.Clamp(ConfigurationManager.GetValue("Battle.CreatureMaxShadowPips", 5), 0, 10);
+        = ShadowLimit(ConfigurationManager.GetValue("Battle.CreatureShadowPipLimit", 0));
+
+    private static int ShadowLimit(int value) => value <= 0 ? NO_SHADOW_LIMIT : Math.Min(value, NO_SHADOW_LIMIT);
     private static readonly int s_shadowPipChance
         = Math.Clamp(ConfigurationManager.GetValue("Battle.ShadowPipChance", 0), 0, 100);
 
