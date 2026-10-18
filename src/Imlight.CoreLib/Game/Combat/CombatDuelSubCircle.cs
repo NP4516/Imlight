@@ -589,7 +589,7 @@ public class CombatDuelSubCircle {
         }
     }
 
-    internal void DeductPips(MagicSchool school, byte spellRank) {
+    internal void DeductPips(MagicSchool school, byte spellRank, bool fullPipConserve = false) {
         var isMastered = HasSchoolMastery((uint) school);
         var pipCount = CombatParticipant.m_pipCount;
 
@@ -598,6 +598,17 @@ public class CombatDuelSubCircle {
         while (spellRank is > 0 and < (MAX_PIP_COUNT * 2)) {
             if (isMastered && pipCount.m_powerPips > 0) {
                 pipCount.m_powerPips--;
+
+                // A power pip is worth 2 here; paying the last 1 with it wastes half. Pip conserve
+                // (100% with FullPipConserve) hands that half back as a normal pip.
+                if (spellRank == 1) {
+                    if (fullPipConserve) {
+                        pipCount.m_genericPips++;
+                    }
+
+                    break;
+                }
+
                 spellRank -= 2;
             }
             else if (!isMastered && pipCount.m_powerPips > 0) {

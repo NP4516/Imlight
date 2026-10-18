@@ -89,7 +89,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     private const int SPELL_FIZZLE_TIME = 4;
 
     // [Battle] ManaOnFizzle: a fizzled spell still costs its mana.
-    // [Battle] FullPipConserve: wizards never spend pips on spells.
+    // [Battle] FullPipConserve: a power pip only half used on a spell always comes back as a normal pip.
     private static readonly bool s_fullPipConserve = ConfigurationManager.GetValue("Battle.FullPipConserve", false);
 
     private static readonly bool s_manaOnFizzle = ConfigurationManager.GetValue("Battle.ManaOnFizzle", false);
@@ -524,13 +524,11 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             caster.DiscardCard(action.m_spell);
         }
 
-        // FullPipConserve: wizards keep every pip they cast with, like a 100% pip conserve stat.
+        // FullPipConserve: like a 100% pip conserve stat, a half-used power pip comes back as a normal pip.
         var conservePips = s_fullPipConserve && caster._wizard is not null;
 
         // Spend any school pips the spell costs.
-        if (!conservePips) {
-            caster.DeductSchoolPips(action.m_spell);
-        }
+        caster.DeductSchoolPips(action.m_spell);
 
         // Deduce the players mana by the rank of the spell.
         caster.DeductMana(action.m_spell.m_pipCost.m_spellRank);
@@ -540,18 +538,14 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             var xCost = CombatActionResolver.GetXPipCost(action.m_spell, caster);
             caster._usedPipsForExperienceGain += xCost;
 
-            if (!conservePips) {
-                caster.DeductPips((MagicSchool) action.m_spell.m_magicSchoolID, xCost);
-            }
+            caster.DeductPips((MagicSchool) action.m_spell.m_magicSchoolID, xCost, conservePips);
         }
         else {
             // Increase the used pips for experience gain by the rank of the spell.
             // Even 0-rank spells will give the caster 1 pip for experience gain.
             caster._usedPipsForExperienceGain += Math.Max((byte) 1, action.m_spell.m_pipCost.m_spellRank);
 
-            if (!conservePips) {
-                caster.DeductPips((MagicSchool) action.m_spell.m_magicSchoolID, action.m_spell.m_pipCost.m_spellRank);
-            }
+            caster.DeductPips((MagicSchool) action.m_spell.m_magicSchoolID, action.m_spell.m_pipCost.m_spellRank, conservePips);
         }
     }
 
