@@ -22,9 +22,36 @@ using System.Collections.Generic;
 namespace Imlight.Setup;
 
 /// <summary>
-/// Edits a value in Imlight.ini, keeping every comment and every other line as it was.
+/// Reads and edits values in Imlight.ini, keeping every comment and every other line as it was.
 /// </summary>
 internal static class IniFile {
+
+    /// <summary>
+    /// Returns a value from an ini file, or null when the file, section or key is missing.
+    /// </summary>
+    internal static string? Get(string path, string section, string key) {
+        if (!System.IO.File.Exists(path)) {
+            return null;
+        }
+
+        var inSection = false;
+        foreach (var line in System.IO.File.ReadLines(path)) {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith('[') && trimmed.EndsWith(']')) {
+                inSection = trimmed[1..^1].Trim().Equals(section, StringComparison.OrdinalIgnoreCase);
+
+                continue;
+            }
+
+            var equals = trimmed.IndexOf('=');
+            if (inSection && !trimmed.StartsWith(';') && equals > 0
+                && trimmed[..equals].Trim().Equals(key, StringComparison.OrdinalIgnoreCase)) {
+                return trimmed[(equals + 1)..].Trim();
+            }
+        }
+
+        return null;
+    }
 
     internal static void Set(List<string> lines, string section, string key, string value) {
         var inSection = false;

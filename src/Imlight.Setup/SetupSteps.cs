@@ -62,9 +62,24 @@ internal sealed class SetupSteps : IDisposable {
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Finds Root.wad in the person's Wizard101 install, asking when it is not in a usual place.
+    /// Finds Root.wad in the person's Wizard101 install, asking when it is not in a usual place,
+    /// and remembers it so starting the server and the game needs no questions.
     /// </summary>
     internal string FindRootWad() {
+        var info = InstallInfo.Load(_options.InstallFolder);
+        if (_options.GameFolder is null && info.RootWad is { } saved && File.Exists(saved)) {
+            SetupLog.Info($"Using Wizard101 at {info.GameFolder ?? info.GameDataFolder}.");
+
+            return saved;
+        }
+
+        info.RootWad = Path.GetFullPath(LocateRootWad());
+        info.Save(_options.InstallFolder);
+
+        return info.RootWad;
+    }
+
+    private string LocateRootWad() {
         if (_options.GameFolder is { } given) {
             var rootWad = ResolveRootWad(given) ?? throw new SetupException($"Root.wad was not found in {given}.");
             SetupLog.Info($"Using Wizard101 at {given}.");
@@ -354,7 +369,7 @@ internal sealed class SetupSteps : IDisposable {
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Asks for the admin account and patch server on a first install. An existing configuration is left alone.
+    /// Asks for the admin account on a first install. An existing configuration is left alone.
     /// </summary>
     internal void Configure(bool isNewConfig) {
         if (!isNewConfig) {
@@ -367,13 +382,11 @@ internal sealed class SetupSteps : IDisposable {
         var password = _options.AdminPassword
             ?? (_options.Unattended ? throw new SetupException("Pass --admin-password when running setup unattended.")
                                     : Prompt.AskSecret("Admin account password"));
-        var patchUrl = _options.Unattended ? "http://127.0.0.1:12369"
-            : Prompt.Ask("Patch server address (leave as it is if Aurorium runs on this computer)", "http://127.0.0.1:12369");
-
         var lines = File.ReadAllLines(ConfigFile).ToList();
         IniFile.Set(lines, "Database", "AdminAccountUsername", username);
         IniFile.Set(lines, "Database", "AdminAccountPassword", password);
-        IniFile.Set(lines, "Patch Server", "PatchServerInternalUrl", patchUrl);
+        // Imlight.exe serves the game files from the player's own Wizard101 at this address when the server starts.
+        IniFile.Set(lines, "Patch Server", "PatchServerInternalUrl", "http://127.0.0.1:12369");
         File.WriteAllLines(ConfigFile, lines);
         SetupLog.Info("Saved your settings to Config\\Imlight.ini.");
     }
@@ -383,38 +396,40 @@ internal sealed class SetupSteps : IDisposable {
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// Adds a start script, a copy of setup for updating, and Start menu and desktop shortcuts.
+    /// Installs Imlight.exe (this program, which starts, plays, updates and uninstalls), adds Start menu and
+    /// desktop shortcuts to it, and lists Imlight under Settings, Apps.
     /// </summary>
     internal async Task CreateShortcutsAsync() {
-        var startScript = Path.Combine(_options.InstallFolder, "Start Imlight Server.cmd");
-        File.WriteAllText(startScript,
-            "@echo off\r\ntitle Imlight Server\r\ncd /d \"%~dp0Server\"\r\nImlight.Director.exe\r\npause\r\n");
+        var exe = Path.Combine(_options.InstallFolder, InstalledCommands.INSTALLED_EXE);
+        InstallSelf(exe);
 
-        // A copy of setup in the install folder; running it again updates Imlight.
-        if (Environment.ProcessPath is { } self && Path.GetFileNameWithoutExtension(self).Equals("ImlightSetup", StringComparison.OrdinalIgnoreCase)) {
-            var copy = Path.Combine(_options.InstallFolder, "Update Imlight.exe");
-            if (!Path.GetFullPath(self).Equals(Path.GetFullPath(copy), StringComparison.OrdinalIgnoreCase)) {
-                File.Copy(self, copy, overwrite: true);
-            }
+        // Left behind by the first version of setup.
+        foreach (var old in new[] { "Start Imlight Server.cmd", "Update Imlight.exe" }) {
+            File.Delete(Path.Combine(_options.InstallFolder, old));
         }
 
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
             return;
         }
 
-        var startMenu = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Imlight Server");
+        InstalledCommands.RegisterUninstaller(_options.InstallFolder, SelfUpdate.CurrentVersion.ToString());
+
+        var startMenu = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), InstalledCommands.SHORTCUT_FOLDER);
         var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
         Directory.CreateDirectory(startMenu);
+        Directory.CreateDirectory(Path.Combine(ServerFolder, "logs"));
 
         var shortcuts = new List<(string Path, string Target, string Arguments)> {
-            (System.IO.Path.Combine(startMenu, "Start Imlight Server.lnk"), startScript, ""),
-            (System.IO.Path.Combine(desktop, "Start Imlight Server.lnk"), startScript, ""),
-            (System.IO.Path.Combine(startMenu, "Server Settings.lnk"), "notepad.exe", $"\"{ConfigFile}\""),
-            (System.IO.Path.Combine(startMenu, "Server Logs.lnk"), System.IO.Path.Combine(ServerFolder, "logs"), ""),
-            (System.IO.Path.Combine(startMenu, "Update Imlight.lnk"), System.IO.Path.Combine(_options.InstallFolder, "Update Imlight.exe"), ""),
-            (System.IO.Path.Combine(startMenu, "Setup Log.lnk"), "notepad.exe", $"\"{SetupLog.FilePath}\""),
+            (Path.Combine(startMenu, InstalledCommands.START_SHORTCUT), exe, "--start"),
+            (Path.Combine(desktop, InstalledCommands.START_SHORTCUT), exe, "--start"),
+            (Path.Combine(startMenu, InstalledCommands.PLAY_SHORTCUT), exe, "--play"),
+            (Path.Combine(desktop, InstalledCommands.PLAY_SHORTCUT), exe, "--play"),
+            (Path.Combine(startMenu, "Server Settings.lnk"), "notepad.exe", $"\"{ConfigFile}\""),
+            (Path.Combine(startMenu, "Server Logs.lnk"), Path.Combine(ServerFolder, "logs"), ""),
+            (Path.Combine(startMenu, "Update Imlight.lnk"), exe, ""),
+            (Path.Combine(startMenu, "Uninstall Imlight.lnk"), exe, "--uninstall"),
+            (Path.Combine(startMenu, "Setup Log.lnk"), "notepad.exe", $"\"{SetupLog.FilePath}\""),
         };
-        Directory.CreateDirectory(System.IO.Path.Combine(ServerFolder, "logs"));
 
         // Windows has no .NET API for shortcuts; the shell's scripting object makes them.
         var script = string.Join("\n", shortcuts.Select(s =>
@@ -423,10 +438,37 @@ internal sealed class SetupSteps : IDisposable {
         var exitCode = await ProcessRunner.RunAsync("powershell",
             ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "$shell = New-Object -ComObject WScript.Shell\n" + script]);
         if (exitCode != 0) {
-            SetupLog.Info($"Shortcuts could not be created. Start the server with \"{startScript}\" instead.");
+            SetupLog.Info($"Shortcuts could not be created. Start the server with \"{exe}\" --start instead.");
         }
 
         static string Escape(string value) => value.Replace("'", "''");
+    }
+
+    /// <summary>
+    /// Copies this program into the install folder as Imlight.exe. A running copy is moved aside first,
+    /// which Windows allows, and removed the next time.
+    /// </summary>
+    private static void InstallSelf(string target) {
+        var self = Environment.ProcessPath;
+        var aside = target + ".old";
+        try {
+            File.Delete(aside);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // Still running from an earlier update; removed next time.
+        }
+
+        if (self is null || Path.GetFullPath(self).Equals(Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase)) {
+            return;
+        }
+
+        try {
+            File.Copy(self, target, overwrite: true);
+        }
+        catch (IOException) when (File.Exists(target) && !File.Exists(aside)) {
+            File.Move(target, aside);
+            File.Copy(self, target);
+        }
     }
 
     // ---------------------------------------------------------------------
