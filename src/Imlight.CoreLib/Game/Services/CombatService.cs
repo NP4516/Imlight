@@ -276,6 +276,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             MoveType = message.MoveType,
             SpellSelection = message.SpellSelection,
             SpellTarget = (uint) actualSelection,
+            RawSpellTarget = message.SpellTarget,
             TimeLeft = message.TimeLeft
         };
         _currentDuelActor.Tell(msg);

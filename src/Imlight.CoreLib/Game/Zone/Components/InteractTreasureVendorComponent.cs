@@ -61,12 +61,65 @@ internal sealed class InteractTreasureVendorComponent(ZoneEntity entity) : ZoneE
     private List<TreasureCardEntry> _inventory;
 
     public static bool ShouldAttachToEntity(CoreTemplate template)
-        // Attach if the template is an NPC and has a treasure card inventory in SpiralDB.
+        // Attach if the template is an NPC and has a treasure card inventory in SpiralDB, or is one of the
+        // test shops below.
         => template is GameObjectTemplate goTemplate
         && goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate)
-        && NpcTreasureCardInventoryCollection.TryGetInventory(goTemplate.m_templateID, out _);
+        && (NpcTreasureCardInventoryCollection.TryGetInventory(goTemplate.m_templateID, out _)
+            || TestShopFor(goTemplate) is not TestShop.None);
+
+    // Test shops: Elik Silverfist sells every treasure card in the game, Abner K. Doodle every enchantment.
+    private enum TestShop { None, AllTreasureCards, AllEnchantments }
+    private const int MIN_TEST_PRICE = 1;
+    private const int MAX_TEST_PRICE = 200;
+    private static readonly System.Lazy<List<TreasureCardEntry>> s_allTreasureCards = new(() => BuildTestInventory(false));
+    private static readonly System.Lazy<List<TreasureCardEntry>> s_allEnchantments = new(() => BuildTestInventory(true));
+
+    private static TestShop TestShopFor(GameObjectTemplate template) {
+        var names = $"{template.m_objectName} {Imlight.CoreLib.Shared.Resources.Locale.GetEnglishName(template.m_displayName.ToString())}";
+        if (names.Contains("Silverfist", System.StringComparison.OrdinalIgnoreCase)) {
+            return TestShop.AllTreasureCards;
+        }
+
+        return names.Contains("Abner", System.StringComparison.OrdinalIgnoreCase) ? TestShop.AllEnchantments : TestShop.None;
+    }
+
+    /// <summary>
+    /// Every treasure card (or only the enchantments) with a school, one per name, priced from its own cost
+    /// but kept between 1 and 200 gold. The shop sorts them into its school tabs; stock never runs out.
+    /// </summary>
+    private static List<TreasureCardEntry> BuildTestInventory(bool enchantmentsOnly) {
+        var entries = new List<TreasureCardEntry>();
+        var seen = new HashSet<string>();
+        foreach (var (_, spell) in Imlight.CoreLib.Game.Spells.SpellFactory.AllSpellTemplates()) {
+            string name = spell.m_name;
+            if (string.IsNullOrEmpty(name) || !(spell.m_Treasure || name.EndsWith(" TC"))
+                || string.IsNullOrEmpty((string) spell.m_sMagicSchoolName) || string.IsNullOrEmpty((string) spell.m_displayName)
+                || (enchantmentsOnly && !Imlight.CoreLib.Game.Combat.CombatEnchantments.IsEnchantment(spell))
+                || !seen.Add(name)) {
+                continue;
+            }
+
+            entries.Add(new TreasureCardEntry {
+                SpellName = name,
+                Price = System.Math.Clamp(spell.m_baseCost, MIN_TEST_PRICE, MAX_TEST_PRICE),
+            });
+        }
+
+        entries.Sort((a, b) => string.CompareOrdinal(a.SpellName, b.SpellName));
+        Logger.Information("Test treasure shop ({0}) has {1} cards.",
+            Logger.Args(enchantmentsOnly ? "enchantments" : "all treasure cards", entries.Count));
+
+        return entries;
+    }
 
     public override void OnStart() {
+        if (Entity.Template is GameObjectTemplate template && TestShopFor(template) is var shop and not TestShop.None) {
+            _inventory = shop == TestShop.AllTreasureCards ? s_allTreasureCards.Value : s_allEnchantments.Value;
+
+            return;
+        }
+
         if (!NpcTreasureCardInventoryCollection.TryGetInventory(Entity.ActiveGameObject.m_templateID, out var inventory)) {
             Logger.Error("Failed to get treasure card inventory for NPC {0}",
                 Logger.Args(Entity.ActiveGameObject.m_templateID));
