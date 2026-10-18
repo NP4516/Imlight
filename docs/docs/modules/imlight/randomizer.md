@@ -23,8 +23,8 @@ Enabled = true
 | ------- | ------- | ------------ |
 | `RandomizeCreatureDecks` | `true` | Each creature's deck is rolled fresh every spawn: every spell becomes a random spell of the same type and pip cost, from any school. |
 | `RandomizeItemCards` | `true` | Cards your gear gives are rolled fresh every battle, the same way. |
-| `RandomizePips` | `true` | Each round gives a random number of pips: 1 about half the time, otherwise 0, 2 or (rarely) 3. Creatures too. |
-| `StartingSpells` | `6` | New characters start with this many random spells costing up to 3 pips, from any school. The tutorial still teaches its spell too. |
+| `RandomizePips` | `true` | Each round gives a random number of pips: 1 about half the time, otherwise 0, 2 or (rarely) 3, but never 0 when you have no pips. Creatures too. |
+| `StartingSpells` | `6` | New characters start with this many random spells costing up to 3 pips, from any school, already in the starter deck. The tutorial still teaches its spell too. |
 | `SpellAfterBattleChance` | `100` | The chance (0 to 100) that a win teaches a random spell. Any battle spell in the game files can come up, including ones players normally never get. |
 
 These rolls are truly random and differ every time. They use every battle spell in the game files (treasure cards, gardening, fishing and cantrips are left out), not just trainer spells.
@@ -67,3 +67,12 @@ The `[Trainers]` section of `Imlight.ini` works with or without randomizer mode.
 | `TrainingPointPerLevel` | `false` | Every level gained also gives training points. |
 | `TrainingPointsPerLevel` | `1` | How many training points each level gives while `TrainingPointPerLevel` is on (0 to 100). |
 | `PlayersCanGainTrainingPoints` | `true` | Any player can type `.gaintp <amount>` (or `.trainingpoints <amount>`) to give themselves 1 to 100 training points. |
+
+## Battle
+
+The `[Battle]` section works with or without randomizer mode, with switches on the app's Server tab.
+
+| Setting | Default | What it does |
+| ------- | ------- | ------------ |
+| `ManaOnFizzle` | `false` | A spell that fizzles still costs its mana, the same as if it had worked. |
+| `SchoolPips` | `true` | Once every pip slot is full, each round turns one power pip into a school pip of the wizard's own school. School pips pay for the school pip cost some higher level spells have. |

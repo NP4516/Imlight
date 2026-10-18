@@ -1053,14 +1053,20 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
                 return;
             }
 
-            var genericPips = circle.CombatParticipant.m_pipCount.m_genericPips;
-            var powerPips = circle.CombatParticipant.m_pipCount.m_powerPips;
+            var current = circle.CombatParticipant.m_pipCount;
             var participantPipData = new ParticipantPipData {
                 m_acq = 1,
                 m_partID = (GID) circle.ParticipantObject.m_globalID,
                 m_pips = new PipCount() {
-                    m_genericPips = genericPips,
-                    m_powerPips = powerPips,
+                    m_genericPips = current.m_genericPips,
+                    m_powerPips = current.m_powerPips,
+                    m_balancePips = current.m_balancePips,
+                    m_deathPips = current.m_deathPips,
+                    m_firePips = current.m_firePips,
+                    m_icePips = current.m_icePips,
+                    m_lifePips = current.m_lifePips,
+                    m_mythPips = current.m_mythPips,
+                    m_stormPips = current.m_stormPips,
                 }
             };
             pips.m_pipList.Add(participantPipData);

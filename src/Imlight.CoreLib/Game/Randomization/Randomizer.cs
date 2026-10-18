@@ -292,6 +292,45 @@ public static class Randomizer {
         }
     }
 
+    /// <summary>
+    /// When the starter kit is handed out, puts the starting spells into its deck so they can be used in the first
+    /// battle, and makes sure the deck's own spells are learned (otherwise battles treat them as treasure cards).
+    /// </summary>
+    internal static void PutStartingSpellsInDeck(Wizard wizard, IEnumerable<WizClientObjectItem> items) {
+        if (s_startingSpells == 0 || wizard is null) {
+            return;
+        }
+
+        try {
+            foreach (var item in items) {
+                if (!CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(item, out var deck)) {
+                    continue;
+                }
+
+                var inDeck = new HashSet<uint>();
+                foreach (var entry in deck.m_spellList ?? []) {
+                    inDeck.Add(entry.m_templateID);
+                    if (CoreObjectFactory.GetCoreTemplate(entry.m_templateID) is SpellTemplate { m_Treasure: false }
+                            && !wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(entry.m_templateID)
+                            && Imlight.CoreLib.Game.Spells.SpellFactory.GetSpell(entry.m_templateID) is { } deckSpell) {
+                        wizard.LearnSpell(deckSpell);
+                    }
+                }
+
+                foreach (var id in wizard.SpellbookBehavior.LearnedSpellTemplateIds.ToArray()) {
+                    if (!inDeck.Contains(id)) {
+                        wizard.AddSpellToDeck(id, item.m_globalID);
+                    }
+                }
+
+                return;
+            }
+        }
+        catch (Exception ex) {
+            Logger.Error("Randomizer could not put the starting spells in the deck. {Exception}", Logger.Args(ex));
+        }
+    }
+
     private static uint RollSpell(uint spellTemplateId) {
         try {
             return (uint) s_combatSpells.Value.Pick(spellTemplateId, Random.Shared);
