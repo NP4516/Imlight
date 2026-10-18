@@ -1257,7 +1257,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return true;
         }
 
-        CombatResolver.UseUpCard(caster, enchantment);
+        Imlight.CoreLib.Game.Combat.CombatResolver.UseUpCard(caster, enchantment);
         SendCurrentCombatHand(caster);
 
         return true;
