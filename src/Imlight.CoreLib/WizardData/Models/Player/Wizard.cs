@@ -32,6 +32,7 @@ using Imlight.CoreLib.WizardData.Collections;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Text.Json.Serialization;
 
 namespace Imlight.CoreLib.WizardData.Models.Player;
@@ -1649,6 +1650,12 @@ public class Wizard {
         WizardCollection.UpdateCharacterGameStats(this);
     }
 
+    public int CountEmotesUnlocked() {
+        return BitOperations.PopCount(GameStats.m_purchasedCustomEmotes1)
+         + BitOperations.PopCount(GameStats.m_purchasedCustomEmotes2)
+         + BitOperations.PopCount(GameStats.m_purchasedCustomEmotes3);
+    }
+
     public void UnlockCustomTeleportEffect(int emoteBit) {
         if (emoteBit < 0 || emoteBit >= 96) {
             return;
@@ -1667,4 +1674,9 @@ public class Wizard {
         WizardCollection.UpdateCharacterGameStats(this);
     }
 
+    public int CountTeleportEffectsUnlocked() {
+        return BitOperations.PopCount(GameStats.m_purchasedCustomTeleportEffects1)
+             + BitOperations.PopCount(GameStats.m_purchasedCustomTeleportEffects2)
+             + BitOperations.PopCount(GameStats.m_purchasedCustomTeleportEffects3);
+    }
 }
