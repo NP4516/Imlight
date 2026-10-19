@@ -37,8 +37,6 @@
  * Last Updated: 10/19/2026
  */
 
-using System;
-using System.Text.Json;
 using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.IO;
@@ -48,6 +46,8 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Collections;
+using System;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -186,7 +186,15 @@ internal class EmoteService(SessionActor sessionActor) : MessageService(sessionA
     /// </summary>
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_PIIUPDATEEMOTESRADIALMENU))]
     private void ReceivePIIUpdateEmotesRadialMenu(WIZARD3_56_PROTOCOL.MSG_PIIUPDATEEMOTESRADIALMENU message) {
-        Logger.Warning($"{JsonSerializer.Serialize(message)}");
+        var wizard = GetActiveWizard();
+
+        wizard.RadialMenuData = message.RadialMenuData;
+        wizard.RadialMenu2Data = message.RadialMenu2Data;
+        wizard.RadialMenu3Data = message.RadialMenu3Data;
+        WizardCollection.UpdateCharacterRadialMenuData(wizard);
+
+        Logger.Information("Saved updated radial menu data for character {Id}",
+            Logger.Args(wizard.CharId));
     }
 
     /// <summary>
@@ -195,5 +203,24 @@ internal class EmoteService(SessionActor sessionActor) : MessageService(sessionA
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_REQUESTONDEMANDCONVERTEMOTESTOPIISYSTEM))]
     private void ReceiveRequestOnDemandConvertEmotes(WIZARD3_56_PROTOCOL.MSG_REQUESTONDEMANDCONVERTEMOTESTOPIISYSTEM message) {
         // Client requesting on-demand conversion.
+    }
+
+    /// <summary>
+    ///  Loads the radial menu from DB
+    /// </summary>
+    [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
+    private void ReceiveAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
+        var wizard = GetActiveWizard();
+        if (wizard.RadialMenuData != null) {
+            var updateMsg = new WIZARD3_56_PROTOCOL.MSG_PIIUPDATEEMOTESRADIALMENU {
+                RadialMenuData = wizard.RadialMenuData,
+                RadialMenu2Data = wizard.RadialMenu2Data,
+                RadialMenu3Data = wizard.RadialMenu3Data
+            };
+            SendToSocket(updateMsg);
+        }
+
+        Logger.Information("[EmoteService] Restored radial menu data to client for character {Id}",
+    Logger.Args(wizard.CharId));
     }
 }

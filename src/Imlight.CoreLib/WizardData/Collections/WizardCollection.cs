@@ -366,6 +366,17 @@ public static class WizardCollection {
     }
 
     /// <summary>
+    /// Updates the character radial menu data for a wizard.
+    /// </summary>
+    public static void UpdateCharacterRadialMenuData(Wizard wizard) {
+        UpdateCharacter(wizard.CharId, existingCharacter => {
+            existingCharacter.RadialMenuData = wizard.RadialMenuData;
+            existingCharacter.RadialMenu2Data = wizard.RadialMenu2Data;
+            existingCharacter.RadialMenu3Data = wizard.RadialMenu3Data;
+        });
+    }
+
+    /// <summary>
     /// Updates the training points of a wizard.
     /// </summary>
     /// <param name="wizard">The wizard object containing the updated training points count.</param>

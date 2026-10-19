@@ -16,6 +16,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
+using Imcodec.IO;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
@@ -139,6 +140,17 @@ public class Wizard {
     /// </summary>
     [JsonIgnore]
     public uint CurrentAnimationState { get; set; } = 0;
+    /**
+     * Each RadialMenuData blob contains a header followed by a list of 18-byte slot records:
+     * 00..03 uint32 Class Type Hash of the radial page container
+     * 04..07 uint32 Serialization Property Mask (Prop_Transmit | Prop_AuthorityTransmit)
+     * 08..11 uint32 Container Object / GID header
+     * 12..13 uint16 List count
+     * Serialized RadialMenuSlotInfo. Each slot entry in the list has 4 fields
+     */
+    public ByteString RadialMenuData { get; set; }
+    public ByteString RadialMenu2Data { get; set; }
+    public ByteString RadialMenu3Data { get; set; }
 
     /// <summary>
     /// Tracks hatched pets for MSG_PETTOMEPETADDED. Key: pet global ID, Value: pet template ID.
