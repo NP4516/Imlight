@@ -72,14 +72,14 @@ public class Wizard {
     public uint LastLoginTime { get; set; }
     public long TimeHomeLastClicked { get; set; }
     public byte World { get; set; }
-    public Vector3 Location {
+    public Imcodec.Math.Vector3 Location {
         get => GameObject.m_location;
         set {
             GameObject.m_location = value;
             _hasLocation = true;
         }
     }
-    public Vector3 Orientation {
+    public Imcodec.Math.Vector3 Orientation {
         get => GameObject.m_orientation;
         set {
             GameObject.m_orientation = value;
@@ -87,8 +87,8 @@ public class Wizard {
         }
     }
 
-    public Vector3 MarkedLocation { get; set; }
-    public Vector3 MarkedOrientation { get; set; }
+    public Imcodec.Math.Vector3 MarkedLocation { get; set; }
+    public Imcodec.Math.Vector3 MarkedOrientation { get; set; }
 
     public WizardCharacterBehavior WizardAvatar { get; set; }
     public ServerWizPlayerNameBehavior PlayerNameBehavior { get; set; }
@@ -203,7 +203,7 @@ public class Wizard {
     public void SaveLocation()
         => WizardCollection.UpdateCharacterLocation(this, Location, Orientation.Z);
 
-    public void SetPersistentLocation(Vector3 loc) {
+    public void SetPersistentLocation(Imcodec.Math.Vector3 loc) {
         Location = loc;
 
         // Persistent save.
@@ -211,7 +211,7 @@ public class Wizard {
     }
 
     public void SetPersistentOrientation(float orientation) {
-        Orientation = new Vector3(0, 0, orientation);
+        Orientation = new Imcodec.Math.Vector3(0, 0, orientation);
 
         // Persistent save.
         WizardCollection.UpdateCharacterLocation(this, Location, Orientation.Z);
@@ -299,7 +299,7 @@ public class Wizard {
         WizardCollection.UpdateCharacterLevel(this);
     }
 
-    public void SetMarkedLocation(Vector3 loc, Vector3 orientation, string zone, string zoneDisplayName) {
+    public void SetMarkedLocation(Imcodec.Math.Vector3 loc, Imcodec.Math.Vector3 orientation, string zone, string zoneDisplayName) {
         MarkedLocation = loc;
         MarkedOrientation = orientation;
         MarkedZone = zone;
