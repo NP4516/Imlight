@@ -36,7 +36,8 @@ public enum EquipmentSlotType {
     Pet,
     Mount,
     Deck,
-    Elixir
+    Elixir,
+    PIITeleportEffect
 
 }
 
