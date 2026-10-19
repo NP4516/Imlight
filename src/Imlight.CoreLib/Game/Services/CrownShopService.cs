@@ -64,16 +64,16 @@ using System.Text.Json;
 namespace Imlight.CoreLib.Game.Services;
 
 internal class CrownShopService(SessionActor sessionActor) : MessageService(sessionActor) {
-
-    private const PropertyFlags TransmitAuthorityFlags =
-        PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit; // 24
-
+    private static readonly uint s_maxEmotes
+        = ConfigurationManager.Settings["Character.MaxEmotesAllowed"].AsUInt();
+    private static readonly uint s_maxTeleportEffects
+        = ConfigurationManager.Settings["Character.MaxTeleportsAllowed"].AsUInt();
 
     private const uint ReagentPropertyFlags =
-        (uint) (PropertyFlags.Prop_Save | PropertyFlags.Prop_Copy | TransmitAuthorityFlags); // 27
+        (uint) (PropertyFlags.Prop_Save | PropertyFlags.Prop_Copy | PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit); // 27
 
     private const uint GiftPropertyFlags =
-        (uint) (PropertyFlags.Prop_Save | PropertyFlags.Prop_Copy | PropertyFlags.Prop_Public | TransmitAuthorityFlags); // 31
+        (uint) (PropertyFlags.Prop_Save | PropertyFlags.Prop_Copy | PropertyFlags.Prop_Public | PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit); // 31
 
     private static readonly CoreObjectSerializer s_coreObjectSerializer = new(behaviors: SerializerFlags.None);
     private static readonly ObjectSerializer s_nonVersionableSerializer = new(Versionable: false, Behaviors: SerializerFlags.None);
@@ -84,6 +84,9 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     private static readonly int s_errorInvFull = (int) StringHash.Compute("Error_CantHoldItemInventoryFull");
     private static readonly int s_errorInvBankFull = (int) StringHash.Compute("Error_CantHoldItemInventoryFullAndReachedBankCap");
     private static readonly int s_errorMaxGold = (int) StringHash.Compute("Error_CantHoldItemMaxGold");
+    private static readonly int s_errorMaxLunari = (int) StringHash.Compute("CantHoldItemMaxLunari");
+    private static readonly int s_errorMaxEmotes = (int) StringHash.Compute("CantHoldItemMaxEmotes");
+    private static readonly int s_errorMaxTeleportEffects = (int) StringHash.Compute("CantHoldItemMaxTeleportEffects");
     private static readonly int s_errorInCombat = (int) StringHash.Compute("Error_InCombat");
     private static readonly int s_errorNotInCombat = (int) StringHash.Compute("Error_NotInCombat");
     private static readonly int s_errorLevelTooLow = (int) StringHash.Compute("Error_LevelTooLow");
@@ -129,7 +132,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             m_accountNHighestWorld = 0
         };
 
-        if (!s_nonVersionableSerializer.Serialize(segmentationInputData, TransmitAuthorityFlags, out var serializedData)) {
+        if (!s_nonVersionableSerializer.Serialize(segmentationInputData, PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out var serializedData)) {
             Logger.Error("Failed to serialize SegmentationInputData.");
             return;
         }
@@ -289,7 +292,8 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                 return 0;
 
             case GoldAmountTemplate goldItem:
-                if (wizard.GameStats.m_currentGold >= wizard.GameStats.m_baseGoldPouch) {
+                // Reject, if money >= maxMoney
+                if (wizard.GameStats.m_currentGold + (goldItem.m_goldAmount * message.Count) >= wizard.GameStats.m_baseGoldPouch) {
                     return s_errorMaxGold;
                 }
 
@@ -298,6 +302,10 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                 return 0;
 
             case LunariAmountTemplate lunariTemplate:
+                if(wizard.GameStats.m_currentEventCurrency1 + (lunariTemplate.m_lunariAmount * message.Count) >= wizard.GameStats.m_baseEventCurrency1Pouch) {
+                    return s_errorMaxLunari;
+                }
+
                 wizard.AddLunari(lunariTemplate.m_lunariAmount * message.Count);
                 SendToSocket(new WIZARD2_53_PROTOCOL.MSG_UPDATEEVENTCURRENCY1 {
                     EventCurrency1 = wizard.GameStats.m_currentEventCurrency1,
@@ -407,8 +415,10 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         if (behaviors is not null) {
             if (message.PurchaseElixirEquipNow > 0) {
                 var elixirBehavior = behaviors.OfType<ElixirBehaviorTemplate>().FirstOrDefault();
-                if (elixirBehavior is not null && TryEquipElixir(wizard, message.Item, wizItemTemplate, elixirBehavior)) {
-                    return 0;
+                if (elixirBehavior is not null) {
+                    if (TryEquipElixir(wizard, message.Item, wizItemTemplate, elixirBehavior)) {
+                        return 0;
+                    }
                 }
                 // If it couldn't be equipped (already 3 active, duplicate type, etc.), fall back to inventory.
 
@@ -422,10 +432,20 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             var customEmote = behaviors.OfType<CustomEmoteBehaviorTemplate>().FirstOrDefault();
             if (customEmote is { m_bitFieldNumber: >= 0 }) {
                 if (customEmote.m_emoteType == CustomEmoteType.CE_Teleport) {
+                    if(wizard.CountTeleportEffectsUnlocked() >= s_maxTeleportEffects) {
+                        return s_errorMaxTeleportEffects;
+                    }
+
                     wizard.UnlockCustomTeleportEffect(customEmote.m_bitFieldNumber);
                 }
-                else {
+                else if(customEmote.m_emoteType == CustomEmoteType.CE_Emote) {
+                    if (wizard.CountEmotesUnlocked() >= s_maxEmotes) {
+                        return s_errorMaxEmotes;
+                    }
+
                     wizard.UnlockCustomEmote(customEmote.m_bitFieldNumber);
+                }else {
+                    Logger.Error($"Unknown CustomEmoteType: {0}", Logger.Args(customEmote.m_emoteType));
                 }
             }
         }
@@ -617,7 +637,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         }
 
         foreach (var effect in effects) {
-            if (!s_coreObjectSerializer.Serialize(effect, TransmitAuthorityFlags, out var effectData)) {
+            if (!s_coreObjectSerializer.Serialize(effect, PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out var effectData)) {
                 continue;
             }
 
