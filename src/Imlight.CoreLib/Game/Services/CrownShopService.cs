@@ -39,12 +39,9 @@
  * Last Updated: 15.10.2026
  */
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text.Json;
 using Akka.Actor;
 using Imcodec.CoreObject;
+using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
@@ -60,6 +57,10 @@ using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -67,6 +68,22 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
     private static readonly Random s_random = new();
     private static readonly CoreObjectSerializer s_coreObjectSerializer = new(behaviors: SerializerFlags.None);
+
+    private static readonly int s_errorNotEnoughCrowns = (int) StringHash.Compute("Error_NotEnoughCrowns");
+    private static readonly int s_errorCantAfford = (int) StringHash.Compute("Error_BuyerCantAffordItem");
+    private static readonly int s_errorInvFull = (int) StringHash.Compute("Error_CantHoldItemInventoryFull");
+    private static readonly int s_errorInvBankFull = (int) StringHash.Compute("Error_CantHoldItemInventoryFullAndReachedBankCap");
+    private static readonly int s_errorMaxGold = (int) StringHash.Compute("Error_CantHoldItemMaxGold");
+    private static readonly int s_errorInCombat = (int) StringHash.Compute("Error_InCombat");
+    private static readonly int s_errorLevelTooLow = (int) StringHash.Compute("Error_LevelTooLow");
+    private static readonly int s_errorOneCastle = (int) StringHash.Compute("Error_OnlyOneOfEachIsland");
+    private static readonly int s_errorMaxElixirs = (int) StringHash.Compute("Error_MaxElixirs");
+    private static readonly int s_errorCSDisabled = (int) StringHash.Compute("Error_CrownShopDisabled");
+    private static readonly int s_errorPurchase = (int) StringHash.Compute("Error_PriceLockMismatch");
+
+
+
+
 
     private static ulong _randomUlong() {
         Span<byte> bytes = stackalloc byte[8];
@@ -146,7 +163,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         if (message.SaleID != 0) {
             Logger.Warning("SaleID {0} is not supported. Ignoring.", Logger.Args(message.SaleID));
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PRICE_LOCK_RESPONSE {
-                Error = 1,
+                Error = s_errorPurchase,
             });
             return;
         }
@@ -154,7 +171,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         if (!CrownShopHandler.TryGetCrownShopItem(message.Item, out var item)) {
             Logger.Warning("Item {0} not found in CrownShop.", Logger.Args(message.Item));
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PRICE_LOCK_RESPONSE {
-                Error = 1,
+                Error = s_errorPurchase,
             });
             return;
         }
@@ -178,7 +195,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             Logger.Warning("Rejected purchase request for item {0}.", Logger.Args(message.Item));
 
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_RESPONSE {
-                Error = 1,
+                Error = s_errorPurchase,
             });
             return;
         }
@@ -187,7 +204,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         if (!CrownShopHandler.TryGetCrownShopItem(message.Item, out var catalogItem)) {
             Logger.Warning("Item {0} not found in CrownShop.", Logger.Args(message.Item));
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_RESPONSE {
-                Error = 1,
+                Error = s_errorPurchase,
             });
             return;
         }
@@ -214,7 +231,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             amountToPay = message.Count * catalogItem.m_crownsCost;
             if (wizard.Account.Crowns < amountToPay) {
                 SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_RESPONSE {
-                    Error = 1,
+                    Error = s_errorNotEnoughCrowns,
                 });
                 return;
             }
