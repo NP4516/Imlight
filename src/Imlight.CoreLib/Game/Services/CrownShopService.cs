@@ -41,6 +41,7 @@
 using Akka.Actor;
 using Imcodec.CoreObject;
 using Imcodec.Cryptography;
+using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
@@ -279,6 +280,10 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             Gifted = isGift ? (byte) 1 : (byte) 0,
             Type = message.Type
         });
+
+        if (!isGift && WishlistData.TryRemoveItem(wizard.CrownShopWishlist, (uint) message.Item, out var updatedWishlist)) {
+            ApplyLocalWishlistUpdate(wizard, updatedWishlist, message.Item.ToString(), sendToSelf: true);
+        }
     }
 
     private int TryGrantPurchasedItem(Wizard wizard, WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST message) {
@@ -461,6 +466,10 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
     private int TryDeliverGift(Wizard sender, WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST message) {
         var targetCharacter = WizardCollection.GetCharacterUnloaded(message.Recipient);
+        if (targetCharacter is null && Wizard.TryGetCharacterId(message.Recipient, out var resolvedCharId)) {
+            targetCharacter = WizardCollection.GetCharacterUnloaded(resolvedCharId);
+        }
+
         if (targetCharacter is null) {
             Logger.Error("Recipient with CharacterId {0} was not found.", Logger.Args(message.Recipient));
             return s_errorFailedToSendGift;
@@ -497,11 +506,38 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
         targetAccount.AddMail(mail);
 
+        var itemTemplateId = (uint) message.Item;
+        var removedFromWishlist = WishlistData.TryRemoveItem(targetCharacter.CrownShopWishlist, itemTemplateId, out var updatedWishlist);
+        var removedItemStr = itemTemplateId.ToString();
+        if (removedFromWishlist) {
+            targetCharacter.CrownShopWishlist = updatedWishlist;
+            WizardCollection.UpdateCharacterCSWishlist(targetCharacter);
+
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST {
+                GlobalID = targetCharacter.GameObjectID,
+                Data = updatedWishlist,
+                WLItemsRemAftPur = removedItemStr
+            });
+            SendBuddyWishlistUpdate(SessionActor.ActorRef, targetCharacter, updatedWishlist);
+        }
+
         // Notify the recipient if they are online
-        if (TryGetOnlinePlayer(message.Recipient, out var onlinePlayer)) {
-            Context.ActorSelection(onlinePlayer.ActorPath).Tell(new SERVICE_101_PROTOCOL.MSG_DELIVER_GIFT {
+        if (TryGetOnlinePlayer(targetCharacter.CharId, out var onlinePlayer)) {
+            var recipientActor = Context.ActorSelection(onlinePlayer.ActorPath);
+            recipientActor.Tell(new SERVICE_101_PROTOCOL.MSG_DELIVER_GIFT {
                 Mail = mail
             });
+
+            if (removedFromWishlist) {
+                recipientActor.Tell(new CHARACTER_103_PROTOCOL.MSG_UPDATE_WISHLIST {
+                    CharId = targetCharacter.CharId,
+                    WishlistData = updatedWishlist,
+                    RemovedTemplateId = itemTemplateId
+                });
+            }
+        }
+        else if (removedFromWishlist) {
+            NotifyBuddiesOfWishlistUpdate(targetCharacter, updatedWishlist, removedItemStr);
         }
 
         return 0;
@@ -667,9 +703,95 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             MaxGold = wizard.GameStats.m_baseGoldPouch
         });
 
+    // This message is fired when the PCS UI is closed.
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST))]
     private void ReceiveWishlistUpdate(WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST message) {
-        Logger.Warning("{0}", Logger.Args(JsonSerializer.Serialize(message)));
+        if (!WishlistData.TryFromByteString(message.Data, out _)) {
+            Logger.Warning("Received invalid crown shop wishlist data.");
+            return;
+        }
+
+        var wizard = GetActiveWizard();
+        ApplyLocalWishlistUpdate(wizard, message.Data, message.WLItemsRemAftPur, sendToSelf: false);
+
+        Logger.Information("Saved updated crown shop wishlist data for character {Id}",
+            Logger.Args(wizard.CharId));
+    }
+
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_UPDATE_WISHLIST))]
+    private void ReceiveWishlistUpdateInternal(CHARACTER_103_PROTOCOL.MSG_UPDATE_WISHLIST message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null || wizard.CharId != message.CharId) {
+            return;
+        }
+
+        ApplyLocalWishlistUpdate(wizard, message.WishlistData, message.RemovedTemplateId.ToString(), sendToSelf: true);
+    }
+
+    private void ApplyLocalWishlistUpdate(Wizard wizard, ByteString wishlistData, string removedItems, bool sendToSelf) {
+        wizard.CrownShopWishlist = wishlistData;
+        WizardCollection.UpdateCharacterCSWishlist(wizard);
+
+        if (wizard.GameObject is not null) {
+            if (CoreObjectFactory.FindBehaviorInstance<WishlistBehavior>(wizard.GameObject, out var wishlistBehavior)) {
+                wishlistBehavior.m_wishlistData = wishlistData;
+            }
+            else {
+                wizard.GameObject.m_inactiveBehaviors.Add(new WishlistBehavior {
+                    m_behaviorTemplateNameID = 0x174F46F4,
+                    m_wishlistData = wishlistData
+                });
+            }
+        }
+
+        var updateMsg = new WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST {
+            GlobalID = wizard.GameObjectID,
+            Data = wishlistData,
+            WLItemsRemAftPur = removedItems ?? string.Empty
+        };
+
+        if (sendToSelf) {
+            SendToSocket(updateMsg);
+        }
+
+        ZoneBroadcast(updateMsg, isSelfless: true, targets: ZoneBroadcastTarget.Players);
+        NotifyBuddiesOfWishlistUpdate(wizard, wishlistData, removedItems);
+    }
+
+    private void NotifyBuddiesOfWishlistUpdate(Wizard owner, ByteString wishlistData, string removedItems) {
+        var updateMsg = new WIZARD_12_PROTOCOL.MSG_PCS_UPDATEUSERWISHLIST {
+            GlobalID = owner.GameObjectID,
+            Data = wishlistData,
+            WLItemsRemAftPur = removedItems ?? string.Empty
+        };
+
+        var buddies = BuddyRelationshipCollection.GetBuddiesForWizard(owner.CharId);
+        foreach (var buddy in buddies.Where(b => b is not null)) {
+            if (!TryGetOnlinePlayer(buddy.CharId, out var onlineBuddy)) {
+                continue;
+            }
+
+            var buddyActor = Context.ActorSelection(onlineBuddy.ActorPath);
+            buddyActor.Tell(updateMsg);
+            SendBuddyWishlistUpdate(buddyActor, owner, wishlistData);
+        }
+    }
+
+    private static void SendBuddyWishlistUpdate(ICanTell targetActor, Wizard owner, ByteString wishlistData) {
+        var hasEquippedPet = owner.EquipmentBehavior?.SlotList?.Any(
+            s => s.SlotType == EquipmentSlotType.Pet && s.ItemId != 0) == true;
+        var showPvpOption = owner.GameStats?.m_showPVPOption is > 0 and var opt ? opt : 1u;
+
+        targetActor.Tell(new GAME_5_PROTOCOL.MSG_BUDDYSTATS {
+            BuddyID = owner.GameObjectID,
+            Level = (uint) (owner.MagicSchoolBehavior?.Level ?? 1),
+            School = (uint) (owner.MagicSchoolBehavior?.MagicSchool ?? 0),
+            Gender = (sbyte) (owner.WizardAvatar?.m_eGender ?? 0),
+            ShowPVPOption = showPvpOption,
+            PetStatBlockCRC = hasEquippedPet ? 1u : 0u,
+            WishlistBlock = wishlistData.IsEmpty ? WishlistData.Empty : wishlistData,
+            WishlistBlockCRC = 1
+        }, ActorRefs.NoSender);
     }
 
     [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_CrownShopLogging))]
@@ -683,5 +805,4 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     private void ReceivePCsPatch(WIZARD_12_PROTOCOL.MSG_PCS_PATCH message) {
         Logger.Warning("What is MSG_PCS_PATCH for? This is called when someone opens player gifts");
     }
-
 }
