@@ -83,6 +83,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY _activeSigilEntry;
 
     private readonly CoreObjectSerializer _effectSerializer = new(
+        versionable: false,
         behaviors: SerializerFlags.None
     );
     private readonly CoreObjectSerializer _zoneObjectSerializer = new(
@@ -319,6 +320,27 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         character.QueuedZoneName = character.Zone;
         character.QueuedZoneLocation = Util.GetCompactStringFromVector(character.Location, character.Orientation);
+    }
+
+    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_UPDATETELEPORTEFFECT))]
+    private void ReceiveUpdateTeleportEffect(WIZARD2_53_PROTOCOL.MSG_UPDATETELEPORTEFFECT message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        var equippedEffect = wizard.MagicSchoolBehavior?.EquippedTeleportEffect ?? 0;
+        message.PlayerGID = wizard.GameObjectID;
+        message.TeleportEffect = equippedEffect;
+
+        if (ZoneActor is not null && equippedEffect != 0) {
+            ReceiveZoneBroadcast(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+                Message = message,
+                Selfless = true,
+                Sender = SessionActor.ActorRef,
+                Targets = ZoneBroadcastTarget.Players,
+            });
+        }
     }
 
     // This button and the GotoDorm button are locked client-side until level 2.
@@ -821,8 +843,12 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         var broadcastMsg = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
             Message = serverTele,
             Selfless = false,
+            Sender = SessionActor.ActorRef,
+            Targets = ZoneBroadcastTarget.Players,
         };
         ReceiveZoneBroadcast(broadcastMsg);
+
+        SendRemoveRecallHomeEffect();
     }
 
     private void SpawnMyself() {
@@ -841,10 +867,25 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             Data = gameObjData,
         };
         var broadcastMsg = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
-            Message = addMsg
+            Message = addMsg,
+            Sender = SessionActor.ActorRef,
+            Targets = ZoneBroadcastTarget.Players,
         };
+        ReceiveZoneBroadcast(broadcastMsg);
 
-        ZoneActor.Tell(broadcastMsg);
+        // Broadcast teleport effect so other players in the zone have the equipped effect ID cached.
+        ReceiveZoneBroadcast(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Message = new WIZARD2_53_PROTOCOL.MSG_UPDATETELEPORTEFFECT {
+                PlayerGID = wizard.GameObjectID,
+                TeleportEffect = wizard.MagicSchoolBehavior?.EquippedTeleportEffect ?? 0,
+            },
+            Selfless = true,
+            Sender = SessionActor.ActorRef,
+            Targets = ZoneBroadcastTarget.Players,
+        });
+
+        // If player arrived via teleport, remove RecallHome to trigger EndRecallEffect (arrival animation & sound)
+        SendRemoveRecallHomeEffect();
     }
 
     private void SpawnMyselfFor(IActorRef actorRef) {
@@ -876,7 +917,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
                 Message = new GAME_5_PROTOCOL.MSG_ENTERSTATE {
                     GameObjectID = wizard.GameObjectID,
                     State = _resetStateId,
-                }
+                },
+                Selfless = false,
+                Sender = SessionActor.ActorRef,
+                Targets = ZoneBroadcastTarget.Players,
             });
             wizard.CurrentAnimationState = _resetStateId;
         }
@@ -885,7 +929,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             Message = new GAME_5_PROTOCOL.MSG_ENTERSTATE {
                 GameObjectID = wizard.GameObjectID,
                 State = _teleportStateId,
-            }
+            },
+            Selfless = false,
+            Sender = SessionActor.ActorRef,
+            Targets = ZoneBroadcastTarget.Players,
         });
         wizard.CurrentAnimationState = _teleportStateId;
         SendRecallHomeEffect(now);
@@ -920,18 +967,16 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private void SendRecallHomeEffect(DateTimeOffset time) {
         var wizard = GetActiveWizard();
 
-        // on live servers, the end time is 200 seconds from the time gohome is sent. i still have no clue why.
-        // also on live servers, when teleporting in zone, it will send the effects like 3 times. i also have no clue on this either.
         var effect = new NamedEffect {
             m_effectNameID = StringHash.Compute("RecallHome"),
-            m_endTime = (uint) time.AddSeconds(2).ToUnixTimeSeconds(),
+            m_endTime = (uint) time.AddSeconds(200).ToUnixTimeSeconds(),
             m_internalID = wizard.GameEffects.Count,
         };
 
         wizard.GameEffects.Add(effect);
 
         var flags = PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit;
-        if (!_effectSerializer.Serialize(effect, flags, out var serializedEffect)) {
+        if (!_zoneObjectSerializer.Serialize(effect, flags, out var serializedEffect)) {
             Logger.Error("Failed to serialize game object for {0}",
                 Logger.Args(wizard.CharId));
 
@@ -942,9 +987,40 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             GameObjectID = wizard.GameObject.m_globalID,
             EffectData = serializedEffect
         };
+
+        SendToSocket(addEffect);
+
         var broadcastWrapper = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
             Message = addEffect,
-            Selfless = false,
+            Selfless = true,
+            Sender = SessionActor.ActorRef,
+            Targets = ZoneBroadcastTarget.Players,
+        };
+        ReceiveZoneBroadcast(broadcastWrapper);
+    }
+
+    private void SendRemoveRecallHomeEffect() {
+        var wizard = GetActiveWizard();
+        var effect = wizard.GameEffects.FirstOrDefault(e => e.m_effectNameID == StringHash.Compute("RecallHome"));
+        if (effect is null) {
+            return;
+        }
+
+        wizard.GameEffects.Remove(effect);
+
+        var removeEffect = new GAME_5_PROTOCOL.MSG_REMOVEEFFECT {
+            GameObjectID = wizard.GameObject.m_globalID,
+            EffectNameID = effect.m_effectNameID,
+            InternalID = effect.m_internalID,
+        };
+
+        SendToSocket(removeEffect);
+
+        var broadcastWrapper = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Message = removeEffect,
+            Selfless = true,
+            Sender = SessionActor.ActorRef,
+            Targets = ZoneBroadcastTarget.Players,
         };
         ReceiveZoneBroadcast(broadcastWrapper);
     }
@@ -1018,6 +1094,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
                 Yaw = faceYaw,
             },
             Selfless = false,
+            Sender = SessionActor.ActorRef,
+            Targets = ZoneBroadcastTarget.Players,
         });
         gameObj.m_location = new Imcodec.Math.Vector3(faceX, faceY, faceZ);
         gameObj.m_orientation = new Imcodec.Math.Vector3(0, 0, faceYaw);
