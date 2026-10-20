@@ -44,6 +44,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.PvP.Data;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.PvP;
@@ -81,11 +82,11 @@ internal static class PvPBlobs {
     /// The tournament list of the PvP window: one NewListUpdate as the root, compressed, with its open hosted matches and, because the client takes its teams only from the top level, their teams too. It is
     /// what gives the client tournament info its id, so the window starts asking for updates.
     /// </summary>
-    public static ByteString TournamentList(string tournamentName, uint tournamentNameId) {
-        var hosted = PvPRegistry.GetHostedMatches(tournamentNameId);
+    public static ByteString TournamentList(PvPListScope scope) {
+        var hosted = PvPRegistry.GetHostedMatches(scope);
         var update = new NewListUpdate {
-            m_tournamentName = tournamentName,
-            m_tournamentNameID = tournamentNameId,
+            m_tournamentName = PvPTournamentFactory.TryGetTournament(scope.TournamentNameId, out var tournament) ? tournament.m_tournamentName : string.Empty,
+            m_tournamentNameID = scope.TournamentNameId,
             m_clearData = true,
             m_matches = [.. hosted],
             m_teams = [.. hosted.SelectMany(info => info.m_teams)],

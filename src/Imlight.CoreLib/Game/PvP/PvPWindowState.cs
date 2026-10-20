@@ -377,13 +377,13 @@ internal sealed class PvPWindowState {
     }
 
     private GAME_5_PROTOCOL.MSG_PVPUPDATEINFO GetUpdateInfo(Wizard wizard, string source, uint askedLeagueId, uint askedSeasonId) {
-        PvPTournamentFactory.TryGetTournament(TournamentNameId, out var tournament);
-
-        var update = PvPBlobs.UpdateInfo(wizard.CharId, PvPBlobs.TournamentList(tournament?.m_tournamentName ?? string.Empty, TournamentNameId));
-        Logger.Debug("PvP list for {CharId} ({Source}): tournament {TournamentId}, asked league {AskedLeague} season {AskedSeason}, window league {League} season {Season}, "
+        var scope = new PvPListScope(TournamentNameId, LeagueId, SeasonId);
+        var hosted = PvPRegistry.GetHostedMatches(scope);
+        var update = PvPBlobs.UpdateInfo(wizard.CharId, PvPBlobs.TournamentList(scope));
+        Logger.Debug("PvP list for {CharId} ({Source}, {Kind}): tournament {TournamentId}, asked league {AskedLeague} season {AskedSeason}, window league {League} season {Season}, "
                      + "IsPvPQueue {IsPvPQueue}, DiffType {DiffType}, {MatchCount} hosted match(es), {TeamCount} top-level team(s).",
-            Logger.Args(wizard.CharId, source, TournamentNameId, askedLeagueId, askedSeasonId, LeagueId, SeasonId,
-                update.IsPvPQueue, update.DiffType, PvPRegistry.GetHostedMatches(TournamentNameId).Count, PvPRegistry.GetHostedMatches(TournamentNameId).Sum(info => info.m_teams.Count)));
+            Logger.Args(wizard.CharId, source, scope.Kind, TournamentNameId, askedLeagueId, askedSeasonId, LeagueId, SeasonId,
+                update.IsPvPQueue, update.DiffType, hosted.Count, hosted.Sum(info => info.m_teams.Count)));
 
         return update;
     }

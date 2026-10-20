@@ -294,6 +294,8 @@ public sealed class PVP_111_PROTOCOL : IServerProtocol {
 
         public ulong CharId;
         public uint TournamentNameId;
+        public uint LeagueId;
+        public uint SeasonId;
 
     }
 

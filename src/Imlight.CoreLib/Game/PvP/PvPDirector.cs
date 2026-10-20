@@ -88,7 +88,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     private readonly Dictionary<ulong, PvPStrandedPlayer> _strandedPlayers = [];
     private readonly Dictionary<ulong, PvPHostedMatch> _hostedMatches = [];
     private readonly Dictionary<ulong, ulong> _hostedIdByPlayer = [];
-    private readonly Dictionary<ulong, uint> _windowViewers = [];
+    private readonly Dictionary<ulong, PvPListScope> _windowViewers = [];
     private readonly HashSet<string> _failedArenas = new(StringComparer.OrdinalIgnoreCase);
     private ulong _matchSequence;
     private ulong _hostedSequence;
@@ -329,7 +329,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
     [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_WINDOWOPENED))]
     private void ReceiveWindowOpened(PVP_111_PROTOCOL.MSG_WINDOWOPENED message) {
         if (_sessions.ContainsKey(message.CharId)) {
-            _windowViewers[message.CharId] = message.TournamentNameId;
+            _windowViewers[message.CharId] = new PvPListScope(message.TournamentNameId, message.LeagueId, message.SeasonId);
         }
     }
 
@@ -354,6 +354,7 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
+        var scope = new PvPListScope(message.TournamentNameId, message.LeagueId, message.SeasonId);
         var hosted = new PvPHostedMatch(++_hostedSequence, entry with { IsHosted = true }, profile, template, message.Request);
         Logger.Debug("PvP host request of {CharId}: m_matchNameID {RequestMatchNameId}, template {Template} ({TemplateId}), stored match id {StoredId}, teams {TeamCount}, team size {TeamSize}.",
             Logger.Args(charId, message.Request.m_matchNameID, (string) template.m_matchName, StringHash.Compute(template.m_matchName),
@@ -367,8 +368,8 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
         // todo: guess; Failure 0 is success and MobileID is the id of the new match.
         SendToPlayer(charId, HostReply(message.TournamentNameId, hosted.Id, failure: 0));
-        SendToPlayer(charId, PvPBlobs.UpdateInfo(charId, PvPBlobs.TournamentList(GetTournamentName(message.TournamentNameId), message.TournamentNameId)));
-        PushToViewers(message.TournamentNameId, exceptCharId: charId);
+        SendToPlayer(charId, PvPBlobs.UpdateInfo(charId, PvPBlobs.TournamentList(scope)));
+        PushToViewers(scope, exceptCharId: charId);
     }
 
     [MessageHandler(typeof(PVP_111_PROTOCOL.MSG_JOINHOSTED))]
@@ -415,8 +416,8 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
 
     private string GetJoinHostedRefusal(PVP_111_PROTOCOL.MSG_JOINHOSTED message, PvPPlayerProfile profile, out PvPHostedMatch hosted) {
         if (!_hostedMatches.TryGetValue(message.MatchId, out hosted) || hosted.State != PvPHostedState.Open
-            || hosted.Host.TournamentNameId != message.TournamentNameId || hosted.Host.LeagueId != message.LeagueId
-            || hosted.Host.SeasonId != message.SeasonId || !_sessions.ContainsKey(hosted.Host.CharId)) {
+            || !HostScope(hosted).SameList(new PvPListScope(message.TournamentNameId, message.LeagueId, message.SeasonId))
+            || !_sessions.ContainsKey(hosted.Host.CharId)) {
             return PvPArenaErrors.INVALID_MATCH_NAME_ID;
         }
 
@@ -479,17 +480,19 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
             PvPRegistry.SetHosting(charId, false);
         }
 
-        PushToViewers(hosted.Host.TournamentNameId, members: seated);
+        PushToViewers(HostScope(hosted), members: seated);
     }
 
     private void PushHostedUpdate(PvPHostedMatch hosted)
-        => PushToViewers(hosted.Host.TournamentNameId, members: hosted.Teams.SelectMany(team => team).Select(entry => entry.CharId));
+        => PushToViewers(HostScope(hosted), members: hosted.Teams.SelectMany(team => team).Select(entry => entry.CharId));
 
-    private void PushToViewers(uint tournamentNameId, ulong exceptCharId = 0, IEnumerable<ulong> members = null) {
+    private static PvPListScope HostScope(PvPHostedMatch hosted)
+        => new(hosted.Host.TournamentNameId, hosted.Host.LeagueId, hosted.Host.SeasonId);
+
+    private void PushToViewers(PvPListScope scope, ulong exceptCharId = 0, IEnumerable<ulong> members = null) {
         // The client only accepts a whole new list, so every change resends it.
-        var blob = PvPBlobs.TournamentList(GetTournamentName(tournamentNameId), tournamentNameId);
         var recipients = _windowViewers
-            .Where(viewer => viewer.Value == tournamentNameId)
+            .Where(viewer => viewer.Value.SameList(scope))
             .Select(viewer => viewer.Key)
             .Concat(members ?? [])
             .Where(charId => charId != exceptCharId)
@@ -500,16 +503,15 @@ internal sealed class PvPDirector : ReceiveProtocolDispatcher, IWithTimers {
                 continue;
             }
 
-            Logger.Debug("PvP list push to {CharId}: tournament {TournamentId}, {Bytes} bytes.", Logger.Args(charId, tournamentNameId, blob.Length));
+            var viewerScope = _windowViewers.TryGetValue(charId, out var viewing) ? viewing : scope;
+            var blob = PvPBlobs.TournamentList(viewerScope);
+            Logger.Debug("PvP list push to {CharId}: tournament {TournamentId}, {Bytes} bytes.", Logger.Args(charId, viewerScope.TournamentNameId, blob.Length));
             session.Tell(PvPBlobs.UpdateInfo(charId, blob));
         }
     }
 
     private static WIZARD_12_PROTOCOL.MSG_PVPMATCHREQUEST HostReply(uint tournamentNameId, ulong mobileId, byte failure)
         => new() { TournamentNameID = tournamentNameId, MobileID = mobileId, Failure = failure };
-
-    private static string GetTournamentName(uint tournamentNameId)
-        => PvPTournamentFactory.TryGetTournament(tournamentNameId, out var tournament) ? tournament.m_tournamentName : string.Empty;
 
     #endregion
 

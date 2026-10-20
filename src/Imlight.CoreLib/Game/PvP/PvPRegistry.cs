@@ -62,8 +62,8 @@ internal static class PvPRegistry {
     public static bool IsInMatch(ulong charId)
         => s_inMatch.ContainsKey(charId);
 
-    public static IReadOnlyList<PvPMatchInfo> GetHostedMatches(uint tournamentNameId)
-        => [.. s_hostedMatches.Values.Where(info => info.m_tournamentNameID == tournamentNameId).OrderBy(info => (ulong) info.m_matchID)];
+    public static IReadOnlyList<PvPMatchInfo> GetHostedMatches(PvPListScope scope)
+        => [.. s_hostedMatches.Values.Where(scope.Includes).OrderBy(info => (ulong) info.m_matchID)];
 
     public static bool IsMatchInstanceOwner(ulong ownerId)
         => s_matchInstanceOwners.ContainsKey(ownerId);

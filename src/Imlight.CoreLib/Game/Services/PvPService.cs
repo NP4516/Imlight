@@ -258,7 +258,7 @@ internal class PvPService(SessionActor sessionActor) : MessageService(sessionAct
 
     private void AnnounceWindow(int replyCount, Wizard wizard) {
         if (replyCount > 0) {
-            TellDirector(new PVP_111_PROTOCOL.MSG_WINDOWOPENED { CharId = wizard.CharId, TournamentNameId = _window.TournamentNameId });
+            TellDirector(new PVP_111_PROTOCOL.MSG_WINDOWOPENED { CharId = wizard.CharId, TournamentNameId = _window.TournamentNameId, LeagueId = _window.LeagueId, SeasonId = _window.SeasonId });
         }
     }
 
