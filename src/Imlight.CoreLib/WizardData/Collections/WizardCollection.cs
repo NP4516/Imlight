@@ -514,6 +514,27 @@ public static class WizardCollection {
         // Synchronize active elixir behaviors with their remaining playtime seconds from SlotList.
         wizard.EquipmentBehavior.SyncActiveElixirTimes();
 
+        // Load the character's snacks.
+        if (WizardPetSnackCollection.TryGetWizardSnackBag(wizard.CharId, out var snacks)) {
+            wizard.PetSnackBehavior.Snacks = snacks;
+        }
+        else {
+            wizard.PetSnackBehavior.Snacks = [];
+        }
+        wizard.PetSnackBehavior.SnackItemIds = wizard.PetSnackBehavior.Snacks.Select(s => (ulong) s.m_globalID).ToList();
+
+        // Load the character's reagents.
+        if (WizardReagentCollection.TryGetWizardReagentBag(wizard.CharId, out var reagents)) {
+            wizard.AlchemyBehavior.Reagents = reagents;
+        }
+        else {
+            wizard.AlchemyBehavior.Reagents = [];
+        }
+        wizard.AlchemyBehavior.ReagentItemIds = wizard.AlchemyBehavior.Reagents.Select(r => (ulong) r.m_globalID).ToList();
+
+        // Migrate any snacks or reagents mistakenly placed in InventoryBehavior / WizardItemCollection.
+        MigrateMisplacedInventoryItems(wizard);
+
         // The friends list is expanded to include a 'relationship' model
         // which helps keep track of the relationship between two players for moderation purposes.
         // `Wizard` only keeps track of the IDs of the relationships.
@@ -548,6 +569,34 @@ public static class WizardCollection {
         wizard.AfterDatabaseLoad();
 
         return wizard;
+    }
+
+    private static void MigrateMisplacedInventoryItems(Wizard wizard) {
+        var misplacedItems = wizard.InventoryBehavior.Items
+            .Where(i => i is ClientPetSnackItem or ClientReagentItem)
+            .ToList();
+
+        if (misplacedItems.Count == 0) {
+            return;
+        }
+
+        Logger.Information("Migrating {0} misplaced snack/reagent items from player {1}'s inventory.",
+            Logger.Args(misplacedItems.Count, wizard.CharId));
+
+        foreach (var item in misplacedItems) {
+            wizard.InventoryBehavior.Items.Remove(item);
+            wizard.InventoryBehavior.InventoryItemIds.Remove(item.m_globalID);
+            WizardItemCollection.RemoveItem(wizard.CharId, item.m_globalID);
+
+            if (item is ClientPetSnackItem snack) {
+                wizard.AddSnack(snack);
+            }
+            else if (item is ClientReagentItem reagent) {
+                wizard.AddReagent(reagent);
+            }
+        }
+
+        UpdateCharacterItems(wizard);
     }
 
     private static Wizard GetCharacterByCharId(IDocumentSession session, ulong charId)
