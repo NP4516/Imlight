@@ -17,7 +17,6 @@
 */
 
 using Imcodec.IO;
-using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
