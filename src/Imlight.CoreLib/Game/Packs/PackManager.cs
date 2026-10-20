@@ -79,11 +79,29 @@ public static class PackManager {
                 var itemTemplate = CoreObjectFactory.GetCoreTemplate(itemTemplateId);
                 var rarity = ResolveRarity(itemTemplate, tableName);
 
-                lootItems.Add(new TreasureCardLootInfo {
-                    m_lootType = LOOT_TYPE.LOOT_TYPE_TREASURE_CARD,
-                    m_spellID = itemTemplateId,
-                    m_numItems = 1
-                });
+                LootInfo lootInfo = itemTemplate switch {
+                    SpellTemplate => new TreasureCardLootInfo {
+                        m_lootType = LOOT_TYPE.LOOT_TYPE_TREASURE_CARD,
+                        m_spellID = itemTemplateId,
+                        m_numItems = 1
+                    },
+                    PetSnackItemTemplate => new PetSnackLootInfo {
+                        m_lootType = LOOT_TYPE.LOOT_TYPE_PETSNACK,
+                        m_itemID = (GID) itemTemplateId,
+                        m_numItems = 1
+                    },
+                    ReagentItemTemplate => new ReagentLootInfo {
+                        m_lootType = LOOT_TYPE.LOOT_TYPE_REAGENT,
+                        m_itemID = (GID) itemTemplateId,
+                        m_numItems = 1
+                    },
+                    _ => new ItemLootInfo {
+                        m_lootType = LOOT_TYPE.LOOT_TYPE_ITEM,
+                        m_itemID = (GID) itemTemplateId,
+                        m_numItems = 1
+                    }
+                };
+                lootItems.Add(lootInfo);
 
                 lootRarities.Add(new LootRarity {
                     m_rarity = rarity,
