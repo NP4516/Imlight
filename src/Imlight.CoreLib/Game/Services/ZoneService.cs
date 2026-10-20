@@ -66,6 +66,9 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private const float TELEPORT_EFFECTS_TIME = 2.0f;
     private const string ENTER_ZONE_EVENT_NAME = "EnterZone";
 
+    private readonly uint _resetStateId = StringHash.Compute("Unremarkable");
+    private readonly uint _teleportStateId = StringHash.Compute("Teleport");
+
     public IActorRef ZoneActor;
 
     private readonly TimeSpan _zoneRemovalWaitTime = TimeSpan.FromSeconds(ZONE_REMOVAL_WAIT_TIME_IN_SECONDS);
@@ -866,20 +869,25 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private void SendTeleportEffects() {
         var wizard = GetActiveWizard();
         var now = DateTimeOffset.UtcNow;
-
         SendCantGoHomeEffect(now);
 
-        // what does this do? who knows! its probably important.
-        var enterState = new GAME_5_PROTOCOL.MSG_ENTERSTATE {
-            GameObjectID = wizard.GameObject.m_globalID,
-            State = StringHash.Compute("Teleport"),
-        };
-        var broadcastWrapper = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
-            Message = enterState,
-            Selfless = false,
-        };
-        ReceiveZoneBroadcast(broadcastWrapper);
+        if (wizard.CurrentAnimationState == _teleportStateId) {
+            ReceiveZoneBroadcast(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+                Message = new GAME_5_PROTOCOL.MSG_ENTERSTATE {
+                    GameObjectID = wizard.GameObjectID,
+                    State = _resetStateId,
+                }
+            });
+            wizard.CurrentAnimationState = _resetStateId;
+        }
 
+        ReceiveZoneBroadcast(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Message = new GAME_5_PROTOCOL.MSG_ENTERSTATE {
+                GameObjectID = wizard.GameObjectID,
+                State = _teleportStateId,
+            }
+        });
+        wizard.CurrentAnimationState = _teleportStateId;
         SendRecallHomeEffect(now);
     }
 
