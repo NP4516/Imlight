@@ -499,11 +499,19 @@ public class Wizard {
         // Get the template for this item. Using this template we can get the slot this object should be on.
         var template = ItemHelper.GetItemTemplate(inventoryItem);
         var slot = ItemHelper.GetItemSlot(template);
+        if (slot is null) {
+            InventoryBehavior.AddItem(inventoryItem);
+            Logger.Warning("Could not determine equipment slot for item {0} (template {1}).",
+                Logger.Args(itemId, inventoryItem.m_templateID));
+
+            return false;
+        }
 
         // Get the item that is currently in the slot, if there is one. We want to remove its effects.
         var replacedItem = EquipmentBehavior.GetItemInSlot(slot.SlotType);
         if (replacedItem != null) {
             if (!EquipmentToInventoryTransfer(replacedItem.m_globalID, out unequipEffects)) {
+                InventoryBehavior.AddItem(inventoryItem);
                 Logger.Warning("Could not replace item {0} from slot {1}.",
                     Logger.Args(replacedItem.m_globalID, slot.SlotType));
 
@@ -514,6 +522,7 @@ public class Wizard {
         // Add the item to the equipment.
         var equipResult = EquipmentBehavior.EquipItem(inventoryItem, slot.SlotType);
         if (!equipResult) {
+            InventoryBehavior.AddItem(inventoryItem);
             Logger.Warning("Tried to equip item with global id {0} that is already equipped.",
                 Logger.Args(itemId));
 
@@ -529,6 +538,9 @@ public class Wizard {
         }
         if (slot.SlotType == EquipmentSlotType.Pet) {
             EquipPet(template, inventoryItem);
+        }
+        if (slot.SlotType == EquipmentSlotType.PIITeleportEffect) {
+            EquipTeleportEffect(inventoryItem);
         }
 
         // Persistent save.
@@ -547,6 +559,13 @@ public class Wizard {
 
         // Get the actual item. We'll also grab the template to remove the effects from the wizard.
         var item = EquipmentBehavior.EquippedItems.FirstOrDefault(i => i.m_globalID == itemId);
+        if (item is null) {
+            Logger.Warning("Tried to unequip item with global id {0} that does not exist in EquippedItems.",
+                Logger.Args(itemId));
+
+            return false;
+        }
+
         var template = ItemHelper.GetItemTemplate(item);
         var slot = ItemHelper.GetItemSlot(template);
 
@@ -574,6 +593,9 @@ public class Wizard {
         }
         if (slot.SlotType == EquipmentSlotType.Pet) {
             UnequipPet();
+        }
+        if (slot.SlotType == EquipmentSlotType.PIITeleportEffect) {
+            UnequipTeleportEffect();
         }
 
         // Persistent save.
@@ -1269,6 +1291,7 @@ public class Wizard {
     }
 
     internal void AfterDatabaseLoad() {
+        AfterDatabaseLoadTeleportEffect();
         AfterDatabaseLoadWizardGameStats();
         AfterDatabaseLoadSpellbookBehavior();
         AfterDatabaseloadMountOwnerBehavior();
@@ -1280,6 +1303,43 @@ public class Wizard {
         FriendsBehavior ??= new ServerFriendBehavior();
         QuestBehavior ??= new ServerQuestBehavior();
         DynamodSet ??= new DynamodSet(CharId);
+    }
+
+    private void EquipTeleportEffect(WizClientObjectItem item) {
+        var templateId = (uint) item.m_templateID;
+        MagicSchoolBehavior.EquippedTeleportEffect = templateId;
+        GameStats.m_equippedTeleportEffect = templateId;
+
+        if (HasInitializedGameObject && CoreObjectFactory.FindBehaviorInstance<ClientMagicSchoolBehavior>(GameObject, out var schoolBehavior)) {
+            schoolBehavior.m_equippedTeleportEffect = templateId;
+        }
+
+        WizardCollection.UpdateCharacterTeleportEffect(this);
+    }
+
+    private void UnequipTeleportEffect() {
+        MagicSchoolBehavior.EquippedTeleportEffect = 0;
+        GameStats.m_equippedTeleportEffect = 0;
+
+        if (HasInitializedGameObject && CoreObjectFactory.FindBehaviorInstance<ClientMagicSchoolBehavior>(GameObject, out var schoolBehavior)) {
+            schoolBehavior.m_equippedTeleportEffect = 0;
+        }
+
+        WizardCollection.UpdateCharacterTeleportEffect(this);
+    }
+
+    private void AfterDatabaseLoadTeleportEffect() {
+        var idInSlot = EquipmentBehavior?.SlotList?.FirstOrDefault(s => s.SlotType == EquipmentSlotType.PIITeleportEffect)?.ItemId;
+        if (idInSlot is null) {
+            MagicSchoolBehavior.EquippedTeleportEffect = 0;
+            GameStats.m_equippedTeleportEffect = 0;
+            return;
+        }
+
+        var teleportItem = EquipmentBehavior.EquippedItems?.FirstOrDefault(i => i.m_globalID == idInSlot);
+        var templateId = teleportItem is not null ? (uint) teleportItem.m_templateID : 0u;
+        MagicSchoolBehavior.EquippedTeleportEffect = templateId;
+        GameStats.m_equippedTeleportEffect = templateId;
     }
 
     private void EquipMount(WizItemTemplate template, WizClientObjectItem item) {
