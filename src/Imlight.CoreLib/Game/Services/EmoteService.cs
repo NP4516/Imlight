@@ -211,16 +211,15 @@ internal class EmoteService(SessionActor sessionActor) : MessageService(sessionA
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
     private void ReceiveAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
         var wizard = GetActiveWizard();
-        if (wizard.RadialMenuData != null) {
-            var updateMsg = new WIZARD3_56_PROTOCOL.MSG_PIIUPDATEEMOTESRADIALMENU {
-                RadialMenuData = wizard.RadialMenuData,
-                RadialMenu2Data = wizard.RadialMenu2Data,
-                RadialMenu3Data = wizard.RadialMenu3Data
-            };
-            SendToSocket(updateMsg);
-        }
+
+        var updateMsg = new WIZARD3_56_PROTOCOL.MSG_PIIUPDATEEMOTESRADIALMENU {
+            RadialMenuData = wizard.RadialMenuData.IsEmpty ? RadialMenuData.Empty : wizard.RadialMenuData,
+            RadialMenu2Data = wizard.RadialMenu2Data.IsEmpty ? RadialMenuData.Empty : wizard.RadialMenu2Data,
+            RadialMenu3Data = wizard.RadialMenu3Data.IsEmpty ? RadialMenuData.Empty : wizard.RadialMenu3Data
+        };
+        SendToSocket(updateMsg);
 
         Logger.Information("[EmoteService] Restored radial menu data to client for character {Id}",
-    Logger.Args(wizard.CharId));
+            Logger.Args(wizard.CharId));
     }
 }
