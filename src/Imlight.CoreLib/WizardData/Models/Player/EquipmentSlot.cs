@@ -37,7 +37,8 @@ public enum EquipmentSlotType {
     Mount,
     Deck,
     Elixir,
-    PIITeleportEffect
+    PIITeleportEffect,
+    PIIVictoryDance
 
 }
 
