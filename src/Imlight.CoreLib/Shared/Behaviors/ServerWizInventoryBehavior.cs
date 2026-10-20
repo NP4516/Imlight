@@ -41,6 +41,11 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
 
     [JsonIgnore] public List<WizClientObjectItem> Items { get; set; }
 
+    public bool HasInventorySpace(int count) {
+        var max = s_maxItemsAllowed > 0 ? s_maxItemsAllowed : s_maxItemsAllowedFallback;
+        return (Items?.Count ?? 0) + count <= max;
+    }
+
     /// <summary>
     /// Adds an item to the player's inventory.
     /// </summary>
