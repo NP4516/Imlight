@@ -187,13 +187,31 @@ internal class EmoteService(SessionActor sessionActor) : MessageService(sessionA
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_PIIUPDATEEMOTESRADIALMENU))]
     private void ReceivePIIUpdateEmotesRadialMenu(WIZARD3_56_PROTOCOL.MSG_PIIUPDATEEMOTESRADIALMENU message) {
         var wizard = GetActiveWizard();
+        // Normalize empty or null blobs
+        var menu1 = message.RadialMenuData.IsEmpty ? RadialMenuData.Empty : message.RadialMenuData;
+        var menu2 = message.RadialMenu2Data.IsEmpty ? RadialMenuData.Empty : message.RadialMenu2Data;
+        var menu3 = message.RadialMenu3Data.IsEmpty ? RadialMenuData.Empty : message.RadialMenu3Data;
 
-        wizard.RadialMenuData = message.RadialMenuData;
-        wizard.RadialMenu2Data = message.RadialMenu2Data;
-        wizard.RadialMenu3Data = message.RadialMenu3Data;
+        // Validate structure before saving to DB
+        if (!RadialMenuData.TryFromByteString(menu1, out _) ||
+            !RadialMenuData.TryFromByteString(menu2, out _) ||
+            !RadialMenuData.TryFromByteString(menu3, out _)) {
+            Logger.Warning("[EmoteService] Received invalid radial menu data from character {Id}",
+                Logger.Args(wizard.CharId));
+            return;
+        }
+        // Skip DB write if nothing changed
+        if (wizard.RadialMenuData == menu1 &&
+            wizard.RadialMenu2Data == menu2 &&
+            wizard.RadialMenu3Data == menu3) {
+            return;
+        }
+
+        wizard.RadialMenuData = menu1;
+        wizard.RadialMenu2Data = menu2;
+        wizard.RadialMenu3Data = menu3;
         WizardCollection.UpdateCharacterRadialMenuData(wizard);
-
-        Logger.Information("Saved updated radial menu data for character {Id}",
+        Logger.Information("[EmoteService] Saved updated radial menu data for character {Id}",
             Logger.Args(wizard.CharId));
     }
 
