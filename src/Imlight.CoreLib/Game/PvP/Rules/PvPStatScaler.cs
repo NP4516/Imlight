@@ -41,6 +41,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Shared.Behaviors;
 
 namespace Imlight.CoreLib.Game.PvP.Rules;
@@ -158,7 +159,7 @@ internal static class PvPStatScaler {
     }
 
     private static void ScaleSchoolStats(ServerWizGameStats stats, ScaleContext context, IReadOnlyDictionary<string, int> schoolIndices) {
-        var size = schoolIndices.Values.Max() + 1;
+        var size = Math.Max(schoolIndices.Values.Max(), (int) MagicSchools.GetMaxMagicSchoolIndex()) + 1;
         foreach (var stat in s_schoolStats) {
             var list = CopyList(stat.GetList(stats), size);
             var all = stat.GetAll(stats);

@@ -391,6 +391,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
         // Add the circles to combat if they are not already.
         AddWaitingCombatParticipants();
+        if (Duel.m_roundNum <= 1) {
+            LogStartingPips();
+        }
+
         CombatResolver.Reset();
         _awaitingCombatMoves = true;
 
@@ -560,6 +564,30 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         Logger.Debug("Duel {0} | Round {1} over at {2}",
             Logger.Args(Duel.m_duelID.Full, Duel.m_roundNum, DateTime.Now.ToString("HH:mm:ss")));
 
+        if (IsPvPDuel) {
+            try {
+                ExecutePlanningPhaseOver();
+            }
+            catch (Exception exception) {
+                Logger.Error("Duel {0} | Round {1} | Resolving the half turn failed, skipping it: {2}",
+                    Logger.Args(Duel.m_duelID.Full, Duel.m_roundNum, exception));
+                SkipFailedPvPHalfTurn();
+            }
+
+            return;
+        }
+
+        ExecutePlanningPhaseOver();
+    }
+
+    private void SkipFailedPvPHalfTurn() {
+        _awaitingCombatMoves = false;
+        Duel.m_duelPhase = kDuelPhase.kPhase_Resolution;
+        SendCombatPhase((byte) Duel.m_duelPhase);
+        ContinuePvPDuel();
+    }
+
+    private void ExecutePlanningPhaseOver() {
         // The execution phase begins. This is where combat actions take place and we actually see spell cinematics.
         _awaitingCombatMoves = false;
         Duel.m_duelPhase = kDuelPhase.kPhase_Execution;
@@ -1571,19 +1599,40 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         Duel.m_flatParticipantList.Add(participant);
     });
 
+    private void LogStartingPips() {
+        var pips = new List<string>();
+        EnactActionOnSubCircles(circle => {
+            if (circle.AddedToDuel) {
+                pips.Add($"{circle.SlotType}{circle.SlotIndex}={circle.CombatParticipant.m_pipCount.m_genericPips}+{circle.CombatParticipant.m_pipCount.m_powerPips}p");
+            }
+        });
+        Logger.Debug("Duel {0} | Starting pips: {1}", Logger.Args(Duel.m_duelID.Full, string.Join(", ", pips)));
+    }
+
     private bool IsAlternatingPvP => IsPvPDuel && _pvp.Rules.AlternateTurns;
 
-    private void DoPipGain(CombatTeam? onlyTeam = null) => EnactActionOnSubCircles(circle => {
-        if (!circle.AddedToDuel || !circle.IsAlive) {
-            return;
-        }
+    private void DoPipGain(CombatTeam? onlyTeam = null) {
+        EnactActionOnSubCircles(circle => {
+            if (!circle.AddedToDuel || !circle.IsAlive) {
+                return;
+            }
 
-        if (onlyTeam is { } team && circle.OccupiedTeam != team) {
-            return;
-        }
+            if (onlyTeam is { } team && circle.OccupiedTeam != team) {
+                return;
+            }
 
-        circle.DoPipGain();
-    });
+            circle.DoPipGain();
+        });
+
+        var pips = new List<string>();
+        EnactActionOnSubCircles(circle => {
+            if (circle.AddedToDuel && (onlyTeam is null || circle.OccupiedTeam == onlyTeam)) {
+                pips.Add($"{circle.SlotType}{circle.SlotIndex}={circle.CombatParticipant.m_pipCount.m_genericPips}+{circle.CombatParticipant.m_pipCount.m_powerPips}p");
+            }
+        });
+        Logger.Debug("Duel {0} | Pip gain for {1}: {2}",
+            Logger.Args(Duel.m_duelID.Full, onlyTeam?.ToString() ?? "all teams", string.Join(", ", pips)));
+    }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATINSTAWIN))]
     private void ReceiveCheatInstaWin(COMBAT_106_PROTOCOL.MSG_CHEATINSTAWIN message) {
