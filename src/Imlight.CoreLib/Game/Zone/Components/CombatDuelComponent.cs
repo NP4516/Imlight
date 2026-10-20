@@ -398,8 +398,9 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         CombatResolver.Reset();
         _awaitingCombatMoves = true;
 
-        // Determine the power pip gain. Alternating turns gain in the opponent's phase: the non-starter now.
-        DoPipGain(IsAlternatingPvP ? PvPDuelState.Opposite(_pvp.RoundStarter) : null);
+        // Determine the power pip gain. Alternating turns gain in the opponent's phase: the non-starter now, except in
+        // the first round, where both teams gain so the starter has a pip to act with.
+        DoPipGain(IsAlternatingPvP && Duel.m_roundNum > 0 ? PvPDuelState.Opposite(_pvp.RoundStarter) : null);
 
         if (IsPvPDuel) {
             BeginPvPHalfTurn();
