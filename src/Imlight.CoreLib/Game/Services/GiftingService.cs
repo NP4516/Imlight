@@ -24,7 +24,7 @@
  * 
  * 
  * USAGE EXAMPLE:
- *
+ * 
  * 
  * NOTE:
  * 
@@ -72,12 +72,12 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_RETRIEVE_MAIL))]
     private void ReceiveRetrieveMail(GAME_5_PROTOCOL.MSG_RETRIEVE_MAIL message) {
-        var wizard = GetActiveWizard();
+        SendMailData();
+    }
 
-        var mailBox = wizard.Account.GiftMailbox;
-        if (mailBox == null || mailBox.Count <= 0) {
-            return;
-        }
+    private void SendMailData() {
+        var wizard = GetActiveWizard();
+        var mailBox = wizard.Account.GiftMailbox ?? [];
 
         var mailData = new MailList { m_messages = mailBox };
         var mailSerializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.Compress);
@@ -95,11 +95,6 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
     private void ReceiveRedeemGift(GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT message) {
         var wizard = GetActiveWizard();
 
-        // 1. Get Item by mailId
-        // 2. Check if the item is in the Gift list and check if the item is already epired
-        // 3. Remove the item from DB and add to Inventory.
-        // The message tells the player, that the item was added to their Bank tho.
-
         if (wizard.Account.GiftMailbox == null || wizard.Account.GiftMailbox.Count <= 0) {
             return;
         }
@@ -110,6 +105,7 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
                 ErrorCode = 1,
                 MailId = message.MailId,
             });
+            SendMailData();
             return;
         }
 
@@ -119,6 +115,7 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
                 ErrorCode = 1,
                 MailId = message.MailId,
             });
+            SendMailData();
             return;
         }
 
@@ -126,6 +123,7 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
             // Expired, remove the item from the Giftlist
             wizard.Account.RemoveMail(selectedMail.m_mailId);
             InformGameClient("This item expired and you cannot claim it anymore! This item gets removed from the list.");
+            SendMailData();
             return;
         }
 
@@ -134,12 +132,33 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
                 ErrorCode = 1,
                 MailId = message.MailId,
             });
+            SendMailData();
             return;
         }
 
-        wizard.Account.RemoveMail(selectedMail.m_mailId);
-
         var itemTemplate = CoreObjectFactory.GetCoreTemplate(giftRedemption.m_itemId);
+
+        // Pre-check inventory space before modifying any state or removing the mail
+
+        // TODO: If the inventory is full, check the bank
+        // If the bank is full, tell the player they don't have enough space
+        if (itemTemplate is not BoosterPackTemplate &&
+            itemTemplate is not GoldAmountTemplate &&
+            itemTemplate is not LunariAmountTemplate) {
+            if (!wizard.InventoryBehavior.HasInventorySpace(giftRedemption.m_itemCount)) {
+                Logger.Warning("Player {0} tried to redeem gift {1}, but inventory is full.",
+                    Logger.Args(wizard.CharId, message.MailId));
+                InformGameClient("Your backpack is full! Please make space before redeeming this gift.");
+
+                SendToSocket(new GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT_RESPONSE {
+                    ErrorCode = 1,
+                    MailId = message.MailId,
+                });
+                SendMailData();
+                return;
+            }
+        }
+
         switch (itemTemplate) {
             case BoosterPackTemplate:
                 for (uint i = 0; i < giftRedemption.m_itemCount; i++) {
@@ -174,6 +193,7 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
 
                 // todo: serialize the item only once
                 var coSerializer = new CoreObjectSerializer(
+                    versionable: false,
                     behaviors: Imcodec.ObjectProperty.SerializerFlags.None
                 );
 
@@ -184,6 +204,7 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
                             ErrorCode = 1,
                             MailId = message.MailId,
                         });
+                        SendMailData();
                         return;
                     }
 
@@ -200,12 +221,8 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
                 break;
         }
 
-        var mailData = new MailList { m_messages = wizard.Account.GiftMailbox };
-        var mailSerializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.Compress);
-        if (!mailSerializer.Serialize(mailData, 5, out var serializedData)) {
-            Logger.Error("Failed to serialize MailList");
-            return;
-        }
+        // Only remove the mail after the items have been successfully redeemed!
+        wizard.Account.RemoveMail(selectedMail.m_mailId);
 
         SendToSocket(new GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT_RESPONSE {
             ErrorCode = 0,
@@ -213,9 +230,7 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
             TemplateId = giftRedemption.m_itemId
         });
 
-        SendToSocket(new GAME_5_PROTOCOL.MSG_MAIL_DATA {
-            Data = serializedData
-        });
+        SendMailData();
     }
 
     public static bool TryGetGiftRedemption(Mail mail, out CrownShopGiftRedemption? giftRedemption) {
