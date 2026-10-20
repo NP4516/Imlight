@@ -46,6 +46,7 @@ using Imlight.CoreLib.Game.Packs;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.WizardData.Models.Player;
 using System;
 using System.Linq;
 using System.Text;
@@ -53,6 +54,8 @@ using System.Text;
 namespace Imlight.CoreLib.Game.Services;
 
 internal class GiftingService(SessionActor sessionActor) : MessageService(sessionActor) {
+
+    private static readonly CoreObjectSerializer s_coreObjectSerializer = new(behaviors: SerializerFlags.None);
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new GiftingService(parentActor));
@@ -94,32 +97,24 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT))]
     private void ReceiveRedeemGift(GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT message) {
         var wizard = GetActiveWizard();
-
-        if (wizard.Account.GiftMailbox == null || wizard.Account.GiftMailbox.Count <= 0) {
+        if (wizard.Account.GiftMailbox == null) {
+            SendRedeemFailure(message.MailId);
             return;
         }
 
         var selectedMail = wizard.Account.GiftMailbox.SingleOrDefault(m => m.m_mailId == message.MailId, null);
         if (selectedMail == null) {
-            SendToSocket(new GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT_RESPONSE {
-                ErrorCode = 1,
-                MailId = message.MailId,
-            });
-            SendMailData();
+            SendRedeemFailure(message.MailId);
             return;
         }
 
         // How could that even happen??
         if (selectedMail.m_recipientId != wizard.AccountId) {
-            SendToSocket(new GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT_RESPONSE {
-                ErrorCode = 1,
-                MailId = message.MailId,
-            });
-            SendMailData();
+            SendRedeemFailure(message.MailId);
             return;
         }
 
-        if (selectedMail.m_expireDuration > 0 && ((ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds() > selectedMail.m_timeStamp + selectedMail.m_expireDuration)) {
+        if (selectedMail.m_expireDuration > 0 && ((ulong) DateTimeOffset.UtcNow.ToUnixTimeSeconds() > selectedMail.m_timeStamp + selectedMail.m_expireDuration)) {
             // Expired, remove the item from the Giftlist
             wizard.Account.RemoveMail(selectedMail.m_mailId);
             InformGameClient("This item expired and you cannot claim it anymore! This item gets removed from the list.");
@@ -128,33 +123,26 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         if (!TryGetGiftRedemption(selectedMail, out var giftRedemption)) {
-            SendToSocket(new GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT_RESPONSE {
-                ErrorCode = 1,
-                MailId = message.MailId,
-            });
-            SendMailData();
+            SendRedeemFailure(message.MailId);
             return;
         }
 
         var itemTemplate = CoreObjectFactory.GetCoreTemplate(giftRedemption.m_itemId);
 
-        // Pre-check inventory space before modifying any state or removing the mail
-
-        // TODO: If the inventory is full, check the bank
-        // If the bank is full, tell the player they don't have enough space
+        // Pre-check inventory space before modifying any state or removing the mail.
+        // Snacks, reagents, booster packs, gold, and lunari have separate bags/wallets and do not use backpack space.
+        // TODO: If the inventory is full, check the bank. If the bank is full, tell the player they don't have enough space.
         if (itemTemplate is not BoosterPackTemplate &&
             itemTemplate is not GoldAmountTemplate &&
-            itemTemplate is not LunariAmountTemplate) {
+            itemTemplate is not LunariAmountTemplate &&
+            itemTemplate is not PetSnackItemTemplate &&
+            itemTemplate is not ReagentItemTemplate) {
             if (!wizard.InventoryBehavior.HasInventorySpace(giftRedemption.m_itemCount)) {
                 Logger.Warning("Player {0} tried to redeem gift {1}, but inventory is full.",
                     Logger.Args(wizard.CharId, message.MailId));
                 InformGameClient("Your backpack is full! Please make space before redeeming this gift.");
 
-                SendToSocket(new GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT_RESPONSE {
-                    ErrorCode = 1,
-                    MailId = message.MailId,
-                });
-                SendMailData();
+                SendRedeemFailure(message.MailId);
                 return;
             }
         }
@@ -165,20 +153,37 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
                     PackManager.OpenPack(SessionActor.ActorRef, wizard, giftRedemption.m_itemId);
                 }
                 break;
+
             case GoldAmountTemplate goldItem:
-                wizard.AddGold(goldItem.m_goldAmount);
+                wizard.AddGold(goldItem.m_goldAmount * (int) giftRedemption.m_itemCount);
                 SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
                     Gold = wizard.GameStats.m_currentGold,
                     MaxGold = wizard.GameStats.m_baseGoldPouch
                 });
                 break;
+
             case LunariAmountTemplate lunariTemplate:
-                wizard.AddLunari(lunariTemplate.m_lunariAmount);
+                wizard.AddLunari(lunariTemplate.m_lunariAmount * (int) giftRedemption.m_itemCount);
                 SendToSocket(new WIZARD2_53_PROTOCOL.MSG_UPDATEEVENTCURRENCY1 {
                     EventCurrency1 = wizard.GameStats.m_currentEventCurrency1,
                     MaxEventCurrency1 = wizard.GameStats.m_baseEventCurrency1Pouch
                 });
                 break;
+
+            case PetSnackItemTemplate petSnackTemplate:
+                if (!TryGrantPetSnack(wizard, petSnackTemplate.m_templateID, (int) giftRedemption.m_itemCount)) {
+                    SendRedeemFailure(message.MailId);
+                    return;
+                }
+                break;
+
+            case ReagentItemTemplate reagentTemplate:
+                if (!TryGrantReagent(wizard, reagentTemplate.m_templateID, (int) giftRedemption.m_itemCount)) {
+                    SendRedeemFailure(message.MailId);
+                    return;
+                }
+                break;
+
             default:
                 // Check if the item is emote or teleport effect
                 var customEmote = itemTemplate?.m_behaviors?.OfType<CustomEmoteBehaviorTemplate>().FirstOrDefault();
@@ -191,24 +196,14 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
                     }
                 }
 
-                // todo: serialize the item only once
-                var coSerializer = new CoreObjectSerializer(
-                    versionable: false,
-                    behaviors: Imcodec.ObjectProperty.SerializerFlags.None
-                );
-
                 for (uint i = 0; i < giftRedemption.m_itemCount; i++) {
                     if (!wizard.AddItemToInventory(giftRedemption.m_itemId, out WizClientObjectItem itemCoreObject)) {
                         Logger.Warning("Could not add item to inventory.");
-                        SendToSocket(new GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT_RESPONSE {
-                            ErrorCode = 1,
-                            MailId = message.MailId,
-                        });
-                        SendMailData();
+                        SendRedeemFailure(message.MailId);
                         return;
                     }
 
-                    if (!coSerializer.Serialize(itemCoreObject, 24, out var serializedItem)) {
+                    if (!s_coreObjectSerializer.Serialize(itemCoreObject, 24, out var serializedItem)) {
                         Logger.Warning("Failed to serialize core object.");
                         return;
                     }
@@ -231,6 +226,82 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
         });
 
         SendMailData();
+    }
+
+    private void SendRedeemFailure(ulong mailId) {
+        SendToSocket(new GAME_5_PROTOCOL.MSG_REDEEM_MAIL_GIFT_RESPONSE {
+            ErrorCode = 1,
+            MailId = mailId,
+        });
+        SendMailData();
+    }
+
+    private bool TryGrantPetSnack(Wizard wizard, ulong snackTemplateId, int count) {
+        ClientPetSnackItem snackObj = null;
+        for (var i = 0; i < count; i++) {
+            if (!wizard.AddSnack(snackTemplateId, out snackObj)) {
+                Logger.Warning("Could not add pet snack {0} to snack bag.", Logger.Args(snackTemplateId));
+                return false;
+            }
+        }
+
+        if (snackObj is null || !s_coreObjectSerializer.Serialize(snackObj, 24, out var serializedSnackObj)) {
+            Logger.Warning("Failed to serialize pet snack core object {0}.", Logger.Args(snackTemplateId));
+            return false;
+        }
+
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKADD {
+            GlobalID = wizard.GameObjectID,
+            Data = serializedSnackObj
+        });
+
+        SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+            ItemGlobalID = snackObj.m_globalID,
+            ItemTemplateID = (uint) snackObj.m_templateID,
+            ItemLocation = 1
+        });
+
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKUPDATE {
+            GlobalID = wizard.GameObjectID,
+            ItemID = snackObj.m_globalID,
+            Quantity = snackObj.m_quantity
+        });
+
+        return true;
+    }
+
+    private bool TryGrantReagent(Wizard wizard, ulong reagentTemplateId, int count) {
+        ClientReagentItem reagentObj = null;
+        for (var i = 0; i < count; i++) {
+            if (!wizard.AddReagent(reagentTemplateId, out reagentObj)) {
+                Logger.Warning("Could not add reagent {0} to inventory.", Logger.Args(reagentTemplateId));
+                return false;
+            }
+        }
+
+        if (reagentObj is null || !s_coreObjectSerializer.Serialize(reagentObj, 27, out var serializedReagentObj)) {
+            Logger.Warning("Failed to serialize reagent core object {0}.", Logger.Args(reagentTemplateId));
+            return false;
+        }
+
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_REAGENTADD {
+            GlobalID = wizard.GameObjectID,
+            Data = serializedReagentObj
+        });
+
+        SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+            ItemGlobalID = reagentObj.m_globalID,
+            ItemTemplateID = (uint) reagentObj.m_templateID,
+            ItemLocation = 1
+        });
+
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_REAGENTUPDATE {
+            GlobalID = wizard.GameObjectID,
+            ItemID = reagentObj.m_globalID,
+            Quantity = reagentObj.m_quantity
+        });
+
+        return true;
     }
 
     public static bool TryGetGiftRedemption(Mail mail, out CrownShopGiftRedemption? giftRedemption) {

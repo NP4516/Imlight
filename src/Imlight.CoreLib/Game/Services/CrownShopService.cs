@@ -331,7 +331,20 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             case ItemBundleTemplate itemBundle:
                 for (var i = 0; i < message.Count; i++) {
                     foreach (var templateId in itemBundle.m_bundleItems) {
-                        if (!TryAddItemToInventory(wizard, templateId, message.Texture, message.Decal)) {
+                        var bundleSubTemplate = CoreObjectFactory.GetCoreTemplate(templateId);
+                        if (bundleSubTemplate is ReagentItemTemplate) {
+                            var reagentErr = TryGrantReagent(wizard, templateId, 1);
+                            if (reagentErr != 0) {
+                                return reagentErr;
+                            }
+                        }
+                        else if (bundleSubTemplate is PetSnackItemTemplate) {
+                            var snackErr = TryGrantPetSnack(wizard, templateId, 1);
+                            if (snackErr != 0) {
+                                return snackErr;
+                            }
+                        }
+                        else if (!TryAddItemToInventory(wizard, templateId, message.Texture, message.Decal)) {
                             return s_errorInvFull;
                         }
                     }
