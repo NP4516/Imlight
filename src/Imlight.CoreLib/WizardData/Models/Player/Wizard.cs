@@ -481,6 +481,7 @@ public class Wizard {
         }
 
         // Persistent save.
+        WizardItemCollection.RemoveItem(CharId, itemId);
         WizardCollection.UpdateCharacterItems(this);
 
         return true;
