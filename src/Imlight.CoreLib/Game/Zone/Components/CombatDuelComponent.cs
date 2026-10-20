@@ -665,6 +665,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             // The other team acts next in the same round. The starter team gains its pips as phase two begins.
             DoPipGain(_pvp.RoundStarter);
             BeginPvPHalfTurn();
+            Duel.m_duelPhase = kDuelPhase.kPhase_PrePlanning;
+            SendCombatPhase((byte) Duel.m_duelPhase);
             SendUpFirst(Duel.m_roundNum);
 
             var delay = TimeSpan.FromSeconds(DUEL_NEW_ROUND_DELAY);
