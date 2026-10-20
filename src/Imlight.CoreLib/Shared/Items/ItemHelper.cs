@@ -103,6 +103,14 @@ internal static class ItemHelper {
             }
         }
 
+        // The client dynamically adds "PIITeleportEffect" to m_adjectiveList in CustomEmoteBehaviorTemplate::OnPostLoad
+        // when m_emoteType == CustomEmoteType.CE_Teleport, so it is not present in the raw Root.wad template data.
+        if (itemTemplate.m_behaviors?.OfType<CustomEmoteBehaviorTemplate>().Any(b => b.m_emoteType == CustomEmoteType.CE_Teleport) == true) {
+            return new EquipmentSlot {
+                SlotType = EquipmentSlotType.PIITeleportEffect,
+            };
+        }
+
         return null;
     }
 
