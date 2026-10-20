@@ -174,9 +174,16 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         SendAddEffects(effects);
 
         // A mount equipped indoors is dismounted right away; the reconcile no-ops in the open world.
-        if (Enum.TryParse<EquipmentSlotType>(message.SlotName, true, out var equippedSlot)
-            && equippedSlot == EquipmentSlotType.Mount) {
-            SessionActor.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ENFORCEINTERIORMOUNT());
+        if (Enum.TryParse<EquipmentSlotType>(message.SlotName, true, out var equippedSlot)) {
+            if (equippedSlot == EquipmentSlotType.Mount) {
+                SessionActor.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ENFORCEINTERIORMOUNT());
+            }
+            else if (equippedSlot == EquipmentSlotType.PIITeleportEffect) {
+                ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATETELEPORTEFFECT {
+                    TeleportEffect = (uint) item.m_templateID,
+                    PlayerGID = wizard.GameObjectID
+                }, false);
+            }
         }
 
         // If removedEffects is not null, the Wizard replaced an item with another item that has different effects.
@@ -247,6 +254,14 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
 
         if (isPet) {
             DismissPetEntity();
+        }
+
+        var isTeleportEffect = slotObj?.SlotType == EquipmentSlotType.PIITeleportEffect;
+        if (isTeleportEffect) {
+            ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATETELEPORTEFFECT {
+                TeleportEffect = 0,
+                PlayerGID = wizard.GameObjectID
+            }, false);
         }
     }
 
