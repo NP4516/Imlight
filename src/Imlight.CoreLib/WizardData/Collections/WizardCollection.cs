@@ -294,6 +294,17 @@ public static class WizardCollection {
     }
 
     /// <summary>
+    /// Updates the equipped teleport effect for a wizard.
+    /// </summary>
+    /// <param name="wizard">The wizard whose equipped teleport effect is being updated.</param>
+    public static void UpdateCharacterTeleportEffect(Wizard wizard) {
+        UpdateCharacter(wizard.CharId, existingCharacter => {
+            existingCharacter.MagicSchoolBehavior.EquippedTeleportEffect = wizard.MagicSchoolBehavior.EquippedTeleportEffect;
+            existingCharacter.GameStats.m_equippedTeleportEffect = wizard.GameStats.m_equippedTeleportEffect;
+        });
+    }
+
+    /// <summary>
     /// Updates the character name override for a wizard.
     /// </summary>
     /// <param name="wizard">The wizard object containing the updated character name override.</param>
