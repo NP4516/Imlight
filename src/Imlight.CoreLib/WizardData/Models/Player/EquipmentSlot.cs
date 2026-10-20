@@ -41,7 +41,8 @@ public enum EquipmentSlotType {
     Islands,
     Structure,
     Elixir,
-    PIITeleportEffect
+    PIITeleportEffect,
+    PIIVictoryDance
 
 }
 
