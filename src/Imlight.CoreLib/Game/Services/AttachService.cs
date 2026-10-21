@@ -254,7 +254,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
             // Misc
             ShowSubscriberIcon = 0,
-            TestServer = 0
+            TestServer = 0 // TODO: This must be disabled in order for gifts to work!
         };
 
         // Send MSG_PRELOGIN so other services may do their work before we send the final login complete message.
