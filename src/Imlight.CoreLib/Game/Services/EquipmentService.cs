@@ -200,6 +200,12 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
                     PlayerGID = wizard.GameObjectID
                 }, false);
             }
+            else if (equippedSlot == EquipmentSlotType.PIIVictoryDance) {
+                ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATEAFTERCOMBATDANCE {
+                    AfterCombatDance = (uint) item.m_templateID,
+                    PlayerGID = wizard.GameObjectID
+                }, false);
+            }
         }
 
         // If removedEffects is not null, the Wizard replaced an item with another item that has different effects.
@@ -276,6 +282,14 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         if (isTeleportEffect) {
             ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATETELEPORTEFFECT {
                 TeleportEffect = 0,
+                PlayerGID = wizard.GameObjectID
+            }, false);
+        }
+
+        var isVictoryDance = slotObj?.SlotType == EquipmentSlotType.PIIVictoryDance;
+        if (isVictoryDance) {
+            ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATEAFTERCOMBATDANCE {
+                AfterCombatDance = 0,
                 PlayerGID = wizard.GameObjectID
             }, false);
         }
