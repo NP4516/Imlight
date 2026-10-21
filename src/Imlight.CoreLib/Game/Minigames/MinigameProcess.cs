@@ -31,6 +31,10 @@
  * Utilizes Akka.NET actor system for process management.
  * A score settles once per round: the client opens a round, then reports one score.
  * A kiosk round grants its rewards before the window reply is sent.
+ * A silver chest round (a chest game context is set) is won by reporting at least the success score of the
+ * chest's minigame result, pays out of the chest loot, and ends the process right after the reply, because
+ * the chest game scripts never end themselves.
+ * A chest that refuses the game (another player holds it) makes the round pay nothing.
  * 
  * TODO:
  * 
@@ -64,23 +68,46 @@ internal sealed class MinigameProcess : Process {
 
     private bool IsMinigameActive { get; set; }
     private bool _roundOpen;
+    private bool _chestSettled;
+    private bool _chestRefused;
 
     private readonly byte _minigameIndex;
     private readonly MinigameInfo _minigameInfo;
+    private readonly ChestGameContext _chestGame;
     private readonly ObjectSerializer _serializer = new(
         Versionable: false,
         Behaviors: SerializerFlags.None
     );
 
     // ctor
-    public MinigameProcess(string processName, uint processId, byte minigameIndex) : base(processName, processId) {
+    public MinigameProcess(string processName, uint processId, byte minigameIndex, ChestGameContext chestGame) : base(processName, processId) {
         this._minigameIndex = minigameIndex;
+        this._chestGame = chestGame;
         this._minigameInfo = Imlight.CoreLib.Game.Minigames.MinigameConfig.GetMinigameInfo(minigameIndex);
 
         if (this._minigameInfo == null) {
             throw new Exception($"Minigame at index {minigameIndex} not found.");
         }
     }
+
+    protected override void PreStart() {
+        base.PreStart();
+
+        _chestGame?.ChestRef?.Tell(new ZONE_102_PROTOCOL.MSG_CHEST_GAME_STARTED { CharId = _chestGame.CharId }, Self);
+    }
+
+    protected override void PostStop() {
+        // A chest game that ended without a result (pre-game exit, disconnect, idle kill) frees the chest.
+        if (_chestGame is not null && !_chestSettled && !_chestRefused) {
+            _chestGame.ChestRef?.Tell(new ZONE_102_PROTOCOL.MSG_CHEST_GAME_ABORTED { CharId = _chestGame.CharId }, Self);
+        }
+
+        base.PostStop();
+    }
+
+    [MessageHandler(typeof(PROCESS_107_PROTOCOL.MSG_CHEST_GAME_REFUSED))]
+    private void ReceiveChestGameRefused(PROCESS_107_PROTOCOL.MSG_CHEST_GAME_REFUSED _)
+        => _chestRefused = true;
 
     [MessageHandler(typeof(IMessage))]
     internal void ReceiveElse(IMessage message) {
@@ -143,8 +170,41 @@ internal sealed class MinigameProcess : Process {
         SettleRound(score, character, leaderboard);
     }
 
-    private void SettleRound(int score, CHARACTER_103_PROTOCOL.MSG_CHARACTER character, ScoreTrackingList leaderboard)
-        => SettleKioskRound(score, character, leaderboard);
+    private void SettleRound(int score, CHARACTER_103_PROTOCOL.MSG_CHARACTER character, ScoreTrackingList leaderboard) {
+        if (_chestGame is not null) {
+            SettleChestRound(score, character, leaderboard);
+
+            return;
+        }
+
+        SettleKioskRound(score, character, leaderboard);
+    }
+
+    private bool IsChestGameWon(int score)
+        => score > 0 && score >= _chestGame.SuccessScore;
+
+    private void SettleChestRound(int score, CHARACTER_103_PROTOCOL.MSG_CHARACTER character, ScoreTrackingList leaderboard) {
+        var won = !_chestRefused && IsChestGameWon(score);
+        var reward = ChestRewardGranter.NoReward();
+        _chestSettled = true;
+
+        if (won) {
+            try {
+                reward = ChestRewardGranter.Grant(Sender, character, _chestGame.ChestTemplateId, _chestGame.LootTables);
+            } catch (Exception ex) {
+                Logger.Error("{Process} failed to grant the loot of chest {Template}: {Reason}",
+                    Logger.Args(ProcessName, _chestGame.ChestTemplateId, ex.GetBaseException().Message));
+            }
+        }
+
+        SendRewardsReply(score, leaderboard, reward);
+        if (!_chestRefused) {
+            _chestGame.ChestRef?.Tell(new ZONE_102_PROTOCOL.MSG_CHEST_GAME_RESULT { CharId = _chestGame.CharId, Won = won }, Self);
+        }
+
+        // The chest game scripts never end themselves after a report, so the session ends here.
+        KillProcess();
+    }
 
     private void SettleKioskRound(int score, CHARACTER_103_PROTOCOL.MSG_CHARACTER character, ScoreTrackingList leaderboard) {
         if (ExceedsScoreCap(score, character.Wizard)) {
