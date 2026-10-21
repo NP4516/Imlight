@@ -34,7 +34,7 @@
  * 
  * Created by: Phill030
  * Version: KALI 1.0
- * Last Updated: 17.10.2026
+ * Last Updated: 21.10.2026
  */
 using Akka.Actor;
 using Imcodec.CoreObject;
@@ -43,6 +43,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Packs;
+using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -54,6 +55,11 @@ using System.Text;
 namespace Imlight.CoreLib.Game.Services;
 
 internal class GiftingService(SessionActor sessionActor) : MessageService(sessionActor) {
+
+    private static readonly uint s_maxEmotes
+        = ConfigurationManager.Settings["Character.MaxEmotesAllowed"].AsUInt();
+    private static readonly uint s_maxTeleportEffects
+        = ConfigurationManager.Settings["Character.MaxTeleportsAllowed"].AsUInt();
 
     private static readonly CoreObjectSerializer s_coreObjectSerializer = new(behaviors: SerializerFlags.None);
 
@@ -130,18 +136,27 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
         var itemTemplate = CoreObjectFactory.GetCoreTemplate(giftRedemption.m_itemId);
 
         // Pre-check inventory space before modifying any state or removing the mail.
-        // Snacks, reagents, booster packs, gold, and lunari have separate bags/wallets and do not use backpack space.
-        // TODO: If the inventory is full, check the bank. If the bank is full, tell the player they don't have enough space.
-        if (itemTemplate is not BoosterPackTemplate &&
-            itemTemplate is not GoldAmountTemplate &&
-            itemTemplate is not LunariAmountTemplate &&
-            itemTemplate is not PetSnackItemTemplate &&
-            itemTemplate is not ReagentItemTemplate) {
-            if (!wizard.InventoryBehavior.HasInventorySpace(giftRedemption.m_itemCount)) {
-                Logger.Warning("Player {0} tried to redeem gift {1}, but inventory is full.",
-                    Logger.Args(wizard.CharId, message.MailId));
-                InformGameClient("Your backpack is full! Please make space before redeeming this gift.");
+        var requiredInventorySlots = CalculateRequiredInventorySlots(itemTemplate, (int) giftRedemption.m_itemCount);
+        if (requiredInventorySlots > 0 && !wizard.InventoryBehavior.HasInventorySpace(requiredInventorySlots)) {
+            Logger.Warning("Player {0} tried to redeem gift {1}, but inventory is full.",
+                Logger.Args(wizard.CharId, message.MailId));
+            InformGameClient("Your backpack is full! Please make space before redeeming this gift.");
 
+            SendRedeemFailure(message.MailId);
+            return;
+        }
+
+        // Check currency pouch limits before modifying state.
+        if (itemTemplate is GoldAmountTemplate goldPrecheck) {
+            if (wizard.GameStats.m_currentGold + (goldPrecheck.m_goldAmount * (int) giftRedemption.m_itemCount) > wizard.GameStats.m_baseGoldPouch) {
+                InformGameClient("You cannot carry any more gold! Please spend some before redeeming this gift.");
+                SendRedeemFailure(message.MailId);
+                return;
+            }
+        }
+        else if (itemTemplate is LunariAmountTemplate lunariPrecheck) {
+            if (wizard.GameStats.m_currentEventCurrency1 + (lunariPrecheck.m_lunariAmount * (int) giftRedemption.m_itemCount) > wizard.GameStats.m_baseEventCurrency1Pouch) {
+                InformGameClient("You cannot carry any more Lunari! Please spend some before redeeming this gift.");
                 SendRedeemFailure(message.MailId);
                 return;
             }
@@ -170,6 +185,11 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
                 });
                 break;
 
+            case TourneyTokensAmountTemplate:
+                // TODO: Tournament currency once implemented
+                break;
+
+            // Can pet snacks even be bought?
             case PetSnackItemTemplate petSnackTemplate:
                 if (!TryGrantPetSnack(wizard, petSnackTemplate.m_templateID, (int) giftRedemption.m_itemCount)) {
                     SendRedeemFailure(message.MailId);
@@ -184,34 +204,61 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
                 }
                 break;
 
+            case ItemBundleTemplate itemBundle:
+                for (uint i = 0; i < giftRedemption.m_itemCount; i++) {
+                    foreach (var bundleItemTemplateId in itemBundle.m_bundleItems) {
+                        var bundleSubTemplate = CoreObjectFactory.GetCoreTemplate(bundleItemTemplateId);
+                        if (bundleSubTemplate is PetSnackItemTemplate) {
+                            if (!TryGrantPetSnack(wizard, bundleItemTemplateId, 1)) {
+                                SendRedeemFailure(message.MailId);
+                                return;
+                            }
+                        }
+                        else if (bundleSubTemplate is ReagentItemTemplate) {
+                            if (!TryGrantReagent(wizard, bundleItemTemplateId, 1)) {
+                                SendRedeemFailure(message.MailId);
+                                return;
+                            }
+                        }
+                        else {
+                            if (!TryGrantItemOrPet(wizard, bundleItemTemplateId)) {
+                                SendRedeemFailure(message.MailId);
+                                return;
+                            }
+                        }
+                    }
+                }
+                break;
+
             default:
                 // Check if the item is emote or teleport effect
                 var customEmote = itemTemplate?.m_behaviors?.OfType<CustomEmoteBehaviorTemplate>().FirstOrDefault();
                 if (customEmote != null && customEmote.m_bitFieldNumber >= 0) {
                     if (customEmote.m_emoteType == CustomEmoteType.CE_Teleport) {
+                        if (wizard.CountTeleportEffectsUnlocked() >= s_maxTeleportEffects) {
+                            InformGameClient("You have already unlocked the maximum number of teleport effects.");
+                            SendRedeemFailure(message.MailId);
+                            return;
+                        }
+
                         wizard.UnlockCustomTeleportEffect(customEmote.m_bitFieldNumber);
                     }
-                    else {
+                    else if (customEmote.m_emoteType == CustomEmoteType.CE_Emote) {
+                        if (wizard.CountEmotesUnlocked() >= s_maxEmotes) {
+                            InformGameClient("You have already unlocked the maximum number of emotes.");
+                            SendRedeemFailure(message.MailId);
+                            return;
+                        }
+
                         wizard.UnlockCustomEmote(customEmote.m_bitFieldNumber);
                     }
                 }
 
                 for (uint i = 0; i < giftRedemption.m_itemCount; i++) {
-                    if (!wizard.AddItemToInventory(giftRedemption.m_itemId, out WizClientObjectItem itemCoreObject)) {
-                        Logger.Warning("Could not add item to inventory.");
+                    if (!TryGrantItemOrPet(wizard, giftRedemption.m_itemId)) {
                         SendRedeemFailure(message.MailId);
                         return;
                     }
-
-                    if (!s_coreObjectSerializer.Serialize(itemCoreObject, 24, out var serializedItem)) {
-                        Logger.Warning("Failed to serialize core object.");
-                        return;
-                    }
-
-                    SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
-                        GlobalID = wizard.GameObjectID,
-                        SerializedItem = serializedItem
-                    });
                 }
                 break;
         }
@@ -226,6 +273,63 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
         });
 
         SendMailData();
+    }
+
+    private static int CalculateRequiredInventorySlots(CoreTemplate itemTemplate, int count) {
+        if (itemTemplate is null ||
+            itemTemplate is BoosterPackTemplate ||
+            itemTemplate is GoldAmountTemplate ||
+            itemTemplate is LunariAmountTemplate ||
+            itemTemplate is TourneyTokensAmountTemplate ||
+            itemTemplate is PetSnackItemTemplate ||
+            itemTemplate is ReagentItemTemplate) {
+            return 0;
+        }
+
+        if (itemTemplate is ItemBundleTemplate itemBundle) {
+            var slotsPerBundle = 0;
+            foreach (var templateId in itemBundle.m_bundleItems) {
+                var subTemplate = CoreObjectFactory.GetCoreTemplate(templateId);
+                if (subTemplate is not PetSnackItemTemplate &&
+                    subTemplate is not ReagentItemTemplate &&
+                    subTemplate is not BoosterPackTemplate &&
+                    subTemplate is not GoldAmountTemplate &&
+                    subTemplate is not LunariAmountTemplate) {
+                    slotsPerBundle++;
+                }
+            }
+            return slotsPerBundle * (int) count;
+        }
+
+        return (int) count;
+    }
+
+    private bool TryGrantItemOrPet(Wizard wizard, ulong itemTemplateId) {
+        WizClientObjectItem itemCoreObject;
+        if (PetFactory.IsPetTemplate((uint) itemTemplateId)) {
+            if (!wizard.AddHatchedPetToInventory((uint) itemTemplateId, out itemCoreObject)) {
+                Logger.Warning("Could not add hatched pet {0} to inventory.", Logger.Args(itemTemplateId));
+                return false;
+            }
+        }
+        else {
+            if (!wizard.AddItemToInventory(itemTemplateId, out itemCoreObject)) {
+                Logger.Warning("Could not add item {0} to inventory.", Logger.Args(itemTemplateId));
+                return false;
+            }
+        }
+
+        if (!s_coreObjectSerializer.Serialize(itemCoreObject, 24, out var serializedItem)) {
+            Logger.Warning("Failed to serialize core object {0}.", Logger.Args(itemTemplateId));
+            return false;
+        }
+
+        SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+            GlobalID = wizard.GameObjectID,
+            SerializedItem = serializedItem
+        });
+
+        return true;
     }
 
     private void SendRedeemFailure(ulong mailId) {
@@ -304,7 +408,7 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
         return true;
     }
 
-    public static bool TryGetGiftRedemption(Mail mail, out CrownShopGiftRedemption? giftRedemption) {
+    public static bool TryGetGiftRedemption(Mail mail, out CrownShopGiftRedemption giftRedemption) {
         giftRedemption = null;
 
         if (string.IsNullOrEmpty(mail.m_messageData)) {
@@ -325,7 +429,7 @@ internal class GiftingService(SessionActor sessionActor) : MessageService(sessio
         }
         var wizard = GetActiveWizard();
 
-        account.GiftMailbox ??= new();
+        account.GiftMailbox ??= [];
         account.GiftMailbox.Add(message.Mail);
 
         SendToSocket(new GAME_5_PROTOCOL.MSG_NEW_MAIL {
