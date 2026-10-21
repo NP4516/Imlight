@@ -542,7 +542,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// </summary>
     public sealed class MSG_FORFEITPVPPARTICIPANT : IServerMessage {
 
-        public byte MessageOrder { get; } = 85;
+        public byte MessageOrder { get; } = 88;
         public byte ServiceID { get; } = 102;
 
         public ulong MatchId;
