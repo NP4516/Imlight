@@ -270,6 +270,7 @@ public static class WizardCollection {
             existingCharacter.EquipmentBehavior = wizard.EquipmentBehavior;
             existingCharacter.PetSnackBehavior = wizard.PetSnackBehavior;
             existingCharacter.AlchemyBehavior = wizard.AlchemyBehavior;
+            existingCharacter.WizardAvatar = wizard.WizardAvatar;
         });
     }
 
@@ -302,6 +303,15 @@ public static class WizardCollection {
             existingCharacter.MagicSchoolBehavior.EquippedTeleportEffect = wizard.MagicSchoolBehavior.EquippedTeleportEffect;
             existingCharacter.GameStats.m_equippedTeleportEffect = wizard.GameStats.m_equippedTeleportEffect;
         });
+    }
+
+    /// <summary>
+    /// Updates the character victory dance for a wizard.
+    /// </summary>
+    /// <param name="wizard">The wizard whose character victory dance is being updated.</param>
+    public static void UpdateCharacterVictoryDance(Wizard wizard) {
+        UpdateCharacter(wizard.CharId, existingCharacter =>
+            existingCharacter.WizardAvatar = wizard.WizardAvatar);
     }
 
     /// <summary>

@@ -543,6 +543,9 @@ public class Wizard {
         if (slot.SlotType == EquipmentSlotType.PIITeleportEffect) {
             EquipTeleportEffect(inventoryItem);
         }
+        if (slot.SlotType == EquipmentSlotType.PIIVictoryDance) {
+            EquipVictoryDance(inventoryItem);
+        }
 
         // Persistent save.
         WizardCollection.UpdateCharacterItems(this);
@@ -597,6 +600,9 @@ public class Wizard {
         }
         if (slot.SlotType == EquipmentSlotType.PIITeleportEffect) {
             UnequipTeleportEffect();
+        }
+        if (slot.SlotType == EquipmentSlotType.PIIVictoryDance) {
+            UnequipVictoryDance();
         }
 
         // Persistent save.
@@ -1293,6 +1299,7 @@ public class Wizard {
 
     internal void AfterDatabaseLoad() {
         AfterDatabaseLoadTeleportEffect();
+        AfterDatabaseLoadVictoryDance();
         AfterDatabaseLoadWizardGameStats();
         AfterDatabaseLoadSpellbookBehavior();
         AfterDatabaseloadMountOwnerBehavior();
@@ -1341,6 +1348,47 @@ public class Wizard {
         var templateId = teleportItem is not null ? (uint) teleportItem.m_templateID : 0u;
         MagicSchoolBehavior.EquippedTeleportEffect = templateId;
         GameStats.m_equippedTeleportEffect = templateId;
+    }
+
+    private void EquipVictoryDance(WizClientObjectItem item) {
+        var templateId = (uint) item.m_templateID;
+        if (WizardAvatar is not null) {
+            WizardAvatar.m_afterCombatVictoryDance = templateId;
+        }
+
+        if (HasInitializedGameObject && CoreObjectFactory.FindBehaviorInstance<WizardCharacterBehavior>(GameObject, out var avatarBehavior)) {
+            avatarBehavior.m_afterCombatVictoryDance = templateId;
+        }
+
+        WizardCollection.UpdateCharacterVictoryDance(this);
+    }
+
+    private void UnequipVictoryDance() {
+        if (WizardAvatar is not null) {
+            WizardAvatar.m_afterCombatVictoryDance = 0;
+        }
+
+        if (HasInitializedGameObject && CoreObjectFactory.FindBehaviorInstance<WizardCharacterBehavior>(GameObject, out var avatarBehavior)) {
+            avatarBehavior.m_afterCombatVictoryDance = 0;
+        }
+
+        WizardCollection.UpdateCharacterVictoryDance(this);
+    }
+
+    private void AfterDatabaseLoadVictoryDance() {
+        var idInSlot = EquipmentBehavior?.SlotList?.FirstOrDefault(s => s.SlotType == EquipmentSlotType.PIIVictoryDance)?.ItemId;
+        if (idInSlot is null) {
+            if (WizardAvatar is not null) {
+                WizardAvatar.m_afterCombatVictoryDance = 0;
+            }
+            return;
+        }
+
+        var danceItem = EquipmentBehavior.EquippedItems?.FirstOrDefault(i => i.m_globalID == idInSlot);
+        var templateId = danceItem is not null ? (uint) danceItem.m_templateID : 0u;
+        if (WizardAvatar is not null) {
+            WizardAvatar.m_afterCombatVictoryDance = templateId;
+        }
     }
 
     private void EquipMount(WizItemTemplate template, WizClientObjectItem item) {
