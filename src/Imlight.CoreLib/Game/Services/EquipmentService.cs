@@ -54,7 +54,10 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Effects;
+using Imlight.CoreLib.Game.Elixirs;
 using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Game.Requirements;
+using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.Results;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
@@ -145,6 +148,19 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
 
         // Check if the item is an elixir being used from inventory.
         var itemTemplate = ItemHelper.GetItemTemplate(item);
+        if (itemTemplate?.m_equipRequirements != null) {
+            var context = new GenericRequirementContext(
+                itemTemplate.m_equipRequirements,
+                SessionActor.ActorRef,
+                wizard.GetInitializedGameObject(),
+                wizard);
+
+            if (!RequirementDispatcher.EvaluateRequirements(itemTemplate.m_equipRequirements, context)) {
+                Logger.Warning("Player {0} tried to equip/use item {1} (template {2}) without meeting equip requirements.",
+                    Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), itemId, item.m_templateID));
+                return;
+            }
+        }
         var elixirTemplate = itemTemplate?.m_behaviors?.OfType<ElixirBehaviorTemplate>().FirstOrDefault();
         if (elixirTemplate is not null) {
             EquipElixirFromInventory(wizard, item, itemTemplate, elixirTemplate);
@@ -504,6 +520,36 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         uint durationSeconds = 0;
         if (!string.IsNullOrEmpty(elixirTemplate.m_expireTime)) {
             _ = uint.TryParse(elixirTemplate.m_expireTime, out durationSeconds);
+        }
+
+        // Case 0: Level Up or World Elixir
+        if (elixirTemplate is LevelUpElixirBehaviorTemplate levelUpElixir) {
+            if (levelUpElixir.m_setCharacterToLevel > 0 && wizard.MagicSchoolBehavior.Level >= levelUpElixir.m_setCharacterToLevel) {
+                Logger.Warning("Wizard {0} (level {1}) tried to use level-up elixir {2} with target level {3}.",
+                    Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), wizard.MagicSchoolBehavior.Level, item.m_templateID, levelUpElixir.m_setCharacterToLevel));
+                return;
+            }
+            if (!wizard.InventoryBehavior.RemoveItem(item.m_globalID, out _)) {
+                return;
+            }
+
+            WizardItemCollection.RemoveItem(wizard.CharId, item.m_globalID);
+            WizardCollection.UpdateCharacterItems(wizard);
+
+            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM {
+                GlobalID = wizard.GameObjectID,
+                ItemID = item.m_globalID
+            });
+
+            LevelUpElixirHelper.ApplyElixir(
+                wizard,
+                levelUpElixir,
+                SendToSocket,
+                (msg, selfless, target) => ZoneBroadcast(msg, selfless, target),
+                Teleport,
+                PlaySound
+            );
+            return;
         }
 
         // Case 1: Instant refill (duration == 0).

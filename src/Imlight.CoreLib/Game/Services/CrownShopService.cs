@@ -48,6 +48,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.CrownShop;
+using Imlight.CoreLib.Game.Elixirs;
 using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Game.Packs;
 using Imlight.CoreLib.Game.Results;
@@ -432,6 +433,19 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         var behaviors = wizItemTemplate.m_behaviors;
         if (behaviors is not null) {
             if (message.PurchaseElixirEquipNow > 0) {
+                var levelUpOrWorldElixir = behaviors.OfType<LevelUpElixirBehaviorTemplate>().FirstOrDefault();
+                if (levelUpOrWorldElixir is not null) {
+                    LevelUpElixirHelper.ApplyElixir(
+                        wizard,
+                        levelUpOrWorldElixir,
+                        SendToSocket,
+                        (msg, selfless, target) => ZoneBroadcast(msg, selfless, target),
+                        Teleport,
+                        PlaySound
+                    );
+                    return 0;
+                }
+
                 var elixirBehavior = behaviors.OfType<ElixirBehaviorTemplate>().FirstOrDefault();
                 if (elixirBehavior is not null) {
                     if (TryEquipElixir(wizard, message.Item, wizItemTemplate, elixirBehavior)) {
@@ -439,11 +453,6 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                     }
                 }
                 // If it couldn't be equipped (already 3 active, duplicate type, etc.), fall back to inventory.
-
-                if (behaviors.OfType<LevelUpElixirBehaviorTemplate>().Any()
-                    || behaviors.OfType<WorldElixirBehaviorTemplate>().Any()) {
-                    return 0;
-                }
             }
 
             // Check if the item is an emote or teleport effect
@@ -768,6 +777,8 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         }
 
         ZoneBroadcast(updateMsg, isSelfless: true, targets: ZoneBroadcastTarget.Players);
+
+        // We want to notify all players, that our wishlist got updated
         NotifyBuddiesOfWishlistUpdate(wizard, wishlistData, removedItems);
     }
 
@@ -780,6 +791,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
         var buddies = BuddyRelationshipCollection.GetBuddiesForWizard(owner.CharId);
         foreach (var buddy in buddies.Where(b => b is not null)) {
+            // only if they're online
             if (!TryGetOnlinePlayer(buddy.CharId, out var onlineBuddy)) {
                 continue;
             }
