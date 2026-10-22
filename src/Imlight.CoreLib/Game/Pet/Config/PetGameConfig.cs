@@ -37,14 +37,15 @@
  * Last Updated: 10/14/2026
  */
 
-using System;
 using System.Collections.Generic;
-using Imcodec.ObjectProperty;
+using System;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.ObjectProperty;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Progression;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Config;
 
 /// <summary>
 /// The pet games and their energy costs and track choices, as defined in PetGames.xml.

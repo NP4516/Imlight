@@ -39,12 +39,13 @@
 
 using System.Collections.Generic;
 using System.Linq;
-using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.ObjectProperty;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Progression;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Config;
 
 /// <summary>
 /// The pet feeding reward tiers, gold scaling and donation loot tables, as defined in PetFeedingRewardConfig.xml.

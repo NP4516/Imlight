@@ -35,14 +35,15 @@
  * Last Updated: 10/14/2026
  */
 
-using System;
 using System.Collections.Generic;
 using System.Linq;
+using System;
 using Imcodec.ObjectProperty;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Progression;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Config;
 
 /// <summary>
 /// The spells each pet combat talent can trigger, as defined in PetTalentsTriggeredSpells.xml.

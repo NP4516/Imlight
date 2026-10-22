@@ -39,14 +39,15 @@
  * Last Updated: 10/14/2026
  */
 
-using System;
 using System.Linq;
+using System;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Config;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Progression;
 
 /// <summary>
 /// Feeding a pet snacks for happiness.
@@ -96,7 +97,6 @@ internal static class PetFeeding {
 
         PetProgression.SetHappiness(pet, (uint) Math.Min(behavior.m_happiness + (ulong) perSnack * (uint) count, behavior.m_maximumHappiness));
 
-        // Persistent save.
         wizard.SavePet(pet);
 
         return new PetFeedResult(left, count);

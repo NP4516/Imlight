@@ -23,6 +23,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Utilities;
 using System.Text.Json.Serialization;
+using AdvancedPetsConfig = Imlight.CoreLib.Game.Pet.Config.AdvancedPetsConfig;
 
 namespace Imlight.CoreLib.Shared.Behaviors;
 
@@ -38,7 +39,7 @@ public class ServerPetOwnerBehavior : IClientBehaviorProvider<ClientPetOwnerBeha
 
     [JsonIgnore] public bool NoTransfer { get; set; } = false;
 
-    [JsonIgnore] public int EnergyTickIntervalInSeconds => Imlight.CoreLib.Game.Pet.AdvancedPetsConfig.EnergyTickInSeconds;
+    [JsonIgnore] public int EnergyTickIntervalInSeconds => AdvancedPetsConfig.EnergyTickInSeconds;
 
     public byte MaxSlots { get; set; }
     public uint LastEnergyTickEpoch { get; private set; }

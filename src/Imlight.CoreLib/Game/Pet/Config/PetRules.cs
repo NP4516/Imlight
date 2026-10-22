@@ -39,32 +39,33 @@
 
 using System;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Progression;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Config;
 
 /// <summary>
 /// The server-side pet rules, with their defaults.
 /// </summary>
 internal static class PetRules {
 
-    private const int DefaultStartingHappiness = 50;
-    private const int DefaultMaximumHappiness = 100;
-    private const int DefaultMemberXpMultiplier = 2;
+    private const int DEFAULT_STARTING_HAPPINESS = 50;
+    private const int DEFAULT_MAXIMUM_HAPPINESS = 100;
+    private const int DEFAULT_MEMBER_XP_MULTIPLIER = 2;
 
     /// <summary>
     /// The happiness a pet starts with.
     /// </summary>
-    internal static int StartingHappiness { get; } = Math.Max(0, ConfigurationManager.GetValue("Pets.StartingHappiness", DefaultStartingHappiness));
+    internal static int StartingHappiness { get; } = Math.Max(0, ConfigurationManager.GetValue("Pets.StartingHappiness", DEFAULT_STARTING_HAPPINESS));
 
     /// <summary>
     /// The most happiness a pet can have.
     /// </summary>
-    internal static int MaximumHappiness { get; } = Math.Max(1, ConfigurationManager.GetValue("Pets.MaximumHappiness", DefaultMaximumHappiness));
+    internal static int MaximumHappiness { get; } = Math.Max(1, ConfigurationManager.GetValue("Pets.MaximumHappiness", DEFAULT_MAXIMUM_HAPPINESS));
 
     /// <summary>
     /// The factor members get on the XP their pets earn.
     /// </summary>
-    internal static int MemberXpMultiplier { get; } = Math.Max(1, ConfigurationManager.GetValue("Pets.MemberXpMultiplier", DefaultMemberXpMultiplier));
+    internal static int MemberXpMultiplier { get; } = Math.Max(1, ConfigurationManager.GetValue("Pets.MemberXpMultiplier", DEFAULT_MEMBER_XP_MULTIPLIER));
 
     /// <summary>
     /// Gets the factor applied to XP from a source, for a wizard who counts as a member.

@@ -25,6 +25,8 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Cantrips;
 using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Game.Pet.Config;
+using Imlight.CoreLib.Game.Pet.Progression;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -354,7 +356,6 @@ internal class CommandModifyProtocol : CommandProtocol {
     }
 
     private void SendPetBehavior(WizClientObjectItem pet) {
-        // Persistent save.
         Context.Character.SavePet(pet);
 
         if (PetBehaviorUpdate.TryCreate(pet, out var update)) {

@@ -39,20 +39,21 @@
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
-using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.MessageLayer;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Game.Pet.Config;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Progression;
 
 /// <summary>
 /// Gives pets XP and tells the owner's client about it.
 /// </summary>
 internal static class PetXpAward {
 
-    private const byte ShowLevelUpWindow = 1;
+    private const byte SHOW_LEVEL_UP_WINDOW = 1;
 
     /// <summary>
     /// Adds XP to a pet, saves the pet, sends the client its new state and grants the loot of the levels reached.
@@ -70,7 +71,6 @@ internal static class PetXpAward {
             return result;
         }
 
-        // Persistent save.
         wizard.SavePet(pet);
 
         foreach (var message in CreateMessages(pet, result)) {
@@ -98,8 +98,7 @@ internal static class PetXpAward {
         var stats = PetProgression.ApplyStatMods(pet, mods);
         var xp = Give(session, playerObj, wizard, pet, stats.Xp, source);
         if (stats.Applied > 0 && !xp.Applied) {
-            // Persistent save.
-            wizard.SavePet(pet);
+                wizard.SavePet(pet);
 
             if (PetBehaviorUpdate.TryCreate(pet, out var update)) {
                 session.Tell(update, null);
@@ -126,7 +125,7 @@ internal static class PetXpAward {
                 NewTalent = levelUp.NewTalent,
                 NewDerbyPower = levelUp.NewDerbyPower,
                 NewJewel = 0,
-                Display = ShowLevelUpWindow
+                Display = SHOW_LEVEL_UP_WINDOW
             }));
         }
 

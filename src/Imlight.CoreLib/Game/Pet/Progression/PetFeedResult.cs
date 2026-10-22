@@ -16,17 +16,17 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
  * ========================================================================
- * PET XP SOURCE
+ * PET FEED RESULT
  * ========================================================================
  *
  * PURPOSE:
- * Names where a pet's XP came from, because some sources earn more than others.
+ * Describes what feeding a pet snack from the snack bag did.
  *
  * USAGE EXAMPLE:
- * PetProgression.AddXp(pet, 25, PetXpSource.Snack);
+ * var result = PetFeeding.Feed(wizard, pet, snackTemplateId, wholeStack: false);
+ * if (result.Fed) { ... }
  *
  * NOTE:
- * PetRules decides which sources get the member bonus.
  *
  * TODO:
  *
@@ -35,31 +35,26 @@
  * Last Updated: 10/14/2026
  */
 
-namespace Imlight.CoreLib.Game.Pet;
+using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Game.Pet.Config;
+
+namespace Imlight.CoreLib.Game.Pet.Progression;
 
 /// <summary>
-/// Where a grant of pet XP comes from.
+/// The outcome of feeding a pet from the snack bag.
 /// </summary>
-internal enum PetXpSource {
+/// <param name="Snack">The snack stack after the pet ate, which is empty once the last snack went. Null if nothing was eaten.</param>
+/// <param name="Eaten">How many snacks the pet ate.</param>
+internal sealed record PetFeedResult(ClientPetSnackItem Snack, int Eaten) {
 
     /// <summary>
-    /// A moderator command, which grants exactly the amount given.
+    /// The result of a feed that was refused.
     /// </summary>
-    Command,
+    internal static PetFeedResult None { get; } = new(null, 0);
 
     /// <summary>
-    /// A combat reward.
+    /// True if the pet ate.
     /// </summary>
-    Combat,
-
-    /// <summary>
-    /// The points a pet game awards.
-    /// </summary>
-    Game,
-
-    /// <summary>
-    /// A snack the pet ate.
-    /// </summary>
-    Snack
+    internal bool Fed => Eaten > 0;
 
 }

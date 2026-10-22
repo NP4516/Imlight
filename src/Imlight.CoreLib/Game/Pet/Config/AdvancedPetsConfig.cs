@@ -38,9 +38,10 @@
 using System;
 using Imcodec.ObjectProperty;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Progression;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Config;
 
 /// <summary>
 /// The pet energy interval and jewel level, as defined in Pets/AdvancedPetsConfig.xml.

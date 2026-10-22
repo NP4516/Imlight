@@ -37,8 +37,9 @@
  */
 
 using System.Collections.Generic;
+using Imlight.CoreLib.Game.Pet.Config;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Progression;
 
 /// <summary>
 /// A level a pet reached and what it earned there.

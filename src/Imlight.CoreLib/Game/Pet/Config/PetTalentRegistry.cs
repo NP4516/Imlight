@@ -37,15 +37,16 @@
  * Last Updated: 10/14/2026
  */
 
-using System;
 using System.Collections.Generic;
+using System;
 using Imcodec.Cryptography;
-using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.ObjectProperty;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Progression;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Config;
 
 /// <summary>
 /// What a pet talent template does.
@@ -90,7 +91,7 @@ internal sealed record PetTalentInfo(uint Id, string Name, PetTalentKind Kind, P
 /// </summary>
 internal sealed class PetTalentRegistry : RootDirectoryResourceSingleton<PetTalentRegistry> {
 
-    private const string PowerDirectory = "TalentData/PetPowers/";
+    private const string POWER_DIRECTORY = "TalentData/PetPowers/";
 
     protected override string DirectoryName => "TalentData/";
 
@@ -116,7 +117,7 @@ internal sealed class PetTalentRegistry : RootDirectoryResourceSingleton<PetTale
             var name = template.m_talentName.ToString();
             var kind = template switch {
                 PetDerbyTalentTemplate => PetTalentKind.Derby,
-                _ when fileRecord.FileName.StartsWith(PowerDirectory, StringComparison.Ordinal) => PetTalentKind.Power,
+                _ when fileRecord.FileName.StartsWith(POWER_DIRECTORY, StringComparison.Ordinal) => PetTalentKind.Power,
                 _ => PetTalentKind.Combat
             };
             var info = new PetTalentInfo(StringHash.Compute(name), name, kind, template);

@@ -42,16 +42,17 @@
  * Last Updated: 10/14/2026
  */
 
-using System;
 using System.Collections.Generic;
 using System.Linq;
+using System;
 using Imcodec.Cryptography;
 using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Config;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Progression;
 
 /// <summary>
 /// Changes the progression state in a pet item's behavior.
@@ -192,30 +193,10 @@ internal static class PetProgression {
         if (changes.Count > 0 && TryGetPet(pet, out var behavior, out _) && behavior.m_level > 0) {
             EnsureInitialized(pet);
             for (var index = 0; index < changes.Count; index++) {
-                var change = changes[index];
-                if (change.m_change <= 0) {
-                    if (change.m_change < 0) {
-                        Logger.Warning("The stat change {Stat} of {Change} is negative, so it is skipped.", Logger.Args(change.m_name.ToString(), change.m_change));
-                    }
-
-                    continue;
-                }
-
-                var current = behavior.m_currentStats?.FirstOrDefault(stat => stat.m_name == change.m_name);
-                var maximum = behavior.m_maxStats?.FirstOrDefault(stat => stat.m_name == change.m_name);
-                if (current is null || maximum is null) {
-                    Logger.Warning("The pet {PetId} has no stat {Stat}, so its {Change} points are not applied.", Logger.Args(pet.m_globalID.Full, change.m_name.ToString(), change.m_change));
-                }
-
-                var room = current is null || maximum is null ? 0 : Math.Max(0, maximum.m_value - current.m_value);
-                var points = Math.Min(change.m_change, room);
-                if (points > 0) {
-                    current.m_value += points;
-                }
-
+                var points = ApplyStatChange(pet, behavior, changes[index]);
                 taken[index] = (uint) points;
                 applied += (uint) points;
-                overflow += (uint) (change.m_change - points);
+                overflow += (uint) (changes[index].m_change - points);
             }
         }
 
@@ -320,6 +301,29 @@ internal static class PetProgression {
         genes.AddRange(rest.Take(poolIds.Count - genes.Count));
 
         return genes;
+    }
+
+    private static int ApplyStatChange(WizClientObjectItem pet, ClientPetItemBehavior behavior, PetStatModification change) {
+        if (change.m_change <= 0) {
+            if (change.m_change < 0) {
+                Logger.Warning("The stat change {Stat} of {Change} is negative, so it is skipped.", Logger.Args(change.m_name.ToString(), change.m_change));
+            }
+
+            return 0;
+        }
+
+        var current = behavior.m_currentStats?.FirstOrDefault(stat => stat.m_name == change.m_name);
+        var maximum = behavior.m_maxStats?.FirstOrDefault(stat => stat.m_name == change.m_name);
+        if (current is null || maximum is null) {
+            Logger.Warning("The pet {PetId} has no stat {Stat}, so its {Change} points are not applied.", Logger.Args(pet.m_globalID.Full, change.m_name.ToString(), change.m_change));
+
+            return 0;
+        }
+
+        var points = Math.Min(change.m_change, Math.Max(0, maximum.m_value - current.m_value));
+        current.m_value += points;
+
+        return points;
     }
 
     private static List<uint> ResolveIds(IEnumerable<ByteString> names) {

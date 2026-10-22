@@ -40,19 +40,20 @@ using System.Buffers.Binary;
 using Imcodec.Cryptography;
 using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
-using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.ObjectProperty;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Config;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Progression;
 
 /// <summary>
 /// Creates MSG_PETUPDATEBEHAVIOR for a pet item.
 /// </summary>
 internal static class PetBehaviorUpdate {
 
-    private const PropertyFlags TransmitMask = PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit;
+    private const PropertyFlags TRANSMIT_MASK = PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit;
 
     private static readonly uint s_wireClassHash = StringHash.Compute("class PetItemBehavior");
 
@@ -69,7 +70,7 @@ internal static class PetBehaviorUpdate {
         }
 
         var serializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.None);
-        if (!serializer.Serialize(behavior, TransmitMask, out var blob)) {
+        if (!serializer.Serialize(behavior, TRANSMIT_MASK, out var blob)) {
             Logger.Error("Failed to serialize the pet item behavior of pet {PetId}.", Logger.Args(pet.m_globalID.Full));
 
             return false;

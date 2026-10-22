@@ -32,6 +32,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imcodec.Types;
 using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Game.Pet.Progression;
 
 namespace Imlight.CoreLib.WizardData.Models.Player;
 
@@ -487,7 +488,6 @@ public class Wizard {
             return false;
         }
 
-        // Persistent save.
         return SavePet(pet);
     }
 

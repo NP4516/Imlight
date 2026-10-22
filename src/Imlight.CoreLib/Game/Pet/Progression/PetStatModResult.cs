@@ -41,8 +41,9 @@
 
 using System;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Game.Pet.Config;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Progression;
 
 /// <summary>
 /// The outcome of applying a set of stat changes to a pet.

@@ -40,18 +40,19 @@
  * Last Updated: 10/14/2026
  */
 
-using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.DropTables;
+using Imlight.CoreLib.Game.Pet.Config;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Progression;
 
 /// <summary>
 /// Pet XP from winning a duel.
@@ -71,21 +72,18 @@ internal static class PetCombatXp {
         }
 
         List<string> tables = [];
-        foreach (var talentId in behavior.m_expressedTalents ?? []) {
-            if (!PetTalentRegistry.TryGetById(talentId, out var talent) || talent.Template is not PetTalentTemplate template) {
-                continue;
-            }
-
-            foreach (var name in template.m_effectList.OfType<CombatPetXPEffectInfo>().Select(effect => effect.m_lootTableName.ToString())) {
-                if (string.IsNullOrWhiteSpace(name) || tables.Contains(name, StringComparer.Ordinal)) {
-                    continue;
-                }
-
-                if (DropTableCollection.GetDropTable(name) is not null) {
-                    tables.Add(name);
-                } else if (s_missingTables.TryAdd(name, 0)) {
-                    Logger.Warning("The pet combat XP loot table {Table} is not in SpiralDB, so it is skipped.", Logger.Args(name));
-                }
+        var names = (behavior.m_expressedTalents ?? [])
+            .Select(talentId => PetTalentRegistry.TryGetById(talentId, out var talent) ? talent.Template as PetTalentTemplate : null)
+            .Where(template => template is not null)
+            .SelectMany(template => template.m_effectList.OfType<CombatPetXPEffectInfo>())
+            .Select(effect => effect.m_lootTableName.ToString())
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal);
+        foreach (var name in names) {
+            if (DropTableCollection.GetDropTable(name) is not null) {
+                tables.Add(name);
+            } else if (s_missingTables.TryAdd(name, 0)) {
+                Logger.Warning("The pet combat XP loot table {Table} is not in SpiralDB, so it is skipped.", Logger.Args(name));
             }
         }
 

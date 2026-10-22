@@ -42,7 +42,7 @@ using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
-using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Game.Pet.Progression;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
@@ -51,12 +51,13 @@ using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
+using AdvancedPetsConfig = Imlight.CoreLib.Game.Pet.Config.AdvancedPetsConfig;
 
 namespace Imlight.CoreLib.Game.Services;
 
 internal class PetService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private static int EnergyTickIntervalInSeconds => Imlight.CoreLib.Game.Pet.AdvancedPetsConfig.EnergyTickInSeconds;
+    private static int EnergyTickIntervalInSeconds => AdvancedPetsConfig.EnergyTickInSeconds;
     private const int PET_ENERGY_TICK_DELAY = 2;
 
     protected static Props Props(SessionActor parentActor)
@@ -246,7 +247,6 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         wizard.PetOwnerBehavior.HatchEgg(egg);
         TellOtherServices(new CHARACTER_103_PROTOCOL.MSG_BADGEEVENT { Kind = BadgeEventKind.Recheck });
 
-        // Persistent save.
         WizardCollection.UpdateCharacterPetOwnerBehavior(wizard);
 
         SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHINGSLOT {

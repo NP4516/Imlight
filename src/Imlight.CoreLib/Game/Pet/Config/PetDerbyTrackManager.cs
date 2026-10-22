@@ -36,16 +36,17 @@
  * Last Updated: 10/14/2026
  */
 
-using System;
 using System.Collections.Generic;
 using System.Linq;
-using Imcodec.ObjectProperty;
+using System;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.ObjectProperty;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Progression;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.Pet;
+namespace Imlight.CoreLib.Game.Pet.Config;
 
 /// <summary>
 /// The pet derby race tuning and the list of derby tracks, as defined in PetDerbyTracks.xml.
