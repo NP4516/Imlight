@@ -36,6 +36,7 @@
  * Last Updated: 3/18/2025
  */
 
+using System;
 using System.Linq;
 using Imlight.Common;
 using Akka.Actor;
@@ -58,6 +59,69 @@ internal class CommandService(SessionActor sessionActor) : MessageService(sessio
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new CommandService(parentActor));
+
+    protected override void PreStart() {
+        AgentBridge.Register(Self, Context.System);
+        base.PreStart();
+    }
+
+    protected override void PostStop() {
+        AgentBridge.Unregister(Self);
+        base.PostStop();
+    }
+
+    [InternalMessageHandler(typeof(AgentDescribe))]
+    private void ReceiveAgentDescribe(AgentDescribe message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null || GetActiveGameObject() is null) {
+            message.Reply.TrySetResult(null);
+            return;
+        }
+
+        message.Reply.TrySetResult(new System.Collections.Generic.Dictionary<string, object> {
+            ["name"] = wizard.PlayerNameBehavior?.GetWizardName() ?? "",
+            ["charId"] = wizard.CharId.ToString(),
+            ["account"] = GetActiveAccount()?.Username ?? "",
+            ["zone"] = wizard.Zone ?? "",
+            ["level"] = wizard.MagicSchoolBehavior?.Level ?? 0,
+        });
+    }
+
+    [InternalMessageHandler(typeof(AgentGrab))]
+    private void ReceiveAgentGrab(AgentGrab message) {
+        var wizard = GetActiveWizard();
+        var coreObject = GetActiveGameObject();
+        if (wizard is null || coreObject is null) {
+            message.Reply.TrySetResult(null);
+            return;
+        }
+
+        message.Reply.TrySetResult(new LivePlayer(wizard.PlayerNameBehavior?.GetWizardName() ?? "", wizard,
+            GetActiveAccount(), coreObject, SessionActor.ActorRef, Self));
+    }
+
+    [InternalMessageHandler(typeof(AgentRunCommand))]
+    private void ReceiveAgentRunCommand(AgentRunCommand message) {
+        if (GetActiveWizard() is null || GetActiveGameObject() is null || GetActiveAccount() is null) {
+            message.Output.Enqueue("[bridge] That player is not in the game.");
+            return;
+        }
+
+        var capture = Context.ActorOf(Akka.Actor.Props.Create(() => new AgentCaptureActor(SessionActor.ActorRef, message.Output)));
+        Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromSeconds(30), capture, PoisonPill.Instance, Self);
+
+        _dispatcherRef.Tell(new SERVER_100_PROTOCOL.MSG_COMMAND() {
+            CommandText = message.Text,
+            ActorRef = capture,
+            CoreObject = GetActiveGameObject(),
+            Wizard = GetActiveWizard(),
+            Account = GetActiveAccount(),
+            ZoneActor = SessionActor.GetZoneActor(),
+            ServerActor = SessionActor.ServerRef,
+            SelectedWizard = _selectedWizard,
+            SelectedAccount = _selectedAccount
+        });
+    }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_COMMAND))]
     private void ReceiveCommand(GAME_5_PROTOCOL.MSG_COMMAND message) {

@@ -108,6 +108,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     public bool NoTransfer { get; set; } = false;
     public ITimerScheduler Timers { get; set; }
     public Duel Duel { get; private set; }
+    internal bool IsDuelActive => _isActive;
+    internal bool IsAwaitingMoves => _awaitingCombatMoves;
     public Combat.CombatResolver CombatResolver { get; private set; }
     public CombatDuelSubCircle[] SubCircles { get; private set; }
     public CombatDuelSubCircle[] ActiveSubCircles => [.. SubCircles.Where(x => x.Occupied)];
