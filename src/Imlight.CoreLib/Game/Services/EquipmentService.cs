@@ -222,6 +222,12 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
                 DismissPetEntity();
             }
         }
+        else if (equippedSlot == EquipmentSlotType.PIIVictoryDance) {
+            ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATEAFTERCOMBATDANCE {
+                AfterCombatDance = (uint) item.m_templateID,
+                PlayerGID = wizard.GameObjectID
+            }, false);
+        }
 
         // If removedEffects is not null, the Wizard replaced an item with another item that has different effects.
         // We need to remove the old effects from the client.
@@ -326,6 +332,14 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
 
         if (isPet) {
             DismissPetEntity();
+        }
+
+        var isVictoryDance = slotObj?.SlotType == EquipmentSlotType.PIIVictoryDance;
+        if (isVictoryDance) {
+            ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATEAFTERCOMBATDANCE {
+                AfterCombatDance = 0,
+                PlayerGID = wizard.GameObjectID
+            }, false);
         }
     }
 
