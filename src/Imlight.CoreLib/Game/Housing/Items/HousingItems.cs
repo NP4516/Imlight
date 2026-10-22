@@ -35,11 +35,13 @@
  *   carries the Housing adjective (ClientUtility get_item_category_name 0x140463250, FurniturePageWindow::IsFurnitureItem
  *   0x140fa56d0), and it empties a blob entry whose template has a seed behavior (BaseClientHousingBlobStrategy::CreateObject
  *   0x1422170f0). Which folder a template lives in is not part of it.
+ * - A pet or a mount is furniture by its behavior, with or without the adjective.
  * - Plants, wallpapers and seeds go through their own messages, so they are not furniture.
  * - Furniture of a family that is declared but not enabled is refused without blame, because the client offers it.
  * - A picked up object gets back the global id its backpack item had, unless something holds that id by now.
  *
  * TODO:
+ * - Is the client's rule for offering a pet or a mount for placing the behavior, as it is here? No capture shows it.
  *
  * Created by: Jay
  * Version: KALI 1.0
@@ -99,7 +101,15 @@ internal static class HousingItems {
     /// <param name="template">An item template.</param>
     /// <returns><see cref="HousingItemKind.Furniture"/> when the template passes.</returns>
     internal static HousingItemKind Classify(WizItemTemplate template) {
-        if (template is null || template.m_nObjectType != ObjectType.OT_OBJECT) {
+        if (template is null) {
+            return HousingItemKind.NotFurniture;
+        }
+
+        if (KeepsItem(template) && !IsSeed(template)) {
+            return HousingItemKind.Furniture;
+        }
+
+        if (template.m_nObjectType != ObjectType.OT_OBJECT) {
             return HousingItemKind.NotFurniture;
         }
 
@@ -109,10 +119,16 @@ internal static class HousingItems {
             return HousingItemKind.NotFurniture;
         }
 
-        return (template.m_behaviors ?? []).OfType<SeedBehaviorTemplate>().Any()
-            ? HousingItemKind.NotFurniture
-            : HousingItemKind.Furniture;
+        return IsSeed(template) ? HousingItemKind.NotFurniture : HousingItemKind.Furniture;
     }
+
+    /// <summary>
+    /// Checks whether a template's items carry state that a placed object has to keep, as a pet or a mount does.
+    /// </summary>
+    /// <param name="template">An item template.</param>
+    /// <returns><c>true</c> when one of the template's families keeps the item.</returns>
+    internal static bool KeepsItem(WizItemTemplate template)
+        => HousingFamilies.Of(template).Any(family => family.KeepsItem);
 
     /// <summary>
     /// Finds the template of an item and decides whether the server places it.
@@ -200,6 +216,9 @@ internal static class HousingItems {
                 Logger.Args(itemId, charId, exception.Message));
         }
     }
+
+    private static bool IsSeed(WizItemTemplate template)
+        => (template.m_behaviors ?? []).OfType<SeedBehaviorTemplate>().Any();
 
     private static bool IsGidInUse(Wizard wizard, ulong itemGid) {
         if (wizard.InventoryBehavior.GetItem(itemGid) is not null) {

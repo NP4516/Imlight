@@ -181,6 +181,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
 
         var placed = new PlacedItem {
             ItemGid = item.m_globalID,
+            Stored = HousingItems.KeepsItem(template) ? item : null,
             TemplateId = templateId,
             X = message.LocX,
             Y = message.LocY,
@@ -341,7 +342,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
                 return;
             }
 
-            item = HousingItems.CreateItem(wizard, placedItem.TemplateId, placedItem.ItemGid);
+            item = placedItem.Stored ?? HousingItems.CreateItem(wizard, placedItem.TemplateId, placedItem.ItemGid);
             if (item is null || !wizard.InventoryBehavior.AddItem(item)) {
                 RefusePickUp(house);
 

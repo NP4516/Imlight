@@ -98,6 +98,11 @@ public sealed record PlacedItem {
     /// </summary>
     public ulong ItemGid { get; init; }
 
+    /// <summary>
+    /// The backpack item itself, kept for objects whose item has state a template cannot rebuild, such as a pet.
+    /// </summary>
+    public WizClientObjectItem Stored { get; init; }
+
     public uint TemplateId { get; init; }
     public float X { get; init; }
     public float Y { get; init; }

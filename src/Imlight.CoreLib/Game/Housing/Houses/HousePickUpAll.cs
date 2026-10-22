@@ -94,7 +94,8 @@ internal static class HousePickUpAll {
         foreach (var item in house.Snapshot().Slots) {
             if (item is not null && !kept.Contains(item.Id)
                 && HousingItems.Check(item.TemplateId, out _, out var family) == HousingPlacement.Allowed
-                && family.AtticSubType is not null) {
+                && family.AtticSubType is not null
+                && !family.KeepsItem) {
                 movable.Add((item, family));
             }
         }

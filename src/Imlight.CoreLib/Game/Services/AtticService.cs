@@ -147,7 +147,7 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
-        if (placement == HousingPlacement.NotEnabled || family.AtticSubType is null) {
+        if (placement == HousingPlacement.NotEnabled || family.AtticSubType is null || family.KeepsItem) {
             Logger.Information("Character {CharId} tried to put item {ItemId} of the {Family} family in the attic, which is not supported.",
                 Logger.Args(wizard.CharId, message.ItemID, family.Id));
             InformGameClient("That kind of object cannot be put in the attic yet.");

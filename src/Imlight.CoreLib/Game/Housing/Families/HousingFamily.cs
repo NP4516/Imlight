@@ -39,6 +39,9 @@
  *   BlobSubType is the subtype of the family's live entries where BaseClientHousingBlobStrategy::CreateObject
  *   (0x1422170f0) names one; it is null where the client names none.
  * - Enabled says what the server supports yet, never what exists.
+ * - KeepsItem marks the families whose items carry state (a pet's stats, name and dyes, a mount's dyes): the house stores
+ *   the whole item with the placed object and gives that same item back on pick up. Their attic is not supported, because
+ *   the attic stores a template only.
  *
  * TODO:
  * - Only the names tie InteractableBehavior to the Interact subtype and AquariumBehavior to FishAttic. Is that right?
@@ -67,12 +70,14 @@ namespace Imlight.CoreLib.Game.Housing.Families;
 /// <param name="AtticSubType">The subtype of its attic blob, or <c>null</c> when the client has none for it.</param>
 /// <param name="Triggers">The types that put a template in the family.</param>
 /// <param name="Enabled">Whether the server supports the family yet.</param>
+/// <param name="KeepsItem">Whether a placed object keeps its own item record, because the item has state a template cannot rebuild.</param>
 internal sealed record HousingFamily(
     string Id,
     string BlobSubType,
     string AtticSubType,
     IReadOnlyList<Type> Triggers,
-    bool Enabled) {
+    bool Enabled,
+    bool KeepsItem = false) {
 
     /// <summary>
     /// Checks whether any of the given types puts a template in this family.
@@ -109,8 +114,8 @@ internal static class HousingFamilies {
         Plain,
         CastleBlock,
         Declare("ObjectState", null, null, [typeof(ObjectStateBehaviorTemplate)]),
-        Declare("Pet", null, "PetAttic", [typeof(PetItemBehaviorTemplate)]),
-        Declare("Mount", null, "MountAttic", [typeof(RidableBehaviorTemplate), typeof(MountItemBehaviorTemplate)]),
+        Declare("Pet", null, "PetAttic", [typeof(PetItemBehaviorTemplate)], enabled: true, keepsItem: true),
+        Declare("Mount", null, "MountAttic", [typeof(RidableBehaviorTemplate), typeof(MountItemBehaviorTemplate)], enabled: true, keepsItem: true),
         Declare("Interact", "Interact", "InteractAttic", [typeof(InteractableBehaviorTemplate)]),
         Declare("IntMusic", "IntMusic", "IntMusicAttic", [typeof(InteractiveMusicBehaviorTemplate)]),
         Declare("Music", null, "MusicAttic", [typeof(HousingMusicBehaviorTemplate), typeof(HousingMusicPlayerBehavior)]),
@@ -148,8 +153,9 @@ internal static class HousingFamilies {
     internal static IReadOnlyList<HousingFamily> Of(WizItemTemplate template)
         => s_known.GetOrAdd(template.m_templateID, _ => Resolve(template));
 
-    private static HousingFamily Declare(string id, string blobSubType, string atticSubType, IReadOnlyList<Type> triggers)
-        => new(id, blobSubType, atticSubType, triggers, false);
+    private static HousingFamily Declare(
+        string id, string blobSubType, string atticSubType, IReadOnlyList<Type> triggers, bool enabled = false, bool keepsItem = false)
+        => new(id, blobSubType, atticSubType, triggers, enabled, keepsItem);
 
     private static IReadOnlyList<HousingFamily> Resolve(WizItemTemplate template) {
         var behaviorTypes = (template.m_behaviors ?? [])
