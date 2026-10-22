@@ -39,7 +39,7 @@
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/22/2026
  */
 
 using System.Collections.Generic;
@@ -281,16 +281,17 @@ internal static class PetProgression {
     }
 
     /// <summary>
-    /// Rolls a pet's genes: the guaranteed talents first, then the rest of the pool in random order.
+    /// Rolls a pet's genes: the guaranteed talents first, then the inherited ones, then the rest of the pool in random order.
     /// </summary>
     /// <param name="guaranteed">The guaranteed talent names, which may lie outside the pool.</param>
     /// <param name="pool">The pool of talent names. Its size is the number of genes.</param>
     /// <param name="random">The random source.</param>
+    /// <param name="inherited">The talent ids passed on by parents, in the order they should be expressed; they may lie outside the pool.</param>
     /// <returns>The talent ids, without duplicates, in expression order.</returns>
-    internal static List<uint> RollGenes(IEnumerable<ByteString> guaranteed, IEnumerable<ByteString> pool, Random random) {
+    internal static List<uint> RollGenes(IEnumerable<ByteString> guaranteed, IEnumerable<ByteString> pool, Random random, IEnumerable<uint> inherited = null) {
         var poolIds = ResolveIds(pool);
         var genes = new List<uint>(poolIds.Count);
-        foreach (var id in ResolveIds(guaranteed)) {
+        foreach (var id in ResolveIds(guaranteed).Concat(inherited ?? [])) {
             if (genes.Count < poolIds.Count && !genes.Contains(id)) {
                 genes.Add(id);
             }

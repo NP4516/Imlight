@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/22/2026
  */
 
 using System;
@@ -132,6 +132,24 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         }
 
         HatchEgg(wizard, egg);
+    }
+
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_PETEGGLAID))]
+    private void ReceivePetEggLaid(CHARACTER_103_PROTOCOL.MSG_PETEGGLAID message) {
+        var egg = GetActiveWizard().PetOwnerBehavior.MorphingSlots
+            ?.FirstOrDefault(e => e.m_globalID == message.EggGlobalId);
+        if (egg is null) {
+            Logger.Warning("The laid egg {EggId} is not in a morphing slot.", Logger.Args(message.EggGlobalId));
+
+            return;
+        }
+
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHINGSLOT {
+            GlobalID = egg.m_globalID,
+            Removed = 0,
+            ExpireTimeCount = (uint) egg.m_timeFinished
+        });
+        StartEggTimer(egg);
     }
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_HATCHEGGNOW))]

@@ -37,9 +37,10 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 10/22/2026
  */
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Xml;
@@ -132,6 +133,18 @@ public class WizardNameBank : RootSingleResourceSingleton<WizardNameBank>, IMemo
         var lastName = GetEnglishNamePart(PetLastNameTableName, last, PetLocaleTable);
 
         return string.IsNullOrEmpty(firstName) ? lastName : $"{firstName} {lastName}";
+    }
+
+    /// <summary>
+    /// Picks a random pet name from the pet name tables.
+    /// </summary>
+    /// <param name="random">The random source.</param>
+    /// <returns>The packed name keys, with no middle part.</returns>
+    public static uint CreateRandomPetName(Random random) {
+        var first = random.Next(Math.Max(1, GetTableSize(PetFirstNameTableName)));
+        var last = random.Next(Math.Max(1, GetTableSize(PetLastNameTableName)));
+
+        return (uint) ((first << 16) | last);
     }
 
     private static int GetTableSize(string tableName)

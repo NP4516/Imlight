@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/22/2026
  */
 
 using System;
@@ -68,6 +68,7 @@ public class GameServiceFactory : ServiceFactory {
         typeof(CantripService),
         typeof(TrainService),
         typeof(PetService),
+        typeof(HatchingService),
         typeof(MinigameService),
         typeof(FriendsService),
         typeof(GroupService),

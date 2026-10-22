@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty, Jeff
  * Version: KALI 1.0
- * Last Updated: 10/10/2026
+ * Last Updated: 10/22/2026
  */
 
 using System;
@@ -42,6 +42,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.CoreObject;
 using Imcodec.Cryptography;
+using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
@@ -224,6 +225,9 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY))]
     private void ReceiveStartSigilEntry(ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY message) {
         if (_transferGate.IsQueued || _activeSigilEntry is not null) {
+            // A minigame sigil already seated the player, so it gets the seat back.
+            message.SigilRef?.Tell(new ZONE_102_PROTOCOL.MSG_SIGILOCCUPANTLEFT { CharId = GetActiveWizard().CharId });
+
             return;
         }
 
@@ -239,20 +243,31 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         _activeSigilEntry = message;
 
         SnapPlayerToSigilFace(message);
-
-        SendToSocket(new WIZARD_12_PROTOCOL.MSG_MINIGAMETIMERSTART {
-            Time = SIGIL_COUNTDOWN_SECONDS,
-            SigilGID = message.SigilGID,
-            Teleport = 0,
-        });
-
-        Timers.StartSingleTimer(
-            SIGIL_ENTER_TIMER_KEY,
-            new ZONE_102_PROTOCOL.MSG_SIGILENTER(),
-            TimeSpan.FromSeconds(SIGIL_COUNTDOWN_SECONDS));
+        StartSigilCountdown(message);
 
         Logger.Information("Dungeon sigil countdown started -> '{0}'",
             Logger.Args(message.DestinationZone));
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_SIGILPARTNERJOINED))]
+    private void ReceiveSigilPartnerJoined(ZONE_102_PROTOCOL.MSG_SIGILPARTNERJOINED message) {
+        if (_activeSigilEntry?.SigilRef is null) {
+            return;
+        }
+
+        _activeSigilEntry.PartnerCharId = message.PartnerCharId;
+        _activeSigilEntry.RoomOwnerCharId = message.RoomOwnerCharId;
+        StartSigilCountdown(_activeSigilEntry);
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_SIGILPARTNERLEFT))]
+    private void ReceiveSigilPartnerLeft(ZONE_102_PROTOCOL.MSG_SIGILPARTNERLEFT message) {
+        if (_activeSigilEntry?.SigilRef is null) {
+            return;
+        }
+
+        _activeSigilEntry.PartnerCharId = 0;
+        _activeSigilEntry.RoomOwnerCharId = 0;
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_SIGILENTER))]
@@ -282,17 +297,29 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         var entry = _activeSigilEntry;
         _activeSigilEntry = null;
+        var roomOwner = entry.RoomOwnerCharId != 0 ? entry.RoomOwnerCharId : wizard.CharId;
+        if (entry.SigilRef is not null) {
+            entry.SigilRef.Tell(new ZONE_102_PROTOCOL.MSG_SIGILOCCUPANTLEFT { CharId = wizard.CharId, Entered = true });
+            TellOtherServices(new ZONE_102_PROTOCOL.MSG_SIGILROOMENTERING {
+                DestinationZone = entry.DestinationZone,
+                RoomOwnerCharId = roomOwner,
+                PartnerCharId = entry.PartnerCharId,
+                ReturnZone = wizard.Zone,
+                ReturnLocation = entry.SigilLoc,
+            });
+        }
 
         Logger.Information("Entering dungeon instance '{0}' (owner {1})",
-            Logger.Args(entry.DestinationZone, wizard.CharId));
+            Logger.Args(entry.DestinationZone, roomOwner));
 
+        // A shared instance is not reset: the other player may already be in it.
         var tpMsg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
             DestinationZone = entry.DestinationZone,
             DestinationLocation = entry.DestinationLoc,
             SendToClient = true,
             IsPrivate = true,
-            OwnerCharId = wizard.CharId,
-            ResetInstance = true,
+            OwnerCharId = roomOwner,
+            ResetInstance = entry.PartnerCharId == 0,
         };
 
         SendTeleportEffects();
@@ -1006,6 +1033,31 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         ReceiveZoneBroadcast(broadcastWrapper);
     }
 
+    private void StartSigilCountdown(ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY entry) {
+        var seconds = entry.CountdownSeconds > 0 ? entry.CountdownSeconds : SIGIL_COUNTDOWN_SECONDS;
+        SendSigilTimerMessage(entry, new WIZARD_12_PROTOCOL.MSG_MINIGAMETIMERSTART {
+            Time = seconds,
+            SigilGID = entry.SigilGID,
+            Teleport = 0,
+        });
+
+        Timers.StartSingleTimer(
+            SIGIL_ENTER_TIMER_KEY,
+            new ZONE_102_PROTOCOL.MSG_SIGILENTER(),
+            TimeSpan.FromSeconds(seconds));
+    }
+
+    private void SendSigilTimerMessage(ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY entry, IMessage message) {
+        // A minigame sigil's countdown shows for everyone in the zone.
+        if (entry.SigilRef is null) {
+            SendToSocket(message);
+
+            return;
+        }
+
+        ZoneBroadcast(message, isSelfless: false);
+    }
+
     private void CancelSigilCountdown() {
         var entry = _activeSigilEntry;
         _activeSigilEntry = null;
@@ -1015,7 +1067,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        SendToSocket(new WIZARD_12_PROTOCOL.MSG_MINIGAMETIMEREND { SigilGID = entry.SigilGID });
+        entry.SigilRef?.Tell(new ZONE_102_PROTOCOL.MSG_SIGILOCCUPANTLEFT { CharId = GetActiveWizard().CharId });
+        SendSigilTimerMessage(entry, new WIZARD_12_PROTOCOL.MSG_MINIGAMETIMEREND { SigilGID = entry.SigilGID });
 
         // Give the player their mount back.
         SessionActor.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ENFORCEINTERIORMOUNT());
@@ -1107,7 +1160,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             return false;
         }
 
-        var slot = playerSlots[0];
+        var slot = playerSlots[Math.Clamp(entry.SlotIndex, 0, playerSlots.Count - 1)];
         var pad = Util.GetVectorFromCompactString(entry.SigilLoc);
 
         double sigilRotation = pad.W;

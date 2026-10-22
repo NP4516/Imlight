@@ -1081,6 +1081,24 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// <summary>The arrival position inside the instance, "X,Y,Z,heading".</summary>
         public string DestinationLoc;
 
+        /// <summary>The sigil circle the player stands in, counted over the player circles of the template.</summary>
+        public int SlotIndex;
+
+        /// <summary>The countdown length; zero uses the default.</summary>
+        public float CountdownSeconds;
+
+        /// <summary>
+        /// The minigame sigil that seats the player, or null for a dungeon sigil. A seated player's countdown is
+        /// shown to the whole zone and the sigil hears when the player leaves it.
+        /// </summary>
+        public IActorRef SigilRef;
+
+        /// <summary>The character whose private instance the sigil's players share; zero is the player.</summary>
+        public ulong RoomOwnerCharId;
+
+        /// <summary>The other player on the sigil, or zero.</summary>
+        public ulong PartnerCharId;
+
     }
 
     /// <summary>
@@ -1265,6 +1283,118 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public ulong CharId;
+
+    }
+
+    /// <summary>
+    /// Sent by a minigame sigil to a seated player's session when a second player sits down: the
+    /// player's countdown starts over and both go to the first player's instance.
+    /// </summary>
+    public sealed class MSG_SIGILPARTNERJOINED : IServerMessage {
+
+        public byte MessageOrder { get; } = 88;
+        public byte ServiceID { get; } = 102;
+
+        public ulong PartnerCharId;
+        public ulong RoomOwnerCharId;
+
+    }
+
+    /// <summary>
+    /// Sent by a minigame sigil to a seated player's session when the other player stepped off: the
+    /// countdown goes on and the player goes alone.
+    /// </summary>
+    public sealed class MSG_SIGILPARTNERLEFT : IServerMessage {
+
+        public byte MessageOrder { get; } = 89;
+        public byte ServiceID { get; } = 102;
+
+    }
+
+    /// <summary>
+    /// Sent by a seated player's session to its minigame sigil when the player left the sigil, either by
+    /// stepping off or by entering the sigil's zone.
+    /// </summary>
+    public sealed class MSG_SIGILOCCUPANTLEFT : IServerMessage {
+
+        public byte MessageOrder { get; } = 90;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharId;
+
+        /// <summary>True if the player went through the sigil, so the other player is not told.</summary>
+        public bool Entered;
+
+    }
+
+    /// <summary>
+    /// Sent by the ZoneService to the other services just before a minigame sigil sends the player to its zone.
+    /// </summary>
+    public sealed class MSG_SIGILROOMENTERING : IServerMessage {
+
+        public byte MessageOrder { get; } = 91;
+        public byte ServiceID { get; } = 102;
+
+        public string DestinationZone;
+        public ulong RoomOwnerCharId;
+        public ulong PartnerCharId;
+
+        /// <summary>The zone the player left from, to go back to.</summary>
+        public string ReturnZone;
+
+        /// <summary>The sigil's position in <see cref="ReturnZone"/>, "X,Y,Z,heading".</summary>
+        public string ReturnLocation;
+
+    }
+
+    /// <summary>
+    /// Sent by a pet game room to a player's session when the player joins the room's zone.
+    /// </summary>
+    public sealed class MSG_PETGAMEROOMJOINED : IServerMessage {
+
+        public byte MessageOrder { get; } = 92;
+        public byte ServiceID { get; } = 102;
+
+        /// <summary>The pet game the room's game object runs.</summary>
+        public string GameName;
+
+        /// <summary>The players already in the room, by character id, with their sessions.</summary>
+        public Dictionary<ulong, IActorRef> OtherPlayers;
+
+    }
+
+    /// <summary>
+    /// Sent by a pet game room to the sessions of the players in it when another player joins.
+    /// </summary>
+    public sealed class MSG_PETGAMEROOMPLAYERJOINED : IServerMessage {
+
+        public byte MessageOrder { get; } = 93;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharId;
+        public IActorRef Session;
+
+    }
+
+    /// <summary>
+    /// Sent by a pet game room to the sessions of the players in it when a player leaves.
+    /// </summary>
+    public sealed class MSG_PETGAMEROOMPLAYERLEFT : IServerMessage {
+
+        public byte MessageOrder { get; } = 94;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharId;
+
+    }
+
+    /// <summary>
+    /// Internal timer message: a minigame sigil lights itself again for everyone after a player stepped off.
+    /// </summary>
+    public sealed class MSG_SIGILRELIGHT : IServerMessage {
+
+        public byte MessageOrder { get; } = 95;
+        public byte ServiceID { get; } = 102;
 
     }
 

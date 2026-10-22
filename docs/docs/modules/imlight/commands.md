@@ -14,6 +14,7 @@ If Imlight was built in _release_ mode, any command with a developer security le
 | Command | Security | Syntax | Description |
 | ------- | -------- | ------ | ----------- |
 | teleport | Quality Assurance | `.teleport $zonename` | Teleports you to a specific zone. If a zone is not found, it will guess. |
+| hatch | Quality Assurance | `.hatch` or `.hatch $pet $pet` | Lists your pets that are old enough to hatch, or lays the egg of two of them, named by list number, id or name without spaces. No gold is taken. |
 
 ## Account Commands
 
