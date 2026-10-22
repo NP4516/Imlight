@@ -742,6 +742,9 @@ public class Wizard {
         if (slot.SlotType == EquipmentSlotType.Pet) {
             EquipPet(template, inventoryItem);
         }
+        if (slot.SlotType == EquipmentSlotType.PIIVictoryDance) {
+            EquipVictoryDance(inventoryItem);
+        }
 
         // Persistent save.
         WizardCollection.UpdateCharacterItems(this);
@@ -1794,6 +1797,7 @@ public class Wizard {
 
     internal void AfterDatabaseLoad() {
         AfterDatabaseLoadStorageBehavior();
+        AfterDatabaseLoadVictoryDance();
         AfterDatabaseLoadWizardGameStats();
         AfterDatabaseLoadSpellbookBehavior();
         AfterDatabaseloadMountOwnerBehavior();
@@ -1840,11 +1844,55 @@ public class Wizard {
         if (slotType == EquipmentSlotType.Pet) {
             UnequipPet();
         }
+        if (slotType == EquipmentSlotType.PIIVictoryDance) {
+            UnequipVictoryDance();
+        }
 
         var removedEffects = CharacterEffectHelper.RemoveEffectsFromWizard(this, template);
         EquipmentExtras.Refresh(this);
 
         return removedEffects;
+    }
+
+    private void EquipVictoryDance(WizClientObjectItem item) {
+        var templateId = (uint) item.m_templateID;
+        if (WizardAvatar is not null) {
+            WizardAvatar.m_afterCombatVictoryDance = templateId;
+        }
+
+        if (HasInitializedGameObject && CoreObjectFactory.FindBehaviorInstance<WizardCharacterBehavior>(GameObject, out var avatarBehavior)) {
+            avatarBehavior.m_afterCombatVictoryDance = templateId;
+        }
+
+        WizardCollection.UpdateCharacterVictoryDance(this);
+    }
+
+    private void UnequipVictoryDance() {
+        if (WizardAvatar is not null) {
+            WizardAvatar.m_afterCombatVictoryDance = 0;
+        }
+
+        if (HasInitializedGameObject && CoreObjectFactory.FindBehaviorInstance<WizardCharacterBehavior>(GameObject, out var avatarBehavior)) {
+            avatarBehavior.m_afterCombatVictoryDance = 0;
+        }
+
+        WizardCollection.UpdateCharacterVictoryDance(this);
+    }
+
+    private void AfterDatabaseLoadVictoryDance() {
+        var idInSlot = EquipmentBehavior?.SlotList?.FirstOrDefault(s => s.SlotType == EquipmentSlotType.PIIVictoryDance)?.ItemId;
+        if (idInSlot is null) {
+            if (WizardAvatar is not null) {
+                WizardAvatar.m_afterCombatVictoryDance = 0;
+            }
+            return;
+        }
+
+        var danceItem = EquipmentBehavior.EquippedItems?.FirstOrDefault(i => i.m_globalID == idInSlot);
+        var templateId = danceItem is not null ? (uint) danceItem.m_templateID : 0u;
+        if (WizardAvatar is not null) {
+            WizardAvatar.m_afterCombatVictoryDance = templateId;
+        }
     }
 
     private void UnequipMount() {
