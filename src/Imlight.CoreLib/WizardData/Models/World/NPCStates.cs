@@ -30,5 +30,7 @@ internal enum NPCStates {
     Unknown_6 = 1896147676,
     SpellbookWizbang = 1288150110,
     NoWizbang = 1048309586,
+    CombatVictory = 523160964,
+    Dance = 1674067506,
 
 }
