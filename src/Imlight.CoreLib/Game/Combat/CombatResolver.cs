@@ -103,7 +103,7 @@ public partial class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCir
     internal static readonly bool FastAnimationTiming = ConfigurationManager.GetValue("Battle.FastAnimationTiming", true);
     private static readonly float SPELL_PASS_TIME = FastAnimationTiming ? 0.5f : 1.0f;
     private const float SPELL_CAST_TIME = 5.0f;
-    // The most the round waits for a .c1s/.c2s spell, whose casting animation the game skips.
+    // The most the round waits for a .c1s/.c2s/.cfs/.cls spell, whose casting animation the game skips.
     private static readonly float SkipCastSeconds = Math.Max(0.5f, Imlight.Common.ConfigurationManager.GetValue("Battle.SkipCastSeconds", 2f));
     private const float HANGING_EFFECT_CONSUME_TIME = 1.0f;
     private const float OVER_TIME_ACTIVATION_TIME = 2.0f;
@@ -118,8 +118,9 @@ public partial class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCir
     // Daybreaker and Nightbringer: the spell is paid for (pips, card, fizzle check) when played, then casts on
     // the caster's next turn, at its start (Daybreaker) or its end (Nightbringer), even if they are stunned.
     // Free is a spell from .daybreaker or .nightbringer: no card was played, and its target is picked when it casts.
-    // Target is the command's p1-p4 / e1-e4 / all, or null to pick one.
-    // When is the command's f (first in the round, before anyone acts) or l (last, after everyone), else 'n':
+    // Target is the command's me / p1-p4 (circles of the caster's side) / e1-e4 (the other side's) / all, or null to
+    // pick one.
+    // When is 'f' for .cf (first in the round, before anyone acts) or 'l' for .cl (last, after everyone), else 'n':
     // around the caster's own card.
     // Announcement is a .ca line chained into the queue (`.c1 Fire Cat, ca 1`): it casts nothing and shows before the
     // queue's next spell.
@@ -423,7 +424,7 @@ public partial class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCir
 
         _petCastsThisRound.Clear();
         PetCastCards.Clear();
-        // .c1 f / .c2 f (Niduus, 2026-10-20): the queue casts before anyone's turn, then the round goes on.
+        // .cf (Niduus, 2026-10-22; was .c1 f / .c2 f): the queue casts before anyone's turn, then the round goes on.
         cinematicTime += CastEveryonesDelayed('f', combatActionList, cinematicTime);
         NoteHealthBeat(cinematicTime);
         // Boss cheats for the start of the round (BossCheats.cs).
@@ -453,9 +454,9 @@ public partial class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCir
         // Boss cheats for the end of the round, after everyone's move.
         cinematicTime += BossCheatsAtRoundEnd(combatActionList, cinematicTime);
         NoteHealthBeat(cinematicTime);
-        // .c1 l / .c2 l: the queue casts after everyone's turn, then the round ends.
+        // .cl (was .c1 l / .c2 l): the queue casts after everyone's turn, then the round ends.
         cinematicTime += CastEveryonesDelayed('l', combatActionList, cinematicTime);
-        // Malistaire went invisible (Niduus, 2026-10-22): a participant defeated by a round-end cheat or a last (.c1 l)
+        // Malistaire went invisible (Niduus, 2026-10-22): a participant defeated by a round-end cheat or a last (.cl)
         // cast was never given its afterlife, so the round's end took him out of the battle (MSG_COMBATDEATH and
         // MSG_COMBATREMOVE) while the game, which works out the afterlife itself, still had him standing there.
         ProcessAfterlives();
@@ -779,27 +780,38 @@ public partial class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCir
     ];
 
     /// <summary>
+    /// The circle a free cast's pN (circle N of the caster's side) or eN (circle N of the other side) names, in the
+    /// order the game numbers each side's circles (slot order: the creature side's symbols 1-4, the other side's
+    /// 13-16), occupied or not. Null for any other code.
+    /// </summary>
+    internal static CombatDuelSubCircle FreeTargetCircle(CombatDuelSubCircle caster, string code) {
+        if (caster is null || code is not { Length: 2 } || code[0] is not ('p' or 'e') || code[1] is < '1' or > '4') {
+            return null;
+        }
+
+        var ownSide = code[0] == 'p';
+        var side = caster._duelActor.SubCircles
+            .Where(c => c is not null && (c.SlotType == caster.SlotType) == ownSide)
+            .OrderBy(c => c.SlotIndex).ToList();
+        var number = code[1] - '1';
+
+        return number < side.Count ? side[number] : null;
+    }
+
+    /// <summary>
     /// A free delayed spell's target: for a spell aimed at enemies, the enemy the caster picked this round or else
     /// the first one standing; for anything else, the caster.
     /// </summary>
     private CombatDuelSubCircle PickFreeTarget(CombatDuelSubCircle caster, SpellTemplate template, string code) {
-        // p1 is the caster, p2 to p4 the caster's teammates in circle order; e1 to e4 the enemy circles 1 to 4.
-        if (code is { Length: 2 } && code[1] is >= '1' and <= '4') {
-            var number = code[1] - '1';
-            var team = caster._duelActor.ActiveSubCircles;
-            if (code[0] == 'p') {
-                var allies = team.Where(c => c.OccupiedTeam == caster.OccupiedTeam && c != caster)
-                    .OrderBy(c => c.SlotIndex).Prepend(caster).ToList();
-                if (number < allies.Count) {
-                    return allies[number];
-                }
-            }
-            else if (code[0] == 'e') {
-                var enemy = team.FirstOrDefault(c => c.OccupiedTeam != caster.OccupiedTeam && c.SlotIndex % 4 == number);
-                if (enemy is not null) {
-                    return enemy;
-                }
-            }
+        // me is the caster. pN is whoever stands on circle N of the caster's side and eN on circle N of the other
+        // side, in the game's order (Niduus, 2026-10-22: p1 was the caster, so his friend on circle 1 was never hit).
+        // An empty circle casts nothing: the command already told the caster who stands where.
+        if (code == "me") {
+            return caster;
+        }
+
+        if (FreeTargetCircle(caster, code) is { } circle) {
+            return circle.Occupied ? circle : null;
         }
 
         if (!(template.m_effects ?? []).Any(effect => effect is not null && s_enemyTargets.Contains(effect.m_effectTarget))) {

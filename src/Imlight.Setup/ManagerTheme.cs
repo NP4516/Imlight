@@ -351,7 +351,7 @@ internal static class ManagerTheme {
         ["Copy my game files"] = "download", ["Read my copy"] = "file",
         ["Open log folder"] = "folder", ["Open settings folder"] = "folder", ["Open install folder"] = "folder",
         ["Open game log folder"] = "folder", ["Open game files folder"] = "folder", ["Open key details"] = "folder",
-        ["Let friends connect"] = "globe", ["Create account"] = "plus", ["Make the custom"] = "plus", ["New cheat"] = "plus",
+        ["Let friends connect"] = "globe", ["Create account"] = "plus", ["Make the custom"] = "plus", ["New custom…"] = "plus", ["New cheat"] = "plus",
         ["Add"] = "plus", ["Add a form"] = "plus", ["Use"] = "check", ["OK"] = "check", ["Cancel"] = "close",
         ["Edit"] = "pencil", ["Edit blocks"] = "puzzle", ["Close"] = "up", ["Open all"] = "down", ["Close all"] = "up",
         ["Delete"] = "bin", ["Remove"] = "bin", ["Discard"] = "undo",

@@ -68,7 +68,7 @@ internal sealed partial class ManagerWindow : Window {
 
     // Play.
     private readonly Button _playButton = Primary("Play Wizard101");
-    private readonly TextBlock _playHelp = Sub("Starts Wizard101 connected to the server on this computer. If the server is off, it starts it first.");
+    private readonly TextBlock _playHelp = Sub("If the server is off, it starts it first.");
     private readonly StackPanel _serverRows = new() { Spacing = 6 };
     private readonly TextBox _newServerName = new() { Watermark = "Name (optional)", Width = 160 };
     private readonly TextBox _newServerHost = new() { Watermark = "Address, such as play.example.com", MinWidth = 260 };
@@ -81,7 +81,8 @@ internal sealed partial class ManagerWindow : Window {
     private readonly Button _startButton = Primary("Start server");
     private readonly Button _restartButton = Plain("Restart");
     private readonly Button _stopButton = Plain("Stop server");
-    private readonly Border _randomizerCard;
+    private readonly Border _modesCard;
+    private readonly Control _randomizerCard;
     private readonly ToggleSwitch _randomizer = new() { OnContent = "On", OffContent = "Off" };
     private readonly CheckBox _hideDebug = new() { Content = "Hide debug lines", IsChecked = true };
     private readonly CheckBox _hideWarnings = new() { Content = "Hide warnings" };
@@ -107,7 +108,7 @@ internal sealed partial class ManagerWindow : Window {
     };
     private readonly TextBlock _logEmpty = new() { Text = "No log yet. Start the server to see it here.", Foreground = MUTED, IsVisible = false };
     private readonly ScrollViewer _logScroll;
-    private readonly Border _dieDeleteCard;
+    private readonly Control _dieDeleteCard;
     private readonly ToggleSwitch _dieDelete = new() { OnContent = "On", OffContent = "Off" };
     private bool _updatingRandomizer;
     private readonly Border _trainersCard;
@@ -206,27 +207,33 @@ internal sealed partial class ManagerWindow : Window {
         MinHeight = 480;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        _randomizerCard = Fold("dice", "Customs", "Randomizer mode",
-            "Shuffles schools, spells, drops and more for every character, kept balanced. Fine-tune it under Settings, Randomizer.",
-            SwitchRow("Randomizer mode", _randomizer));
+        // The two game modes share one card, a row each (they were a card each, with a single switch in it).
+        _randomizerCard = SwitchRow("Randomizer mode", _randomizer,
+            "Shuffles schools, spells, drops and more, kept balanced. Fine-tune it under Settings, Randomizer.");
         _randomizerCard.IsVisible = false;
-        _dieDeleteCard = Fold("skull", "bad", "Die = Delete mode",
-            "If a wizard dies in battle and is still dead when the battle ends, that wizard is deleted for good. " +
-            "Fleeing doesn't count, and neither does the tutorial battle.",
-            SwitchRow("Die = Delete mode", _dieDelete));
+        _dieDeleteCard = SwitchRow("Die = Delete mode", _dieDelete, "A wizard who dies in battle is deleted for good.");
+        ToolTip.SetTip(_dieDeleteCard, "If a wizard dies in battle and is still dead when the battle ends, that wizard is deleted for good. " +
+            "Fleeing doesn't count, and neither does the tutorial battle.");
         _dieDeleteCard.IsVisible = false;
-        var trainerRows = new StackPanel { Spacing = 6 };
+        _modesCard = Fold("dice", "Customs", "Game modes", "Whole-server modes, for every character.", _randomizerCard, _dieDeleteCard);
+        _modesCard.IsVisible = false;
+        var trainerRows = new StackPanel { Spacing = 4 };
         foreach (var (key, name, toggle) in _trainerSwitches) {
-            trainerRows.Children.Add(SwitchRow(name, toggle));
+            var row = SwitchRow(name, toggle);
+            if (key == "RandomizeSpellRequirements") {
+                ToolTip.SetTip(row, "Each spell that needs another spell first needs a different one from the same trainer instead.");
+            }
+
+            trainerRows.Children.Add(row);
         }
 
         trainerRows.Children.Add(SwitchRow("Training points per level", _pointsPerLevel));
-        _trainersCard = Fold("school", "Lookup", "Spell trainers",
-            "Change what trainers ask for before they teach a spell. These work with or without randomizer mode. " +
-            "Random spell requirements makes each spell that needs another spell first need a different one from the same trainer instead.",
-            trainerRows);
+        // The two long lists of switches start folded shut: they are set once, not on every visit.
+        _trainersCard = Shut(Fold("school", "Lookup", "Spell trainers",
+            "What trainers ask for before they teach a spell, with or without randomizer mode.",
+            trainerRows));
         _trainersCard.IsVisible = false;
-        var battleRows = new StackPanel { Spacing = 6 };
+        var battleRows = new StackPanel { Spacing = 4 };
         foreach (var (_, key, name, toggle) in _battleSwitches) {
             var row = SwitchRow(name, toggle);
             if (key == "MobsJoinLate") {
@@ -234,13 +241,17 @@ internal sealed partial class ManagerWindow : Window {
                     "like the real game. Off: monsters walk past battles.");
             }
 
+            if (key == "SchoolPips") {
+                ToolTip.SetTip(row, "Once every pip slot is full, each round turns a power pip into a school pip of your own school, " +
+                    "for spells that cost school pips.");
+            }
+
             battleRows.Children.Add(row);
         }
 
-        _battleCard = Fold("sword", "Bosses", "Battle and world",
-            "School pips: once every pip slot is full, each round turns a power pip into a school pip of your own school, " +
-            "for spells that cost school pips.",
-            battleRows);
+        _battleCard = Shut(Fold("sword", "Bosses", "Battle and world",
+            "Switches for battles, pips, pets, jewels, houses and the world.",
+            battleRows));
         _battleCard.IsVisible = false;
         _logScroll = new ScrollViewer {
             Height = 440,
@@ -278,6 +289,11 @@ internal sealed partial class ManagerWindow : Window {
                 case "Lookup": await LoadLookupAsync(); break;
                 case "Bosses": await LoadBossesAsync(); break;
                 case "Customs": await LoadCustomsAsync(); break;
+                // The Make a custom wizard on the Guides tab searches the creature list.
+                case "Guides":
+                    await LoadBossesAsync();
+                    UpdateCustomWizard();
+                    break;
                 case "Settings" when _settings.Count == 0: LoadSettings(); break;
                 case "Accounts": await LoadAccountsAsync(); break;
             }
@@ -402,19 +418,18 @@ internal sealed partial class ManagerWindow : Window {
                         WithCenter(WithMargin(_playHelp, new Thickness(0, 0, 16, 0))),
                     },
                 }),
-            Fold("globe", "Lookup", "Other servers",
-                "Play on someone else's private server with your Wizard101. The live game is blocked, so these only work for private servers.",
+            Shut(Fold("globe", "Lookup", "Other servers",
+                "Play on someone else's private server.",
                 WithMargin(_serverRows, new Thickness(0, 0, 0, 4)),
-                new WrapPanel {
+                WithHint(new WrapPanel {
                     Children = {
                         Spaced(_newServerName), Spaced(_newServerHost), Spaced(_newServerPort),
                         Spaced(Action(Plain("Save server"), SaveServerAsync)),
                     },
-                }),
+                }, "Play on someone else's private server with your Wizard101. The live game is blocked, so these only work for private servers."))),
             Fold("users", "Accounts", "Play with friends",
-                "Friends on other internet connections join with this address and login port. Click \"Let friends connect\" " +
-                "once: Windows asks to allow the change, and the app asks your router to let friends in. Leave the server running.",
-                new DockPanel {
+                "Friends join with this address and login port.",
+                WithHint(new DockPanel {
                     Children = {
                         WithDock(Row(Action(Primary("Let friends connect"), LetFriendsConnectAsync),
                             Action(Plain("Copy address"), () => _publicIp is null
@@ -422,7 +437,8 @@ internal sealed partial class ManagerWindow : Window {
                                 : CopyAsync($"{_publicIp} {FriendAccess.Ports(_manager.InstallFolder)[0]}"))), Dock.Right),
                         WithCenter(_friendAddress),
                     },
-                },
+                }, "Friends on other internet connections join with this address and login port. Click \"Let friends connect\" " +
+                   "once: Windows asks to allow the change, and the app asks your router to let friends in. Leave the server running."),
                 _friendResult),
             CommandCard(),
             PositionCard());
@@ -494,9 +510,9 @@ internal sealed partial class ManagerWindow : Window {
             Margin = new Thickness(24, 12, 24, 16), MaxWidth = ManagerTheme.PAGE_MAX_WIDTH,
             Children = {
                 WithDock(Fold("search", "Commands", "Find a command",
-                    "Custom has the commands made for your build. Imlight has the ones the server comes with. " +
-                    "Type them in the game's chat, starting with the dot. Copy command puts the text on your clipboard.",
-                    _commandSearch), Dock.Top),
+                    "Type them in the game's chat, starting with the dot.",
+                    WithHint(_commandSearch, "Custom has the commands made for your build. Imlight has the ones the server comes with. " +
+                        "Type them in the game's chat, starting with the dot. Copy command puts the text on your clipboard.")), Dock.Top),
                 WithMargin(Card(new TabControl { ItemsSource = new[] { custom, imlight } }), new Thickness(0, 14, 0, 0)),
             },
         };
@@ -521,11 +537,11 @@ internal sealed partial class ManagerWindow : Window {
             Margin = new Thickness(24, 12, 24, 16), MaxWidth = ManagerTheme.PAGE_MAX_WIDTH,
             Children = {
                 WithDock(Fold("search", "Lookup", "Commands and IDs",
-                    "Every in-game command, bundle, item, spell, creature, NPC, zone and quest. Type commands in the game's chat, " +
-                    "starting with the dot. Copy puts the text on your clipboard. Pick Spell on the right to see each spell's card.",
-                    new DockPanel {
+                    "Search every command, item, spell, creature, zone and quest.",
+                    WithHint(new DockPanel {
                         Children = { WithDock(WithMargin(_lookupKind, new Thickness(8, 0, 0, 0)), Dock.Right), _lookupSearch },
-                    },
+                    }, "Every in-game command, bundle, item, spell, creature, NPC, zone and quest. Type commands in the game's chat, " +
+                       "starting with the dot. Copy puts the text on your clipboard. Pick Spell on the right to see each spell's card."),
                     _lookupCount), Dock.Top),
                 WithMargin(Card(new Panel { Children = { _lookupResults, SpellView() } }), new Thickness(0, 14, 0, 0)),
             },
@@ -583,10 +599,10 @@ internal sealed partial class ManagerWindow : Window {
 
         return Page(
             Fold("power", "Server", "Start and stop",
-                "Start the server here. It gets the game files from your Wizard101 folder by itself. Closing this window stops it.",
-                Row(_startButton, _restartButton, _stopButton)),
-            _randomizerCard,
-            _dieDeleteCard,
+                "Closing this window stops the server.",
+                WithHint(Row(_startButton, _restartButton, _stopButton),
+                    "Start the server here. It gets the game files from your Wizard101 folder by itself. Closing this window stops it.")),
+            _modesCard,
             _battleCard,
             _trainersCard);
     }
@@ -610,8 +626,8 @@ internal sealed partial class ManagerWindow : Window {
 
         return Page(
             Fold("search", "Settings", "Find a setting",
-                "Every setting in the server's Imlight.ini. Changes apply the next time the server starts.",
-                _settingSearch),
+                "Changes apply the next time the server starts.",
+                WithHint(_settingSearch, "Every setting in the server's Imlight.ini. Changes apply the next time the server starts.")),
             _settingsList);
     }
 
@@ -619,27 +635,28 @@ internal sealed partial class ManagerWindow : Window {
         _newLevel.ItemsSource = PlayerAccounts.AUTH_LEVELS.Select(LevelName).ToList();
         _newLevel.SelectedIndex = 0;
 
+        // One card: the accounts, and the boxes to add one under them (they were two cards).
         return Page(
-            Fold("plus", "Accounts", "New account", "Accounts can only be changed while the server is running.",
+            Fold("users", "Accounts", "Accounts", "Accounts can only be changed while the server is running.",
+                new DockPanel {
+                    Children = { WithDock(Action(Plain("Refresh"), LoadAccountsAsync), Dock.Right), WithCenter(_accountsNote) },
+                },
+                _accountRows,
+                new TextBlock { Text = "New account", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 6, 0, 0) },
                 new WrapPanel {
                     Children = {
                         Spaced(_newUsername), Spaced(_newPassword), Spaced(_newLevel),
                         Spaced(Action(Primary("Create account"), CreateAccountAsync)),
                     },
-                }),
-            Fold("users", "Accounts", "Accounts", "Everyone who can log in to your server, and what they are allowed to do.",
-                new DockPanel {
-                    Children = { WithDock(Action(Plain("Refresh"), LoadAccountsAsync), Dock.Right), WithCenter(_accountsNote) },
-                },
-                _accountRows));
+                }));
     }
 
     private CheckBox AutoUpdateBox() {
         var box = new CheckBox {
-            Content = "Update by itself when a new version is out (checked each time this app opens)",
+            Content = "Update by itself when a new version is out",
             IsChecked = _manager.AutoUpdate,
-            Margin = new Thickness(0, 0, 0, 8),
         };
+        ToolTip.SetTip(box, "Checked each time this app opens.");
         box.IsCheckedChanged += (_, _) => _manager.AutoUpdate = box.IsChecked == true;
 
         return box;
@@ -654,9 +671,11 @@ internal sealed partial class ManagerWindow : Window {
                 : "The app asks before it restarts into a new version again.");
         };
 
-        return SwitchRow("Install updates automatically", toggle,
-            "When a new version has downloaded and built, the app restarts into it without asking \"Yes\" first. " +
+        var row = SwitchRow("Install updates automatically", toggle, "Restarts into a new version without asking first.");
+        ToolTip.SetTip(row, "When a new version has downloaded and built, the app restarts into it without asking \"Yes\" first. " +
             "If the server is running it restarts too, so anyone playing is disconnected for a moment.");
+
+        return row;
     }
 
     private Control GameFilesTab() {
@@ -667,36 +686,39 @@ internal sealed partial class ManagerWindow : Window {
         _cancelGameFiles.Click += (_, _) => _gameFilesCancel?.Cancel();
         _gameFilesProgress.Text = GameFilesState();
 
+        // Step 1, step 2 and how far they are share one card (they were four).
+        static Control Step(string number, Control buttons, string hint) => WithHint(new DockPanel {
+            Children = {
+                WithDock(WithMargin(WithCenter(new TextBlock { Text = number, FontWeight = FontWeight.SemiBold, Width = 54 }), new Thickness(0, 0, 0, 8)), Dock.Left),
+                buttons,
+            },
+        }, hint);
+
         return Page(
             Fold("info", "Game Files", "Read the game's data files",
-                "Shows how Wizard101 works from the data files installed with it: quests, badges, triggers, pets, creatures, " +
-                "items, spells, zones and the messages the game and server send. It never changes your Wizard101 folder: " +
-                "step 1 copies the files into Imlight's own folder, and step 2 reads only that copy."),
-            Fold("download", "Game Files", "Step 1: Copy my game files",
-                "Copies the game's data files into a separate folder. It asks first and shows how much room it needs. " +
-                "The next time, it only copies files the game has changed since.",
-                Row(_copyGameFiles)),
-            Fold("file", "Game Files", "Step 2: Read my copy",
-                "Reads the copy and writes everything into readable files. The \"Key details\" folder has the tables for running " +
-                "the game on a private server, and Overview.txt in it says what each one holds.",
-                new WrapPanel {
+                "Copies them, then makes them readable. Your Wizard101 folder is never changed.",
+                Step("Step 1", new WrapPanel { Children = { Spaced(_copyGameFiles) } },
+                    "Copies the game's data files into a separate folder. It asks first and shows how much room it needs. " +
+                    "The next time, it only copies files the game has changed since. It never changes your Wizard101 folder."),
+                Step("Step 2", new WrapPanel {
                     Children = {
                         Spaced(_readGameFiles),
                         Spaced(Action(Plain("Open key details"), OpenKeyDetailsAsync)),
                         Spaced(Action(Plain("Open game files folder"), () => Open(Directory.CreateDirectory(_gameFiles.Folder).FullName))),
                     },
-                }),
-            Fold("bag", "Game Files", "Shop research",
-                "Saves the game's shop window files and shop keepers into one zip on your desktop, " +
-                "for finding out why snack, reagent and jewel shops open as a robe shop.",
-                Row(_shopResearch)),
-            Card(new DockPanel {
-                Children = {
-                    WithDock(WithCenter(_cancelGameFiles), Dock.Right),
-                    WithDock(WithMargin(WithCenter(ManagerTheme.Icon("hourglass", 18, MUTED)), new Thickness(0, 0, 10, 0)), Dock.Left),
-                    WithCenter(_gameFilesProgress),
-                },
-            }));
+                }, "Reads the copy and writes everything into readable files: quests, badges, triggers, pets, creatures, items, " +
+                   "spells, zones and the messages the game and server send. The \"Key details\" folder has the tables for running " +
+                   "the game on a private server, and Overview.txt in it says what each one holds."),
+                ManagerTheme.Item(new DockPanel {
+                    Children = {
+                        WithDock(WithCenter(_cancelGameFiles), Dock.Right),
+                        WithDock(WithMargin(WithCenter(ManagerTheme.Icon("hourglass", 18, MUTED)), new Thickness(0, 0, 10, 0)), Dock.Left),
+                        WithCenter(_gameFilesProgress),
+                    },
+                })),
+            Shut(Fold("bag", "Game Files", "Shop research",
+                "Zips the game's shop files to your desktop, to find why some shops open as a robe shop.",
+                Row(_shopResearch))));
     }
 
     private string GameFilesState()
@@ -910,19 +932,21 @@ internal sealed partial class ManagerWindow : Window {
 
         return Page(
             Fold("server", "Server", "Server log",
-                "What the server on this computer is doing. The same message repeated in a row shows once, with how many times it happened.",
-                Row(_hideDebug, _hideWarnings, _follow, _pauseLog),
+                "What the server on this computer is doing.",
+                WithHint(Row(_hideDebug, _hideWarnings, _follow, _pauseLog),
+                    "What the server on this computer is doing. The same message repeated in a row shows once, with how many times it happened."),
                 LogWell(_logScroll),
                 Row(Action(Plain("Copy all"), CopyLogAsync), Action(Plain("Save log to desktop"), SaveLogAsync))),
-            Fold("log", "Logs", "Game log",
-                "The newest log Wizard101 wrote, updated every 2 seconds while this tab is open. Select any part to copy it.",
+            // Folded shut at first: the server log is the one looked at most. It still reads while this tab is open.
+            Shut(Fold("log", "Logs", "Game log",
+                "The newest log Wizard101 wrote, updated every 2 seconds.",
                 _clientLogFile,
                 LogWell(_clientLogBox),
                 Row(Action(Plain("Copy all"), () => CopyAsync(_clientLogText.Length > 0 ? _clientLogText : _clientLogBox.Text ?? "")),
                     Action(Plain("Save game log to desktop"), SaveClientLogAsync),
                     Action(Plain("Open game log folder"), () => _clientLogFolder is null
                         ? throw new PanelException("Wizard101 has not written a log yet. Play once, then look again.")
-                        : Open(_clientLogFolder)))));
+                        : Open(_clientLogFolder))))));
     }
 
     private readonly TextBox _commandBox = new() { Watermark = "A command, such as .elixir50 or .lookup fire cat" };
@@ -963,39 +987,41 @@ internal sealed partial class ManagerWindow : Window {
         };
 
         return Fold("terminal", "Commands", "Run a command",
-            "Runs a command as the wizard playing on this PC, the same as typing it in chat. "
-            + "Friends playing from other PCs are never affected. The Lookup tab lists every command. "
-            + "Previous commands lists the last ones you ran: pick one to run it again.",
-            new DockPanel {
+            "Runs a command as your wizard, the same as typing it in chat.",
+            WithHint(new DockPanel {
                 Children = {
                     WithDock(WithMargin(send, new Thickness(8, 0, 0, 0)), Dock.Right),
                     WithDock(WithMargin(_commandHistory, new Thickness(8, 0, 0, 0)), Dock.Right),
                     _commandBox,
                 },
-            });
+            }, "Runs a command as the wizard playing on this PC, the same as typing it in chat. "
+               + "Friends playing from other PCs are never affected. The Lookup tab lists every command. "
+               + "Previous commands lists the last ones you ran: pick one to run it again."));
     }
 
     private Control PositionCard() {
         _positionTimer.Tick += (_, _) => RefreshPosition();
 
-        return Fold("crosshair", "zone", "Position (X, Y, Z and Rotation, Angle, Width)",
-            "Where each wizard on your server is standing, as X, Y and Z, updated twice a second while this tab is open. "
-            + "Rotation is the way the wizard faces in radians, the way the game files store it, and Angle is the same in degrees. "
-            + "Width is the wizard's size, which is always 1. "
-            + "It reads what the game already tells your server; nothing is added to the game. The newest mover is on top. "
-            + "Select any part of the text to copy it, or use the button. Positions are exact to about 4 units.",
+        // Folded shut at first: it is for placing things in custom areas, not for every visit (the timer still runs).
+        return Shut(Fold("crosshair", "zone", "Position",
+            "Where each wizard on your server is standing, updated live.",
             _positionBox,
-            Row(Action(Primary("Copy X, Y, Z"), CopyPositionAsync), Action(Plain("Copy Rotation, Angle, Width"), CopyRawAsync), Action(Plain("Copy all"), () => CopyAsync(_positionBox.Text ?? ""))));
+            WithHint(Row(Action(Primary("Copy X, Y, Z"), CopyPositionAsync), Action(Plain("Copy Rotation, Angle, Width"), CopyRawAsync), Action(Plain("Copy all"), () => CopyAsync(_positionBox.Text ?? ""))),
+                "Where each wizard on your server is standing, as X, Y and Z, updated twice a second while this tab is open. "
+                + "Rotation is the way the wizard faces in radians, the way the game files store it, and Angle is the same in degrees. "
+                + "Width is the wizard's size, which is always 1. "
+                + "It reads what the game already tells your server; nothing is added to the game. The newest mover is on top. "
+                + "Select any part of the text to copy it, or use the button. Positions are exact to about 4 units.")));
     }
 
     private Control ToolsTab() {
         return Page(
             Fold("download", "Settings", "Updates",
-                $"{Edition.NAME} {SelfUpdate.CurrentVersion}, installed in {_manager.InstallFolder}.",
+                $"{Edition.NAME} {SelfUpdate.CurrentVersion}.",
                 Row(Action(_updateButton, UpdateAsync)),
                 AutoUpdateBox(),
                 AutoInstallSwitch()),
-            Fold("folder", "Tools", "Files and folders", "Open the server's files, or remove Imlight from this computer.",
+            Fold("folder", "Tools", "Files and folders", $"Installed in {_manager.InstallFolder}.",
                 new WrapPanel {
                     Children = {
                         Spaced(Action(Plain("Open log folder"), () => Open(_manager.LogFolder))),
@@ -1072,6 +1098,7 @@ internal sealed partial class ManagerWindow : Window {
         _updatingRandomizer = true;
         _randomizer.IsChecked = status.Randomizer == true;
         _dieDeleteCard.IsVisible = status.DieDelete is not null;
+        _modesCard.IsVisible = _randomizerCard.IsVisible || _dieDeleteCard.IsVisible;
         _dieDelete.IsChecked = status.DieDelete == true;
         _trainersCard.IsVisible = Has("Trainers", "FreeTraining");
         foreach (var (key, _, toggle) in _trainerSwitches) {
@@ -1982,11 +2009,11 @@ internal sealed partial class ManagerWindow : Window {
         ["Play"] = ("play", "Play Wizard101 on your server, on a friend's, or with friends."),
         ["Commands"] = ("terminal", "Every chat command the server knows, ready to copy."),
         ["Lookup"] = ("search", "Find any command, item, spell, creature, zone or quest and its ID."),
-        ["Spells"] = ("cards", "Every spell card in the game as the game draws it, with its stats and template ID."),
+        ["Spells"] = ("cards", "Every spell card, as the game draws it."),
         ["Bosses"] = ("crown", "Change a boss's health, stats, spells and cheats."),
         ["Customs"] = ("puzzle", "Your own creatures and areas, built from the game's."),
-        ["Guides"] = ("info", "Step by step: make and change customs, bosses and their cheats, drops and areas."),
-        ["Server"] = ("server", "Start and stop the server, and switch its game modes on or off."),
+        ["Guides"] = ("info", "Make a custom, and step-by-step help for everything else."),
+        ["Server"] = ("server", "Start and stop the server, and switch its modes."),
         ["Logs"] = ("log", "What the server and the game are writing down, as it happens."),
         ["Settings"] = ("gear", "Every setting of the server, with what each one does."),
         ["Accounts"] = ("users", "Who can log in to your server, and what they may do."),
@@ -2009,7 +2036,7 @@ internal sealed partial class ManagerWindow : Window {
     }
 
     private static Control Page(params Control[] cards) {
-        var stack = new StackPanel { Margin = new Thickness(24, 12, 24, 40), Spacing = ManagerTheme.GAP, MaxWidth = ManagerTheme.PAGE_MAX_WIDTH };
+        var stack = new StackPanel { Margin = new Thickness(24, 12, 24, 24), Spacing = ManagerTheme.GAP, MaxWidth = ManagerTheme.PAGE_MAX_WIDTH };
         stack.Children.AddRange(cards);
 
         return new ScrollViewer { Content = stack };
@@ -2029,6 +2056,18 @@ internal sealed partial class ManagerWindow : Window {
         stack.Children.AddRange(body);
         return new Section(icon, ManagerTheme.Accent(accent), title, help, stack);
     }
+
+    /// <summary>A section that starts folded shut, for what is used now and then (its title still shows).</summary>
+    private static Section Shut(Section section) {
+        section.SetOpen(false);
+
+        return section;
+    }
+
+    /// <summary>A row with a "?" at its end that shows the longer words, so they are not in the way.</summary>
+    private static Control WithHint(Control row, string hint) => new DockPanel {
+        Children = { WithDock(WithMargin(HintBubble(hint), new Thickness(10, 0, 0, 0)), Dock.Right), row },
+    };
 
     /// <summary>A switch (or a number box) on a row of its own, with what it does on the left.</summary>
     private static Control SwitchRow(string name, Control input, string? help = null) {
