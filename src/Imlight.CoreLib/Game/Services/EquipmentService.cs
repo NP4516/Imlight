@@ -221,12 +221,12 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             if (s_hidePetWhileMounted) {
                 DismissPetEntity();
             }
-            else if (equippedSlot == EquipmentSlotType.PIIVictoryDance) {
-                ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATEAFTERCOMBATDANCE {
-                    AfterCombatDance = (uint) item.m_templateID,
-                    PlayerGID = wizard.GameObjectID
-                }, false);
-            }
+        }
+        else if (equippedSlot == EquipmentSlotType.PIIVictoryDance) {
+            ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATEAFTERCOMBATDANCE {
+                AfterCombatDance = (uint) item.m_templateID,
+                PlayerGID = wizard.GameObjectID
+            }, false);
         }
 
         // If removedEffects is not null, the Wizard replaced an item with another item that has different effects.
@@ -333,6 +333,14 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         if (isPet) {
             DismissPetEntity();
         }
+
+        var isVictoryDance = slotObj?.SlotType == EquipmentSlotType.PIIVictoryDance;
+        if (isVictoryDance) {
+            ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATEAFTERCOMBATDANCE {
+                AfterCombatDance = 0,
+                PlayerGID = wizard.GameObjectID
+            }, false);
+        }
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_EXPIRERENTAL))]
@@ -374,14 +382,6 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_RENTALUPDATE { TemplateID = removal.TemplateId, Reason = 0 });
         } catch (Exception ex) {
             Logger.Error("Error while expiring rental {0}: {1} {2}", Logger.Args(message.ItemId, ex.Message, ex.StackTrace));
-        }
-
-        var isVictoryDance = slotObj?.SlotType == EquipmentSlotType.PIIVictoryDance;
-        if (isVictoryDance) {
-            ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATEAFTERCOMBATDANCE {
-                AfterCombatDance = 0,
-                PlayerGID = wizard.GameObjectID
-            }, false);
         }
     }
 
