@@ -48,7 +48,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.World;
 using Imlight.CoreLib.Shared.Resources;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Houses;
 
 /// <summary>
 /// The zones the game data lists as houses.

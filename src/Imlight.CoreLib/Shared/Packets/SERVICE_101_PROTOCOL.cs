@@ -17,7 +17,7 @@
  */
 
 using System.Collections.Generic;
-using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Housing.Access;
 using Imlight.CoreLib.Shared.Networking;
 
 namespace Imlight.CoreLib.Shared.Packets;

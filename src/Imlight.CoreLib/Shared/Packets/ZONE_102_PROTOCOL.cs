@@ -23,7 +23,7 @@ using Imcodec.Math;
 using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Combat;
-using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Housing.Access;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Models.Player;

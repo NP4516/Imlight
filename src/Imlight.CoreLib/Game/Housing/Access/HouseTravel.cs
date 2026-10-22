@@ -47,10 +47,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing.Houses;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Access;
 
 /// <summary>
 /// Why a player cannot walk into a house.

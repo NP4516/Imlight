@@ -48,7 +48,7 @@ using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
-using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Housing.Access;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Packets;
@@ -364,6 +364,19 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
             Message = reason,
             Modal = (byte) (isImportant ? 1 : 0)
         });
+
+    /// <summary>
+    /// Refuses a request the client could only send by tampering with it: records suspicious behavior on the account,
+    /// logs it and tells the client.
+    /// </summary>
+    /// <param name="request">What the character tried to do, finishing the sentence "Tried to".</param>
+    protected void HandleForgedRequest(string request) {
+        var wizard = GetActiveWizard();
+        wizard.Account?.AddInfraction(InfractionType.SuspiciousBehavior, $"Tried to {request}.");
+        Logger.Warning("Character {CharId} tried to {Request}. This has been logged as suspicious behavior.",
+            Logger.Args(wizard.CharId, request));
+        InformGameClient("That request was refused.");
+    }
 
     protected override void PreRestart(Exception reason, object message) {
         Logger.Error("MessageService {ServiceName} restarting due to {Reason}",

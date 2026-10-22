@@ -34,7 +34,7 @@
  * - A character has one lot per house template, in Wizard.HouseLots. The pointer is written before the item exists,
  *   so an item that is trashed or traded is issued again with the same lot and the house keeps its furniture.
  * - A deed that names a structure is issued together with it, each item with its own lot.
- * - A character's backpack lock (BackpackLock) covers issuing and every handler that moves a house item between the
+ * - A character's backpack lock (HousingItems.BackpackLock) covers issuing and every handler that moves a house item between the
  *   backpack, a house and the attic. Take it before any house or attic state, never inside one.
  * - Running an issue again changes nothing. Nothing is created when the backpack cannot hold everything that is
  *   missing, and a lot that was stored stays stored.
@@ -54,16 +54,18 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing.Access;
+using Imlight.CoreLib.Game.Housing.Items;
+using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Houses;
 
 /// <summary>
 /// Why a house could not be issued.
@@ -100,19 +102,7 @@ internal static class HouseDeeds {
     /// <summary>
     /// The location a character arrives at in a house zone. Every house zone defines it.
     /// </summary>
-    internal const string EntryLocation = "Start";
-
-    private const int BackpackLockCount = 32;
-
-    private static readonly Lock[] s_backpackLocks = [.. Enumerable.Range(0, BackpackLockCount).Select(_ => new Lock())];
-
-    /// <summary>
-    /// Gets the lock that keeps one character's backpack list from changing in two places at once while house items are
-    /// issued, placed, picked up and moved to or from the attic.
-    /// </summary>
-    /// <param name="wizard">The character.</param>
-    /// <returns>The lock to hold for as long as the backpack is read and then changed.</returns>
-    internal static Lock BackpackLock(Wizard wizard) => s_backpackLocks[(int) (wizard.CharId % BackpackLockCount)];
+    internal const string ENTRY_LOCATION = "Start";
 
     /// <summary>
     /// Finds the house Home goes to.
@@ -199,9 +189,9 @@ internal static class HouseDeeds {
     /// </summary>
     /// <param name="wizard">The character.</param>
     internal static void ApplyLots(Wizard wizard) {
-        lock (BackpackLock(wizard)) {
+        lock (HousingItems.BackpackLock(wizard)) {
             foreach (var item in HouseItems(wizard)) {
-                if (!TryEnsureLot(wizard, TemplateIdOf(item), out var lot)) {
+                if (!TryEnsureLot(wizard, ItemHelper.GetTemplateId(item), out var lot)) {
                     Logger.Warning("Could not give house item {ItemId} of character {CharId} a lot.", Logger.Args(item.m_globalID, wizard.CharId));
 
                     continue;
@@ -240,7 +230,7 @@ internal static class HouseDeeds {
     }
 
     private static HouseGrant IssueAll(Wizard wizard, IReadOnlyList<uint> requested) {
-        lock (BackpackLock(wizard)) {
+        lock (HousingItems.BackpackLock(wizard)) {
             if (!TryCollectTemplates(requested, out var wanted, out var failure)) {
                 return new HouseGrant(failure, []);
             }
@@ -250,39 +240,61 @@ internal static class HouseDeeds {
                 return new HouseGrant(HouseGrantFailure.BackpackFull, []);
             }
 
-            var lots = new Dictionary<uint, ulong>();
-            foreach (var template in wanted) {
-                if (!TryEnsureLot(wizard, template.TemplateId, out var lot)) {
-                    Logger.Error("Character {CharId} has no lot for house template {TemplateId} and none could be stored.",
-                        Logger.Args(wizard.CharId, template.TemplateId));
-
-                    return new HouseGrant(HouseGrantFailure.Unavailable, []);
-                }
-
-                lots[template.TemplateId] = lot;
+            if (!TryEnsureLots(wizard, wanted, out var lots)) {
+                return new HouseGrant(HouseGrantFailure.Unavailable, []);
             }
 
             var created = new List<WizClientObjectItem>();
             foreach (var template in wanted) {
-                var item = FindItem(wizard, template.TemplateId);
-                if (item is null) {
-                    item = CreateItem(wizard, template.TemplateId, lots[template.TemplateId]);
-                    if (item is null) {
-                        return new HouseGrant(HouseGrantFailure.Unavailable, created);
-                    }
-
-                    created.Add(item);
-                } else if (!TrySetLot(item, lots[template.TemplateId], out var changed)) {
-                    Logger.Error("House item {ItemId} of character {CharId} has no deed behavior.", Logger.Args(item.m_globalID, wizard.CharId));
-
+                if (!TryIssue(wizard, template.TemplateId, lots[template.TemplateId], created)) {
                     return new HouseGrant(HouseGrantFailure.Unavailable, created);
-                } else if (changed && !WizardItemCollection.ApplyDeedLot(item, lots[template.TemplateId])) {
-                    Logger.Warning("Could not store the lot on house item {ItemId} of character {CharId}.", Logger.Args(item.m_globalID, wizard.CharId));
                 }
             }
 
             return new HouseGrant(HouseGrantFailure.None, created);
         }
+    }
+
+    private static bool TryEnsureLots(Wizard wizard, List<HouseTemplateInfo> wanted, out Dictionary<uint, ulong> lots) {
+        lots = [];
+        foreach (var template in wanted) {
+            if (!TryEnsureLot(wizard, template.TemplateId, out var lot)) {
+                Logger.Error("Character {CharId} has no lot for house template {TemplateId} and none could be stored.",
+                    Logger.Args(wizard.CharId, template.TemplateId));
+
+                return false;
+            }
+
+            lots[template.TemplateId] = lot;
+        }
+
+        return true;
+    }
+
+    private static bool TryIssue(Wizard wizard, uint templateId, ulong lot, List<WizClientObjectItem> created) {
+        var item = FindItem(wizard, templateId);
+        if (item is null) {
+            item = CreateItem(wizard, templateId, lot);
+            if (item is null) {
+                return false;
+            }
+
+            created.Add(item);
+
+            return true;
+        }
+
+        if (!TrySetLot(item, lot, out var changed)) {
+            Logger.Error("House item {ItemId} of character {CharId} has no deed behavior.", Logger.Args(item.m_globalID, wizard.CharId));
+
+            return false;
+        }
+
+        if (changed && !WizardItemCollection.ApplyDeedLot(item, lot)) {
+            Logger.Warning("Could not store the lot on house item {ItemId} of character {CharId}.", Logger.Args(item.m_globalID, wizard.CharId));
+        }
+
+        return true;
     }
 
     private static bool TryCollectTemplates(IReadOnlyList<uint> requested, out List<HouseTemplateInfo> wanted, out HouseGrantFailure failure) {
@@ -300,18 +312,29 @@ internal static class HouseDeeds {
                 wanted.Add(template);
             }
 
-            if (template.HasStructure && wanted.All(known => known.TemplateId != template.StructureTemplateId)) {
-                if (!HouseTemplates.TryGet(template.StructureTemplateId, out var structure)) {
-                    Logger.Error("The structure {StructureTemplateId} of house template {TemplateId} is not a house.",
-                        Logger.Args(template.StructureTemplateId, templateId));
-                    failure = HouseGrantFailure.Unavailable;
+            if (!TryAddStructure(template, wanted)) {
+                failure = HouseGrantFailure.Unavailable;
 
-                    return false;
-                }
-
-                wanted.Add(structure);
+                return false;
             }
         }
+
+        return true;
+    }
+
+    private static bool TryAddStructure(HouseTemplateInfo template, List<HouseTemplateInfo> wanted) {
+        if (!template.HasStructure || wanted.Any(known => known.TemplateId == template.StructureTemplateId)) {
+            return true;
+        }
+
+        if (!HouseTemplates.TryGet(template.StructureTemplateId, out var structure)) {
+            Logger.Error("The structure {StructureTemplateId} of house template {TemplateId} is not a house.",
+                Logger.Args(template.StructureTemplateId, template.TemplateId));
+
+            return false;
+        }
+
+        wanted.Add(structure);
 
         return true;
     }
@@ -339,14 +362,13 @@ internal static class HouseDeeds {
     }
 
     private static WizClientObjectItem CreateItem(Wizard wizard, uint templateId, ulong lotGid) {
-        if (CoreObjectFactory.FinalizeCoreObject(templateId) is not WizClientObjectItem item) {
+        var item = HousingItems.CreateItem(wizard, templateId);
+        if (item is null) {
             Logger.Error("The house template {TemplateId} is not an item.", Logger.Args(templateId));
 
             return null;
         }
 
-        item.m_characterId = (GID) wizard.CharId;
-        CoreObjectFactory.InitializeCoreObjectBehaviors(item, item.m_templateID);
         if (!TrySetLot(item, lotGid, out _)) {
             Logger.Error("The house template {TemplateId} has no deed behavior.", Logger.Args(templateId));
 
@@ -357,15 +379,12 @@ internal static class HouseDeeds {
     }
 
     private static WizClientObjectItem FindItem(Wizard wizard, uint templateId)
-        => HeldItems(wizard).FirstOrDefault(item => TemplateIdOf(item) == templateId);
+        => HeldItems(wizard).FirstOrDefault(item => ItemHelper.GetTemplateId(item) == templateId);
 
     private static List<WizClientObjectItem> HouseItems(Wizard wizard)
-        => [.. HeldItems(wizard).Where(item => HouseTemplates.TryGet(TemplateIdOf(item), out _))];
+        => [.. HeldItems(wizard).Where(item => HouseTemplates.TryGet(ItemHelper.GetTemplateId(item), out _))];
 
     private static IEnumerable<WizClientObjectItem> HeldItems(Wizard wizard)
         => wizard.InventoryBehavior.Items.Concat(wizard.EquipmentBehavior?.EquippedItems ?? []);
-
-    private static uint TemplateIdOf(WizClientObjectItem item)
-        => (uint) Math.Min((ulong) item.m_templateID, uint.MaxValue);
 
 }

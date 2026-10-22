@@ -46,7 +46,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Houses;
 
 internal static class HouseEquipment {
 
@@ -74,7 +74,7 @@ internal static class HouseEquipment {
             return true;
         }
 
-        return named == held && HouseTemplates.TryGet((uint) Math.Min((ulong) item.m_templateID, uint.MaxValue), out _);
+        return named == held && HouseTemplates.TryGet(ItemHelper.GetTemplateId(item), out _);
     }
 
 }

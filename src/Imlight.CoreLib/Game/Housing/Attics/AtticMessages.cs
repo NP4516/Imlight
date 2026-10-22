@@ -45,9 +45,10 @@ using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing.Items;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Attics;
 
 internal static class AtticMessages {
 
@@ -106,21 +107,8 @@ internal static class AtticMessages {
     internal static IMessage BlobMessage(AtticState attic, string subType) {
         var snapshot = attic.Snapshot(subType);
         try {
-            // A removed slot is an empty entry, which the client numbers and does not count.
-            var blob = new Blob {
-                m_type = HousingBlobs.BlobType,
-                m_subType = subType,
-                m_versionNumber = snapshot.Revision,
-                m_packageNumber = 0,
-                m_associatedGID = attic.ContainerGid,
-                m_epochDays = HousingBlobs.EpochDaysNow(),
-                m_data = new HousingBlob { m_housingBlobObjectList = [.. snapshot.Slots.Select(item => item?.ToBlobObject() ?? new HousingBlobObject())] },
-            };
-
-            return new WIZARDHOUSING_50_PROTOCOL.MSG_SEND_BLOB {
-                Data = HousingBlobs.Serialize(blob),
-                UserData = snapshot.GidBase,
-            };
+            return HousingBlobs.CreateBlobMessage(subType, snapshot.Revision, attic.ContainerGid, snapshot.GidBase,
+                snapshot.Slots.Select(item => item?.ToBlobObject() ?? new HousingBlobObject()));
         } catch (InvalidOperationException exception) {
             Logger.Error("Could not build the {SubType} attic blob of character {CharId}: {Reason}",
                 Logger.Args(subType, attic.CharId, exception.Message));

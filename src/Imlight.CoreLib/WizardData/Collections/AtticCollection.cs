@@ -51,7 +51,7 @@ namespace Imlight.CoreLib.WizardData.Collections;
 
 public static class AtticCollection {
 
-    public const string CollectionName = "Attics";
+    public const string COLLECTION_NAME = "Attics";
     private static readonly IDocumentStore s_store;
 
     static AtticCollection() => s_store = PlayerDatabase.Instance.Store;
@@ -78,7 +78,7 @@ public static class AtticCollection {
             using var session = s_store.OpenSession();
 
             session.Store(attic, changeVector: string.Empty, attic.Id);
-            session.Advanced.GetMetadataFor(attic)[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+            session.Advanced.GetMetadataFor(attic)[Raven.Client.Constants.Documents.Metadata.Collection] = COLLECTION_NAME;
             session.SaveChanges();
             winner = attic;
 

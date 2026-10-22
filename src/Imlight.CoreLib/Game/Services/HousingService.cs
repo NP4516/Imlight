@@ -49,36 +49,32 @@ using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
-using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Housing.Attics;
 using Imlight.CoreLib.Game.Housing.Families;
+using Imlight.CoreLib.Game.Housing.Houses;
+using Imlight.CoreLib.Game.Housing.Items;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
-using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
 internal class HousingService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private const string BlobType = HousingBlobs.BlobType;
-    private const string ItemSubType = "Item";
+    private const string ITEM_SUB_TYPE = "Item";
 
     private HouseState _house;
-    private AtticState _attic;
+    private readonly AtticViewer _atticViewer = new();
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new HousingService(parentActor));
 
     protected override void OnPreDispose() {
         LeaveHouse();
-        if (_attic is not null) {
-            AtticRegistry.Release(_attic);
-            _attic = null;
-        }
-
+        _atticViewer.Release();
         base.OnPreDispose();
     }
 
@@ -103,11 +99,11 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         // The client compares this with its cached copy and asks for the blob only when they differ.
         var snapshot = house.Snapshot();
         var request = new BlobRequest {
-            m_type = BlobType,
+            m_type = HousingBlobs.BLOB_TYPE,
             m_associatedGID = house.LotGid,
             m_blobRequestObjectList = [
                 new BlobRequestObject {
-                    m_subType = ItemSubType,
+                    m_subType = ITEM_SUB_TYPE,
                     m_versionNumber = snapshot.Revision,
                     m_packageNumber = 0,
                     m_userData = snapshot.GidBase,
@@ -166,7 +162,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        var templateId = (uint) Math.Min((ulong) item.m_templateID, uint.MaxValue);
+        var templateId = ItemHelper.GetTemplateId(item);
         var placement = HousingItems.Check(templateId, out var template, out var family);
         if (placement == HousingPlacement.Refused) {
             HandleForgedRequest($"place item {message.ObjectID}, template {templateId}, which is not placeable furniture");
@@ -208,7 +204,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         // the two cannot lose the item or leave it in both places.
         var itemId = item.m_globalID;
         HouseChange change;
-        lock (HouseDeeds.BackpackLock(wizard)) {
+        lock (HousingItems.BackpackLock(wizard)) {
             if (!wizard.InventoryBehavior.RemoveItem(item)) {
                 return;
             }
@@ -237,14 +233,14 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             LocY = change.Item.Y,
             LocZ = change.Item.Z,
             Yaw = change.Item.Yaw,
-            SubType = ItemSubType,
+            SubType = ITEM_SUB_TYPE,
             PackageNumber = 0,
             VersionNumber = change.Revision,
             GIDID = change.GidId,
             ColorBits = (sbyte) change.Item.Tint,
         }, isSelfless: false, ZoneBroadcastTarget.Players);
 
-        DeleteStoredItem(wizard.CharId, itemId);
+        HousingItems.DeleteStoredItem(wizard.CharId, itemId);
     }
 
     [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_UPDATEHOUSINGOBJECT))]
@@ -306,7 +302,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
             LocY = change.Item.Y,
             LocZ = change.Item.Z,
             Yaw = change.Item.Yaw,
-            SubType = ItemSubType,
+            SubType = ITEM_SUB_TYPE,
             PackageNumber = 0,
             VersionNumber = change.Revision,
             GIDID = change.GidId,
@@ -335,7 +331,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
 
         WizClientObjectItem item;
         HouseChange change;
-        lock (HouseDeeds.BackpackLock(wizard)) {
+        lock (HousingItems.BackpackLock(wizard)) {
             if (placedItem is null
                 || CoreObjectFactory.GetCoreTemplate(placedItem.TemplateId) is not WizItemTemplate template
                 || wizard.InventoryBehavior.FreeSlots <= 0
@@ -368,7 +364,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
         }
 
         ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEHOUSINGOBJECT {
-            SubType = ItemSubType,
+            SubType = ITEM_SUB_TYPE,
             PackageNumber = 0,
             VersionNumber = change.Revision,
             GIDID = change.GidId,
@@ -422,7 +418,7 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
 
         foreach (var change in result.Removed) {
             ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEHOUSINGOBJECT {
-                SubType = ItemSubType,
+                SubType = ITEM_SUB_TYPE,
                 PackageNumber = 0,
                 VersionNumber = change.Revision,
                 GIDID = change.GidId,
@@ -461,45 +457,18 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
     }
 
     private bool TryGetAttic(out AtticState attic) {
-        attic = _attic;
-        if (attic is not null) {
-            return true;
-        }
-
         var wizard = GetActiveWizard();
-        if (!AtticRegistry.TryEnter(wizard, out attic, out var created, out var audit)) {
-            Logger.Error("Character {CharId} has an attic that cannot be loaded.", Logger.Args(wizard.CharId));
+        if (!_atticViewer.TryEnter(wizard, out attic, out var opening)) {
             InformGameClient("Your attic is not available right now. Please try again later.");
 
             return false;
         }
 
-        _attic = attic;
-        foreach (var message in AtticMessages.Opening(wizard, attic, created, audit)) {
+        foreach (var message in opening) {
             SendToSocket(message);
         }
 
         return true;
-    }
-
-    private void HandleForgedRequest(string request) {
-        var wizard = GetActiveWizard();
-        wizard.Account?.AddInfraction(InfractionType.SuspiciousBehavior, $"Tried to {request}.");
-        Logger.Warning("Character {CharId} tried to {Request}. This has been logged as suspicious behavior.",
-            Logger.Args(wizard.CharId, request));
-        InformGameClient("That request was refused.");
-    }
-
-    private static void DeleteStoredItem(ulong charId, ulong itemId) {
-        // The item already left the backpack, so only an unused document is left to delete.
-        try {
-            if (!WizardItemCollection.RemoveItem(charId, itemId)) {
-                Logger.Warning("Placed item {ItemId} of character {CharId} has no stored item to delete.", Logger.Args(itemId, charId));
-            }
-        } catch (Exception exception) {
-            Logger.Warning("Could not delete the stored item {ItemId} of character {CharId}: {Reason}",
-                Logger.Args(itemId, charId, exception.Message));
-        }
     }
 
     private void RefusePickUp(HouseState house) {
@@ -520,28 +489,16 @@ internal class HousingService(SessionActor sessionActor) : MessageService(sessio
     private void SendBlob(HouseState house) {
         var snapshot = house.Snapshot();
         try {
-            // A removed slot is an empty entry, which the client numbers and does not count.
-            var blob = new Blob {
-                m_type = BlobType,
-                m_subType = ItemSubType,
-                m_versionNumber = snapshot.Revision,
-                m_packageNumber = 0,
-                m_associatedGID = house.LotGid,
-                m_epochDays = HousingBlobs.EpochDaysNow(),
-                m_data = new HousingBlob { m_housingBlobObjectList = [.. snapshot.Slots.Select(item => item?.ToBlobObject() ?? new HousingBlobObject())] },
-            };
-            SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_SEND_BLOB {
-                Data = HousingBlobs.Serialize(blob),
-                UserData = snapshot.GidBase,
-            });
+            SendToSocket(HousingBlobs.CreateBlobMessage(ITEM_SUB_TYPE, snapshot.Revision, house.LotGid, snapshot.GidBase,
+                snapshot.Slots.Select(item => item?.ToBlobObject() ?? new HousingBlobObject())));
         } catch (InvalidOperationException exception) {
             Logger.Error("Could not build the blob of lot {LotGid}: {Reason}", Logger.Args(house.LotGid, exception.Message));
         }
     }
 
     private static bool RequestsItemBlob(BlobRequest request, ulong lotGid)
-        => request.m_type == BlobType && request.m_associatedGID == lotGid
+        => request.m_type == HousingBlobs.BLOB_TYPE && request.m_associatedGID == lotGid
             && request.m_blobRequestObjectList?.Any(entry => entry is not null
-                && entry.m_subType == ItemSubType && entry.m_packageNumber == 0) == true;
+                && entry.m_subType == ITEM_SUB_TYPE && entry.m_packageNumber == 0) == true;
 
 }

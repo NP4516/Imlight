@@ -43,20 +43,22 @@
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/14/2026
+ * Last Updated: 10/21/2026
  */
 
 using System;
 using System.Linq;
+using System.Threading;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Housing.Families;
 using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Items;
 
 /// <summary>
 /// Whether an item template is furniture.
@@ -77,8 +79,18 @@ internal enum HousingPlacement {
 
 internal static class HousingItems {
 
-    private const string FurnitureAdjective = "Housing";
-    private const string WeaponAdjective = "Weapon";
+    private const string FURNITURE_ADJECTIVE = "Housing";
+    private const string WEAPON_ADJECTIVE = "Weapon";
+
+    private static readonly StripedLocks s_backpackLocks = new();
+
+    /// <summary>
+    /// Gets the lock that keeps one character's backpack list from changing in two places at once while house items are
+    /// issued, placed, picked up and moved to or from the attic.
+    /// </summary>
+    /// <param name="wizard">The character.</param>
+    /// <returns>The lock to hold for as long as the backpack is read and then changed.</returns>
+    internal static Lock BackpackLock(Wizard wizard) => s_backpackLocks.For(wizard.CharId);
 
     /// <summary>
     /// Checks the rules every placed object follows, whatever its family: the template is an object the client offers
@@ -92,8 +104,8 @@ internal static class HousingItems {
         }
 
         var adjectives = (template.m_adjectiveList ?? []).Select(adjective => adjective.ToString()).ToList();
-        if (!adjectives.Contains(FurnitureAdjective, StringComparer.Ordinal)
-            || adjectives.Contains(WeaponAdjective, StringComparer.Ordinal)) {
+        if (!adjectives.Contains(FURNITURE_ADJECTIVE, StringComparer.Ordinal)
+            || adjectives.Contains(WEAPON_ADJECTIVE, StringComparer.Ordinal)) {
             return HousingItemKind.NotFurniture;
         }
 
@@ -171,6 +183,22 @@ internal static class HousingItems {
         CoreObjectFactory.InitializeCoreObjectBehaviors(item, item.m_templateID);
 
         return item;
+    }
+
+    /// <summary>
+    /// Deletes the stored document of an item that already left the backpack, so only an unused document is left.
+    /// </summary>
+    /// <param name="charId">The character who held the item.</param>
+    /// <param name="itemId">The item's global id.</param>
+    internal static void DeleteStoredItem(ulong charId, ulong itemId) {
+        try {
+            if (!WizardItemCollection.RemoveItem(charId, itemId)) {
+                Logger.Warning("Item {ItemId} of character {CharId} has no stored document to delete.", Logger.Args(itemId, charId));
+            }
+        } catch (Exception exception) {
+            Logger.Warning("Could not delete the stored item {ItemId} of character {CharId}: {Reason}",
+                Logger.Args(itemId, charId, exception.Message));
+        }
     }
 
     private static bool IsGidInUse(Wizard wizard, ulong itemGid) {

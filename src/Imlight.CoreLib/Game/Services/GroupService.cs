@@ -51,7 +51,7 @@ using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Groups;
-using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Housing.Access;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;

@@ -49,30 +49,27 @@ using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
-using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Housing.Attics;
 using Imlight.CoreLib.Game.Housing.Families;
+using Imlight.CoreLib.Game.Housing.Houses;
+using Imlight.CoreLib.Game.Housing.Items;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
-using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
 internal class AtticService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private AtticState _attic;
+    private readonly AtticViewer _atticViewer = new();
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new AtticService(parentActor));
 
     protected override void OnPreDispose() {
-        if (_attic is not null) {
-            AtticRegistry.Release(_attic);
-            _attic = null;
-        }
-
+        _atticViewer.Release();
         base.OnPreDispose();
     }
 
@@ -108,7 +105,7 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
-        if (request.m_type != HousingBlobs.BlobType || !TryGetAttic(out var attic)) {
+        if (request.m_type != HousingBlobs.BLOB_TYPE || !TryGetAttic(out var attic)) {
             Logger.Warning("Character {CharId} sent a blob request for the attic that is not a housing request.", Logger.Args(wizard.CharId));
 
             return;
@@ -142,7 +139,7 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
-        var templateId = (uint) Math.Min((ulong) item.m_templateID, uint.MaxValue);
+        var templateId = ItemHelper.GetTemplateId(item);
         var placement = HousingItems.Check(templateId, out _, out var family);
         if (placement == HousingPlacement.Refused) {
             HandleForgedRequest($"move item {message.ItemID}, template {templateId}, which is not housing furniture, to the attic");
@@ -172,7 +169,7 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
         // two cannot lose the item or leave it in both places.
         var itemId = item.m_globalID;
         AtticChange change;
-        lock (HouseDeeds.BackpackLock(wizard)) {
+        lock (HousingItems.BackpackLock(wizard)) {
             if (!wizard.InventoryBehavior.RemoveItem(item)) {
                 return;
             }
@@ -199,7 +196,7 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
         SendToSocket(AtticMessages.AddPatch(attic, change));
         SendCount(wizard, attic);
 
-        DeleteStoredItem(wizard.CharId, itemId);
+        HousingItems.DeleteStoredItem(wizard.CharId, itemId);
     }
 
     [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_MOVEFROMATTIC))]
@@ -216,7 +213,7 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
 
         WizClientObjectItem item;
         AtticChange change;
-        lock (HouseDeeds.BackpackLock(wizard)) {
+        lock (HousingItems.BackpackLock(wizard)) {
             if (CoreObjectFactory.GetCoreTemplate(stored.TemplateId) is not WizItemTemplate template
                 || wizard.InventoryBehavior.FreeSlots <= 0
                 || HousingItems.TemplateCopyLimitReached(template, HousingItems.CountInBackpack(wizard, stored.TemplateId))) {
@@ -296,21 +293,14 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
     }
 
     private bool TryGetAttic(out AtticState attic) {
-        attic = _attic;
-        if (attic is not null) {
-            return true;
-        }
-
         var wizard = GetActiveWizard();
-        if (!AtticRegistry.TryEnter(wizard, out attic, out var created, out var audit)) {
-            Logger.Error("Character {CharId} has an attic that cannot be loaded.", Logger.Args(wizard.CharId));
+        if (!_atticViewer.TryEnter(wizard, out attic, out var opening)) {
             InformGameClient("Your attic is not available right now. Please try again later.");
 
             return false;
         }
 
-        _attic = attic;
-        foreach (var message in AtticMessages.Opening(wizard, attic, created, audit)) {
+        foreach (var message in opening) {
             SendToSocket(message);
         }
 
@@ -331,25 +321,5 @@ internal class AtticService(SessionActor sessionActor) : MessageService(sessionA
 
     private static bool IsAtticSubType(string subType)
         => HousingFamilies.All.Any(family => family.AtticSubType == subType);
-
-    private void HandleForgedRequest(string request) {
-        var wizard = GetActiveWizard();
-        wizard.Account?.AddInfraction(InfractionType.SuspiciousBehavior, $"Tried to {request}.");
-        Logger.Warning("Character {CharId} tried to {Request}. This has been logged as suspicious behavior.",
-            Logger.Args(wizard.CharId, request));
-        InformGameClient("That request was refused.");
-    }
-
-    private static void DeleteStoredItem(ulong charId, ulong itemId) {
-        // The item already left the backpack, so only an unused document is left to delete.
-        try {
-            if (!WizardItemCollection.RemoveItem(charId, itemId)) {
-                Logger.Warning("Item {ItemId} of character {CharId} has no stored document to delete.", Logger.Args(itemId, charId));
-            }
-        } catch (Exception exception) {
-            Logger.Warning("Could not delete the stored item {ItemId} of character {CharId}: {Reason}",
-                Logger.Args(itemId, charId, exception.Message));
-        }
-    }
 
 }

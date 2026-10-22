@@ -37,7 +37,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 10/21/2026
  */
 
 using System;
@@ -79,6 +79,14 @@ internal static class ItemHelper {
 
         return (WizItemTemplate) template;
     }
+
+    /// <summary>
+    /// Gets the template id of an item as the 32-bit id every template lookup uses.
+    /// </summary>
+    /// <param name="item">The item in question.</param>
+    /// <returns>The template id, capped at the largest 32-bit value.</returns>
+    internal static uint GetTemplateId(WizClientObjectItem item)
+        => (uint) Math.Min((ulong) item.m_templateID, uint.MaxValue);
 
     /// <summary>
     /// Gets the slot of a WizClientObjectItem from the template adjectives.

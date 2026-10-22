@@ -40,24 +40,20 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Attics;
 
 /// <summary>
 /// The attics that are loaded, by character.
 /// </summary>
 internal static class AtticRegistry {
 
-    private const int CreationLockCount = 32;
-
     private static readonly ConcurrentDictionary<ulong, AtticState> s_attics = new();
-    private static readonly Lock[] s_creationLocks = [.. Enumerable.Range(0, CreationLockCount).Select(_ => new Lock())];
+    private static readonly StripedLocks s_creationLocks = new();
 
     /// <summary>
     /// Fills in what the client is told about the attic when the character enters the game: the container and the item count.
@@ -89,12 +85,8 @@ internal static class AtticRegistry {
                     Evict(existing);
                 }
 
-                lock (s_creationLocks[(int) (wizard.CharId % CreationLockCount)]) {
-                    if (s_attics.TryGetValue(wizard.CharId, out var raced) && !raced.IsRetired) {
-                        state = raced;
-                    } else if (!TryPublish(wizard, out state, out created, out audit)) {
-                        return false;
-                    }
+                if (!TryGetOrPublish(wizard, out state, ref created, ref audit)) {
+                    return false;
                 }
             }
 
@@ -130,6 +122,18 @@ internal static class AtticRegistry {
 
     private static void Evict(AtticState state)
         => s_attics.TryRemove(new KeyValuePair<ulong, AtticState>(state.CharId, state));
+
+    private static bool TryGetOrPublish(Wizard wizard, out AtticState state, ref bool created, ref AtticAudit audit) {
+        lock (s_creationLocks.For(wizard.CharId)) {
+            if (s_attics.TryGetValue(wizard.CharId, out var raced) && !raced.IsRetired) {
+                state = raced;
+
+                return true;
+            }
+
+            return TryPublish(wizard, out state, out created, out audit);
+        }
+    }
 
     private static bool TryPublish(Wizard wizard, out AtticState state, out bool created, out AtticAudit audit) {
         state = null;

@@ -46,8 +46,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
+using Imlight.CoreLib.Game.Housing.Houses;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Access;
 
 /// <summary>
 /// How the client is asked to load a house zone.
@@ -88,8 +89,8 @@ public sealed record HouseEntry(
     ulong ObjectGid,
     IReadOnlyList<ulong> NewItemGids) {
 
-    private const int ReadyStatus = 0;
-    private const int PatchingStatus = 1;
+    private const int READY_STATUS = 0;
+    private const int PATCHING_STATUS = 1;
 
     /// <summary>
     /// Makes the entry for the owner's Home: the client opens the zone for the deed item.
@@ -117,7 +118,7 @@ public sealed record HouseEntry(
     internal IMessage CreateRequest(string location) => Kind switch {
         HouseEntryKind.Deed => new WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTDEEDZONE {
             GlobalID = ObjectGid,
-            Status = ReadyStatus,
+            Status = READY_STATUS,
             Teleport = 0,
             Arguments = string.Create(CultureInfo.InvariantCulture, $"CLUSTER={LotGid}"),
         },
@@ -127,7 +128,7 @@ public sealed record HouseEntry(
         },
         _ => new WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTHOUSINGZONE {
             GlobalID = ObjectGid,
-            Status = ReadyStatus,
+            Status = READY_STATUS,
             TemplateGID = TemplateId,
         },
     };
@@ -141,8 +142,8 @@ public sealed record HouseEntry(
         }
 
         return echo.Status switch {
-            ReadyStatus => HouseEchoStatus.Ready,
-            PatchingStatus => HouseEchoStatus.Patching,
+            READY_STATUS => HouseEchoStatus.Ready,
+            PATCHING_STATUS => HouseEchoStatus.Patching,
             _ => HouseEchoStatus.Refused,
         };
     }
@@ -161,7 +162,7 @@ public sealed record HouseEntry(
             return HouseEchoStatus.NotForThisEntry;
         }
 
-        return echo.Status == ReadyStatus ? HouseEchoStatus.Ready : HouseEchoStatus.Refused;
+        return echo.Status == READY_STATUS ? HouseEchoStatus.Ready : HouseEchoStatus.Refused;
     }
 
 }

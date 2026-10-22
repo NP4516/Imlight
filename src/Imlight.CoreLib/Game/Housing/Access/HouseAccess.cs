@@ -44,7 +44,7 @@
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Access;
 
 /// <summary>
 /// What a character may do in a house.

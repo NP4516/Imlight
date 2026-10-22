@@ -46,11 +46,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Imlight.CoreLib.Game.Housing.Attics;
 using Imlight.CoreLib.Game.Housing.Families;
+using Imlight.CoreLib.Game.Housing.Items;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Houses;
 
 /// <summary>
 /// How a pick up of every object ended.

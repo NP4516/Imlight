@@ -48,20 +48,19 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
-using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Housing.Access;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
-using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
 internal class HousingVisitService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private const int QueryVisitorTimeoutSeconds = 5;
-    private const byte SendAwayAccepted = 0;
-    private const byte SendAwayRefusedForStaff = 1;
+    private const int QUERY_VISITOR_TIMEOUT_SECONDS = 5;
+    private const byte SEND_AWAY_ACCEPTED = 0;
+    private const byte SEND_AWAY_REFUSED_FOR_STAFF = 1;
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new HousingVisitService(parentActor));
@@ -80,7 +79,7 @@ internal class HousingVisitService(SessionActor sessionActor) : MessageService(s
         var wizard = GetActiveWizard();
         var house = wizard.AttachedLotGid == 0 ? null : HouseCollection.Load(wizard.AttachedLotGid);
         if (house is null || house.OwnerCharId != wizard.CharId) {
-            HandleForgedRequest(wizard, "send a player away from a house that is not theirs");
+            HandleForgedRequest("send a player away from a house that is not theirs");
 
             return;
         }
@@ -96,7 +95,7 @@ internal class HousingVisitService(SessionActor sessionActor) : MessageService(s
         if (visitor.Account?.AuthLevel > AuthLevel.None) {
             SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTSENDAWAY {
                 TargetPlayer = visitor.GameObjectID,
-                ISCSR = SendAwayRefusedForStaff
+                ISCSR = SEND_AWAY_REFUSED_FOR_STAFF
             });
 
             return;
@@ -143,7 +142,7 @@ internal class HousingVisitService(SessionActor sessionActor) : MessageService(s
             var response = selection
                 .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(
                     new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD(),
-                    TimeSpan.FromSeconds(QueryVisitorTimeoutSeconds))
+                    TimeSpan.FromSeconds(QUERY_VISITOR_TIMEOUT_SECONDS))
                 .Result;
             if (response?.Wizard is { } candidate && candidate.AttachedLotGid == owner.AttachedLotGid) {
                 visitor = candidate;
@@ -159,14 +158,7 @@ internal class HousingVisitService(SessionActor sessionActor) : MessageService(s
     private static WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTSENDAWAY CreateSendAway(ulong targetPlayer)
         => new() {
             TargetPlayer = targetPlayer,
-            ISCSR = SendAwayAccepted
+            ISCSR = SEND_AWAY_ACCEPTED
         };
-
-    private void HandleForgedRequest(Wizard wizard, string request) {
-        wizard.Account?.AddInfraction(InfractionType.SuspiciousBehavior, $"Tried to {request}.");
-        Logger.Warning("Character {CharId} tried to {Request}. This has been logged as suspicious behavior.",
-            Logger.Args(wizard.CharId, request));
-        InformGameClient("That request was refused.");
-    }
 
 }

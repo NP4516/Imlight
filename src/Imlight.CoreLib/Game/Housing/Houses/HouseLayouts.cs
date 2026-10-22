@@ -50,15 +50,15 @@ using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Houses;
 
 /// <summary>
 /// Reads the initial layouts of houses.
 /// </summary>
 internal static class HouseLayouts {
 
-    private const char AssetSeparator = '|';
-    private const int AssetParts = 3;
+    private const char ASSET_SEPARATOR = '|';
+    private const int ASSET_PARTS = 3;
 
     private static readonly ConcurrentDictionary<(string LayoutFile, string ZoneName), IReadOnlyList<PlacedItem>> s_resolved = new();
 
@@ -101,8 +101,8 @@ internal static class HouseLayouts {
     }
 
     private static HousingLayout ReadNamed(string layoutFile) {
-        var parts = layoutFile.Split(AssetSeparator, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != AssetParts) {
+        var parts = layoutFile.Split(ASSET_SEPARATOR, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != ASSET_PARTS) {
             Logger.Error("The layout file {LayoutFile} is not an archive, a folder and a file.", Logger.Args(layoutFile));
 
             return null;

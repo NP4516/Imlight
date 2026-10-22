@@ -52,7 +52,7 @@ namespace Imlight.CoreLib.WizardData.Collections;
 
 public static class HouseCollection {
 
-    public const string CollectionName = "Houses";
+    public const string COLLECTION_NAME = "Houses";
     private static readonly IDocumentStore s_store;
 
     static HouseCollection() => s_store = PlayerDatabase.Instance.Store;
@@ -242,7 +242,7 @@ public static class HouseCollection {
     private static void StoreNew(IDocumentSession session, House house) {
         session.Store(house, changeVector: string.Empty, house.Id);
         var metadata = session.Advanced.GetMetadataFor(house);
-        metadata[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+        metadata[Raven.Client.Constants.Documents.Metadata.Collection] = COLLECTION_NAME;
     }
 
     private static void CopyChanging(House from, House to) {

@@ -37,28 +37,29 @@
  *
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/15/2026
+ * Last Updated: 10/21/2026
  */
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Imcodec.IO;
+using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Items;
 
 internal static class HousingBlobs {
 
     /// <summary>
     /// The blob type of everything housing.
     /// </summary>
-    internal const string BlobType = "Housing";
+    internal const string BLOB_TYPE = "Housing";
 
-    private const int MaxRequestLength = 4096;
-    private const int MaxSerializedLength = 65535;
-    private const uint SerializeMask = 1;
+    private const int MAX_REQUEST_LENGTH = 4096;
+    private const int MAX_SERIALIZED_LENGTH = 65535;
+    private const uint SERIALIZE_MASK = 1;
 
     /// <summary>
     /// Counts the days the client stamps on a blob it caches, the way the client does.
@@ -68,19 +69,47 @@ internal static class HousingBlobs {
         => unchecked((uint) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 60 * 1440));
 
     /// <summary>
+    /// Builds the message that sends one blob of housing objects.
+    /// </summary>
+    /// <param name="subType">The blob's subtype.</param>
+    /// <param name="revision">The blob's version.</param>
+    /// <param name="associatedGid">The house lot or attic container the blob belongs to.</param>
+    /// <param name="gidBase">The base the entries are numbered from.</param>
+    /// <param name="entries">The entries in slot order; a removed slot is an empty entry, which the client numbers and does not count.</param>
+    /// <returns>The blob message.</returns>
+    /// <exception cref="InvalidOperationException">The blob cannot be serialized or does not fit a string field.</exception>
+    internal static WIZARDHOUSING_50_PROTOCOL.MSG_SEND_BLOB CreateBlobMessage(string subType, uint revision, ulong associatedGid, uint gidBase,
+                                                                              IEnumerable<HousingBlobObject> entries) {
+        var blob = new Blob {
+            m_type = BLOB_TYPE,
+            m_subType = subType,
+            m_versionNumber = revision,
+            m_packageNumber = 0,
+            m_associatedGID = associatedGid,
+            m_epochDays = EpochDaysNow(),
+            m_data = new HousingBlob { m_housingBlobObjectList = [.. entries] },
+        };
+
+        return new WIZARDHOUSING_50_PROTOCOL.MSG_SEND_BLOB {
+            Data = Serialize(blob),
+            UserData = gidBase,
+        };
+    }
+
+    /// <summary>
     /// Serializes a blob or a blob request.
     /// </summary>
     /// <param name="value">The object to serialize.</param>
     /// <returns>The bytes the client reads.</returns>
     /// <exception cref="InvalidOperationException">The object cannot be serialized or does not fit a string field.</exception>
     internal static ByteString Serialize(PropertyClass value) {
-        if (!NewSerializer().Serialize(value, SerializeMask, out var serialized)) {
+        if (!NewSerializer().Serialize(value, SERIALIZE_MASK, out var serialized)) {
             throw new InvalidOperationException($"Could not serialize {value.GetType().Name}.");
         }
 
-        if (serialized.Length > MaxSerializedLength) {
+        if (serialized.Length > MAX_SERIALIZED_LENGTH) {
             throw new InvalidOperationException(
-                $"{value.GetType().Name} is {serialized.Length} bytes, past the {MaxSerializedLength} byte string limit.");
+                $"{value.GetType().Name} is {serialized.Length} bytes, past the {MAX_SERIALIZED_LENGTH} byte string limit.");
         }
 
         return serialized;
@@ -95,14 +124,14 @@ internal static class HousingBlobs {
     internal static bool TryParseRequest(ByteString data, out BlobRequest request) {
         request = null;
         byte[] bytes = data;
-        if (bytes is null || bytes.Length == 0 || bytes.Length > MaxRequestLength) {
+        if (bytes is null || bytes.Length == 0 || bytes.Length > MAX_REQUEST_LENGTH) {
             return false;
         }
 
         try {
             var serializer = NewSerializer();
-            if (!serializer.Deserialize<BlobRequest>(bytes, SerializeMask, out var parsed) || parsed is null
-                || !serializer.Serialize(parsed, SerializeMask, out var canonical)
+            if (!serializer.Deserialize<BlobRequest>(bytes, SERIALIZE_MASK, out var parsed) || parsed is null
+                || !serializer.Serialize(parsed, SERIALIZE_MASK, out var canonical)
                 || !((byte[]) canonical).AsSpan().SequenceEqual(bytes)) {
                 return false;
             }
@@ -129,7 +158,7 @@ internal static class HousingBlobs {
         }
 
         try {
-            if (bytes.Length > MaxSerializedLength || !NewSerializer().Deserialize<HousingItemList>(bytes, SerializeMask, out var parsed) || parsed is null) {
+            if (bytes.Length > MAX_SERIALIZED_LENGTH || !NewSerializer().Deserialize<HousingItemList>(bytes, SERIALIZE_MASK, out var parsed) || parsed is null) {
                 return false;
             }
 

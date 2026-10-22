@@ -52,34 +52,34 @@ namespace Imlight.CoreLib.WizardData.Models.Player;
 /// </summary>
 public sealed record PlacedItem {
 
-    public const int MaxCoordinate = 0x7FFF;
-    public const float MinScale = 0.10f;
-    public const float MaxScale = 4.0f;
-    public const int MaxBrightness = 100;
-    public const int MaxTint = 15;
-    public const int MaxRemapIndex = 15;
+    public const int MAX_COORDINATE = 0x7FFF;
+    public const float MIN_SCALE = 0.10f;
+    public const float MAX_SCALE = 4.0f;
+    public const int MAX_BRIGHTNESS = 100;
+    public const int MAX_TINT = 15;
+    public const int MAX_REMAP_INDEX = 15;
 
-    private const uint TemplateIdMask = 0x0FFFFFFF;
-    private const uint RemapFlag = 0x20000000;
-    private const uint ExtendedYawFlag = 0x80000000;
-    private const uint ExtendedYawOver255Flag = 0x40000000;
-    private const uint TintShift = 3;
-    private const uint ScaleShift = 8;
-    private const uint ExtendedYawShift = 16;
-    private const uint ExtendedYawMask = 0xFF;
-    private const uint BrightnessShift = 24;
-    private const uint BrightnessMask = 0x7F;
-    private const uint RemapMask = 0xF;
-    private const uint TileRemapShift = 4;
-    private const uint NegativeCoordinateBit = 0x8000;
-    private const byte FirstFineScaleCode = 0x1A;
-    private const byte FirstQuarterScaleCode = 0x1D;
-    private const byte LastQuarterScaleCode = 0x2C;
-    private const int DegreesPerSector = 45;
-    private const int DegreesPerTurn = 360;
-    private const float TwoPi = 6.2831855f;
-    private const float Pi = 3.1415927f;
-    private const float EighthTurn = 0.7853982f;
+    private const uint TEMPLATE_ID_MASK = 0x0FFFFFFF;
+    private const uint REMAP_FLAG = 0x20000000;
+    private const uint EXTENDED_YAW_FLAG = 0x80000000;
+    private const uint EXTENDED_YAW_OVER255_FLAG = 0x40000000;
+    private const uint TINT_SHIFT = 3;
+    private const uint SCALE_SHIFT = 8;
+    private const uint EXTENDED_YAW_SHIFT = 16;
+    private const uint EXTENDED_YAW_MASK = 0xFF;
+    private const uint BRIGHTNESS_SHIFT = 24;
+    private const uint BRIGHTNESS_MASK = 0x7F;
+    private const uint REMAP_MASK = 0xF;
+    private const uint TILE_REMAP_SHIFT = 4;
+    private const uint NEGATIVE_COORDINATE_BIT = 0x8000;
+    private const byte FIRST_FINE_SCALE_CODE = 0x1A;
+    private const byte FIRST_QUARTER_SCALE_CODE = 0x1D;
+    private const byte LAST_QUARTER_SCALE_CODE = 0x2C;
+    private const int DEGREES_PER_SECTOR = 45;
+    private const int DEGREES_PER_TURN = 360;
+    private const float TWO_PI = 6.2831855f;
+    private const float PI = 3.1415927f;
+    private const float EIGHTH_TURN = 0.7853982f;
 
     // The sector codes are not in compass order: the code of 45 degrees is 4, of 90 degrees 1, and so on.
     private static readonly byte[] s_sectorByDirection = [0, 4, 1, 5, 2, 6, 3, 7];
@@ -114,7 +114,7 @@ public sealed record PlacedItem {
     public bool ExactYaw { get; init; }
 
     public float Scale { get; init; } = 1.0f;
-    public int Brightness { get; init; } = MaxBrightness;
+    public int Brightness { get; init; } = MAX_BRIGHTNESS;
     public int Tint { get; init; }
     public int? WallpaperRemap { get; init; }
     public int? TileRemap { get; init; }
@@ -144,22 +144,22 @@ public sealed record PlacedItem {
     /// or the height is beyond the client's range, or the scale, brightness, tint or a remap index is out of range.
     /// </returns>
     public PlacedItem Normalize() {
-        if (TemplateId == 0 || TemplateId > TemplateIdMask || !TryRoundCoordinate(X, out var x)
-            || !TryRoundCoordinate(Y, out var y) || !float.IsFinite(Z) || MathF.Abs(Z) > MaxCoordinate
-            || !float.IsFinite(Yaw) || !float.IsFinite(Scale) || Scale < MinScale || Scale > MaxScale
-            || Brightness is < 0 or > MaxBrightness || Tint is < 0 or > MaxTint
-            || WallpaperRemap is < 0 or > MaxRemapIndex || TileRemap is < 0 or > MaxRemapIndex) {
+        if (TemplateId == 0 || TemplateId > TEMPLATE_ID_MASK || !TryRoundCoordinate(X, out var x)
+            || !TryRoundCoordinate(Y, out var y) || !float.IsFinite(Z) || MathF.Abs(Z) > MAX_COORDINATE
+            || !float.IsFinite(Yaw) || !float.IsFinite(Scale) || Scale < MIN_SCALE || Scale > MAX_SCALE
+            || Brightness is < 0 or > MAX_BRIGHTNESS || Tint is < 0 or > MAX_TINT
+            || WallpaperRemap is < 0 or > MAX_REMAP_INDEX || TileRemap is < 0 or > MAX_REMAP_INDEX) {
             return null;
         }
 
         var exactYaw = ExactYaw;
         float yaw;
         var degrees = exactYaw ? ClientDegrees(Yaw) : 0;
-        if (exactYaw && degrees % DegreesPerSector != 0) {
-            yaw = (degrees + 0.5f) * Pi / 180f;
+        if (exactYaw && degrees % DEGREES_PER_SECTOR != 0) {
+            yaw = (degrees + 0.5f) * PI / 180f;
         } else {
-            var direction = exactYaw ? degrees / DegreesPerSector : DirectionOf(Yaw);
-            yaw = direction * EighthTurn;
+            var direction = exactYaw ? degrees / DEGREES_PER_SECTOR : DirectionOf(Yaw);
+            yaw = direction * EIGHTH_TURN;
             exactYaw = false;
         }
 
@@ -171,46 +171,46 @@ public sealed record PlacedItem {
     /// </summary>
     /// <returns>The blob entry.</returns>
     public HousingBlobObject ToBlobObject() {
-        var template = TemplateId & TemplateIdMask;
+        var template = TemplateId & TEMPLATE_ID_MASK;
         var extra = 0u;
 
         var degrees = ExactYaw ? ClientDegrees(Yaw) : 0;
-        if (ExactYaw && degrees % DegreesPerSector != 0) {
-            template |= ExtendedYawFlag;
+        if (ExactYaw && degrees % DEGREES_PER_SECTOR != 0) {
+            template |= EXTENDED_YAW_FLAG;
             if (degrees > byte.MaxValue) {
-                template |= ExtendedYawOver255Flag;
+                template |= EXTENDED_YAW_OVER255_FLAG;
             }
 
-            extra |= ((uint) degrees & ExtendedYawMask) << (int) ExtendedYawShift;
+            extra |= ((uint) degrees & EXTENDED_YAW_MASK) << (int) EXTENDED_YAW_SHIFT;
         }
 
         if (WallpaperRemap is not null || TileRemap is not null) {
-            template |= RemapFlag;
-            extra |= ((uint) (WallpaperRemap ?? 0) & RemapMask) | (((uint) (TileRemap ?? 0) & RemapMask) << (int) TileRemapShift);
+            template |= REMAP_FLAG;
+            extra |= ((uint) (WallpaperRemap ?? 0) & REMAP_MASK) | (((uint) (TileRemap ?? 0) & REMAP_MASK) << (int) TILE_REMAP_SHIFT);
         }
 
-        extra |= (uint) ScaleCode(Scale) << (int) ScaleShift;
-        if (Brightness != MaxBrightness) {
-            extra |= (((uint) Brightness + 1) & BrightnessMask) << (int) BrightnessShift;
+        extra |= (uint) ScaleCode(Scale) << (int) SCALE_SHIFT;
+        if (Brightness != MAX_BRIGHTNESS) {
+            extra |= (((uint) Brightness + 1) & BRIGHTNESS_MASK) << (int) BRIGHTNESS_SHIFT;
         }
 
         return new HousingBlobObject {
             m_gameObjectTemplateID = template,
             m_positionXY = (PackCoordinate(X) << 16) | PackCoordinate(Y),
             m_positionZ = Z,
-            m_yaw = (byte) (((uint) Tint << (int) TintShift) | SectorCode(Yaw)),
+            m_yaw = (byte) (((uint) Tint << (int) TINT_SHIFT) | SectorCode(Yaw)),
             m_extraData1 = extra,
         };
     }
 
     private static bool TryRoundCoordinate(float value, out float rounded) {
         rounded = 0;
-        if (!float.IsFinite(value) || MathF.Abs(value) > MaxCoordinate + 1) {
+        if (!float.IsFinite(value) || MathF.Abs(value) > MAX_COORDINATE + 1) {
             return false;
         }
 
         var magnitude = value >= 0 ? (int) (value + 0.5f) : (int) (0.5f - value);
-        if (magnitude > MaxCoordinate) {
+        if (magnitude > MAX_COORDINATE) {
             return false;
         }
 
@@ -220,16 +220,16 @@ public sealed record PlacedItem {
     }
 
     private static uint PackCoordinate(float value)
-        => value >= 0 ? (uint) (value + 0.5f) & MaxCoordinate : NegativeCoordinateBit + ((uint) (0.5f - value) & MaxCoordinate);
+        => value >= 0 ? (uint) (value + 0.5f) & MAX_COORDINATE : NEGATIVE_COORDINATE_BIT + ((uint) (0.5f - value) & MAX_COORDINATE);
 
     private static float ReduceYaw(float yaw) {
-        var reduced = yaw - (float) (int) (yaw / TwoPi) * TwoPi;
+        var reduced = yaw - (float) (int) (yaw / TWO_PI) * TWO_PI;
 
-        return reduced < 0 ? reduced + TwoPi : reduced;
+        return reduced < 0 ? reduced + TWO_PI : reduced;
     }
 
     private static int ClientDegrees(float yaw)
-        => (int) (ReduceYaw(yaw) * 180f / Pi) % DegreesPerTurn;
+        => (int) (ReduceYaw(yaw) * 180f / PI) % DEGREES_PER_TURN;
 
     private static int DirectionOf(float yaw) {
         var reduced = ReduceYaw(yaw);
@@ -262,12 +262,12 @@ public sealed record PlacedItem {
     private static (byte Code, float Value)[] BuildScaleGrid() {
         var grid = new List<(byte, float)> {
             (0, 1.0f),
-            (FirstFineScaleCode, 0.10f),
-            (FirstFineScaleCode + 1, 0.15f),
-            (FirstFineScaleCode + 2, 0.20f),
+            (FIRST_FINE_SCALE_CODE, 0.10f),
+            (FIRST_FINE_SCALE_CODE + 1, 0.15f),
+            (FIRST_FINE_SCALE_CODE + 2, 0.20f),
         };
-        for (var code = FirstQuarterScaleCode; code <= LastQuarterScaleCode; code++) {
-            grid.Add(((byte) code, 0.25f * (code - FirstQuarterScaleCode + 1)));
+        for (var code = FIRST_QUARTER_SCALE_CODE; code <= LAST_QUARTER_SCALE_CODE; code++) {
+            grid.Add(((byte) code, 0.25f * (code - FIRST_QUARTER_SCALE_CODE + 1)));
         }
 
         return [.. grid];

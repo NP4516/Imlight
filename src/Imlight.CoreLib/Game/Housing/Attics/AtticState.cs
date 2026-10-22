@@ -53,11 +53,13 @@ using System.Threading;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Housing.Families;
+using Imlight.CoreLib.Game.Housing.Houses;
+using Imlight.CoreLib.Game.Housing.Items;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Attics;
 
 /// <summary>
 /// The result of one change to an attic, with what its patch needs.
@@ -253,7 +255,7 @@ internal sealed class AtticState {
             }
 
             var table = TableFor(subType);
-            if (table.Slots.Count >= HousingGids.MaxSlots) {
+            if (table.Slots.Count >= HousingGids.MAX_SLOTS) {
                 if (table.Live >= table.Slots.Count) {
                     return new AtticChange(HouseEdit.LimitReached);
                 }
@@ -306,21 +308,14 @@ internal sealed class AtticState {
 
             var crowded = additions.GroupBy(addition => addition.SubType)
                 .Select(group => (Table: TableFor(group.Key), group.Key, Count: group.Count()))
-                .Where(blob => blob.Table.Slots.Count + blob.Count > HousingGids.MaxSlots)
+                .Where(blob => blob.Table.Slots.Count + blob.Count > HousingGids.MAX_SLOTS)
                 .ToList();
-            if (crowded.Any(blob => blob.Table.Live + blob.Count > HousingGids.MaxSlots)) {
+            if (crowded.Any(blob => blob.Table.Live + blob.Count > HousingGids.MAX_SLOTS)) {
                 return new AtticBatch(HouseEdit.LimitReached, [], []);
             }
 
             if (crowded.Count > 0) {
-                var renumbered = new List<string>(crowded.Count);
-                foreach (var blob in crowded) {
-                    if (!Renumber(blob.Key, blob.Table)) {
-                        break;
-                    }
-
-                    renumbered.Add(blob.Key);
-                }
+                var renumbered = RenumberAll(crowded);
 
                 // A blob that was numbered again before a write failed still needs its client to fetch it.
                 return new AtticBatch(renumbered.Count == 0 ? HouseEdit.SaveFailed : HouseEdit.NeedsResync, [], renumbered);
@@ -461,6 +456,19 @@ internal sealed class AtticState {
         _tables[subType] = table;
 
         return table;
+    }
+
+    private List<string> RenumberAll(IEnumerable<(Table Table, string Key, int Count)> crowded) {
+        var renumbered = new List<string>();
+        foreach (var blob in crowded) {
+            if (!Renumber(blob.Key, blob.Table)) {
+                break;
+            }
+
+            renumbered.Add(blob.Key);
+        }
+
+        return renumbered;
     }
 
     private bool Renumber(string subType, Table table) {

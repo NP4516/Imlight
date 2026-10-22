@@ -46,6 +46,8 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing.Access;
+using Imlight.CoreLib.Game.Housing.Houses;
 using Imlight.CoreLib.Game.Housing;
 using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Game.WizBang;
@@ -430,7 +432,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         var tpmsg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
             DestinationZone = entry.Zone,
-            DestinationLocation = HouseDeeds.EntryLocation,
+            DestinationLocation = HouseDeeds.ENTRY_LOCATION,
             SendToClient = true,
             IsPrivate = true,
             OwnerCharId = entry.OwnerCharId,
@@ -460,7 +462,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         ReceiveZoneTransferRequest(new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
             DestinationZone = entry.Zone,
-            DestinationLocation = string.IsNullOrEmpty(message.LocationName) ? HouseDeeds.EntryLocation : message.LocationName,
+            DestinationLocation = string.IsNullOrEmpty(message.LocationName) ? HouseDeeds.ENTRY_LOCATION : message.LocationName,
             SendToClient = true,
             IsPrivate = true,
             OwnerCharId = entry.OwnerCharId,

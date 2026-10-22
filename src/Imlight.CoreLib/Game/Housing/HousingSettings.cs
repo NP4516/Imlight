@@ -49,11 +49,11 @@ namespace Imlight.CoreLib.Game.Housing;
 /// </summary>
 internal static class HousingSettings {
 
-    private const string DeedZoneTimeoutKey = "Housing.DeedZoneTimeoutSeconds";
-    private const string StarterDeedsKey = "Housing.StarterDeeds";
-    private const string AtticLimitKey = "Housing.AtticLimit";
-    private const int DefaultDeedZoneTimeoutSeconds = 90;
-    private const int DefaultAtticLimit = 100;
+    private const string DEED_ZONE_TIMEOUT_KEY = "Housing.DeedZoneTimeoutSeconds";
+    private const string STARTER_DEEDS_KEY = "Housing.StarterDeeds";
+    private const string ATTIC_LIMIT_KEY = "Housing.AtticLimit";
+    private const int DEFAULT_DEED_ZONE_TIMEOUT_SECONDS = 90;
+    private const int DEFAULT_ATTIC_LIMIT = 100;
 
     /// <summary>
     /// How long to wait for the client to confirm that a house zone archive is ready:
@@ -61,9 +61,9 @@ internal static class HousingSettings {
     /// </summary>
     internal static TimeSpan DeedZoneTimeout {
         get {
-            var configured = ConfigurationManager.Settings[DeedZoneTimeoutKey].AsInt();
+            var configured = ConfigurationManager.Settings[DEED_ZONE_TIMEOUT_KEY].AsInt();
 
-            return TimeSpan.FromSeconds(configured > 0 ? configured : DefaultDeedZoneTimeoutSeconds);
+            return TimeSpan.FromSeconds(configured > 0 ? configured : DEFAULT_DEED_ZONE_TIMEOUT_SECONDS);
         }
     }
 
@@ -72,9 +72,9 @@ internal static class HousingSettings {
     /// </summary>
     internal static int AtticLimit {
         get {
-            var configured = ConfigurationManager.Settings[AtticLimitKey].AsInt();
+            var configured = ConfigurationManager.Settings[ATTIC_LIMIT_KEY].AsInt();
 
-            return configured > 0 ? configured : DefaultAtticLimit;
+            return configured > 0 ? configured : DEFAULT_ATTIC_LIMIT;
         }
     }
 
@@ -85,11 +85,11 @@ internal static class HousingSettings {
     internal static IReadOnlyList<uint> StarterDeeds {
         get {
             var starters = new List<uint>();
-            foreach (var entry in ConfigurationManager.Settings[StarterDeedsKey].AsList()) {
+            foreach (var entry in ConfigurationManager.Settings[STARTER_DEEDS_KEY].AsList()) {
                 if (uint.TryParse(entry, NumberStyles.None, CultureInfo.InvariantCulture, out var templateId) && templateId != 0) {
                     starters.Add(templateId);
                 } else {
-                    Logger.Warning("{Key} has an entry that is not a template id: {Entry}", Logger.Args(StarterDeedsKey, entry));
+                    Logger.Warning("{Key} has an entry that is not a template id: {Entry}", Logger.Args(STARTER_DEEDS_KEY, entry));
                 }
             }
 

@@ -44,13 +44,12 @@
  */
 
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing.Houses;
 using Imlight.CoreLib.Game.World;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Access;
 
 internal static class HouseExits {
-
-    private const string StartLocation = "Start";
 
     /// <summary>
     /// Finds the zone and location a player leaves a house zone to.
@@ -70,14 +69,14 @@ internal static class HouseExits {
         var hub = WorldHubZones.GetHubForZone(houseZone);
         if (hub is not null && !string.IsNullOrEmpty(hub.m_hubZone.ToString())) {
             zone = hub.m_hubZone.ToString();
-            location = string.IsNullOrEmpty(hub.m_location.ToString()) ? StartLocation : hub.m_location.ToString();
+            location = string.IsNullOrEmpty(hub.m_location.ToString()) ? HouseDeeds.ENTRY_LOCATION : hub.m_location.ToString();
 
             return true;
         }
 
         Logger.Warning("House zone {Zone} has no world hub, so players leave it to the starting zone.", Logger.Args(houseZone));
         zone = ConfigurationManager.Settings["Character.StartingZone"];
-        location = StartLocation;
+        location = HouseDeeds.ENTRY_LOCATION;
 
         return !string.IsNullOrEmpty(zone);
     }

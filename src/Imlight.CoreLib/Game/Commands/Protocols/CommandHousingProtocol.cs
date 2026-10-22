@@ -37,7 +37,7 @@
  */
 
 using System.Globalization;
-using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Housing.Houses;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.WizardData.Models.Player;
 

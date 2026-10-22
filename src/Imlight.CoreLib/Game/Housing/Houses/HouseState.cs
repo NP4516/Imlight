@@ -53,10 +53,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing.Items;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Houses;
 
 /// <summary>
 /// How a change to a house ended.
@@ -101,7 +102,7 @@ internal sealed class HouseState {
     /// The most blob entries one blob holds: a string field is at most 65,535 bytes, the blob header takes
     /// 47 and every entry 21.
     /// </summary>
-    internal const int MaxSlots = HousingGids.MaxSlots;
+    internal const int MAX_SLOTS = HousingGids.MAX_SLOTS;
 
     private readonly Lock _lock = new();
     private readonly House _house;
@@ -282,7 +283,7 @@ internal sealed class HouseState {
                 return new HouseChange(HouseEdit.LimitReached);
             }
 
-            if (_slots.Count >= MaxSlots) {
+            if (_slots.Count >= MAX_SLOTS) {
                 if (_liveCount >= _slots.Count) {
                     return new HouseChange(HouseEdit.LimitReached);
                 }

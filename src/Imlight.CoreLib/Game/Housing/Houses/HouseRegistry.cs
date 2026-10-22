@@ -45,23 +45,20 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Houses;
 
 /// <summary>
 /// The houses that are loaded, by lot.
 /// </summary>
 internal static class HouseRegistry {
 
-    private const int CreationLockCount = 32;
-
     private static readonly ConcurrentDictionary<ulong, HouseState> s_houses = new();
-    private static readonly Lock[] s_creationLocks = [.. Enumerable.Range(0, CreationLockCount).Select(_ => new Lock())];
+    private static readonly StripedLocks s_creationLocks = new();
 
     /// <summary>
     /// Finds a house by its lot, loading it from the database when it is not live.
@@ -180,7 +177,7 @@ internal static class HouseRegistry {
             }
 
             // The house is loaded under the lock, after any earlier state has stored its last change.
-            lock (s_creationLocks[(int) (lotGid % CreationLockCount)]) {
+            lock (s_creationLocks.For(lotGid)) {
                 if (s_houses.ContainsKey(lotGid)) {
                     continue;
                 }

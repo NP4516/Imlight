@@ -63,7 +63,7 @@ public sealed record AtticItem {
     /// </summary>
     /// <returns>The entry; a <see cref="HousingBlobCustomObject"/> when the item carries custom data.</returns>
     public HousingBlobObject ToBlobObject() {
-        var placed = new PlacedItem { TemplateId = TemplateId, Tint = Math.Clamp(Tint, 0, PlacedItem.MaxTint) }.Normalize();
+        var placed = new PlacedItem { TemplateId = TemplateId, Tint = Math.Clamp(Tint, 0, PlacedItem.MAX_TINT) }.Normalize();
         var entry = placed?.ToBlobObject() ?? new HousingBlobObject { m_gameObjectTemplateID = TemplateId };
         if (Custom is null) {
             return entry;

@@ -31,7 +31,7 @@
  * NOTE:
  * - The client numbers the entries of a blob base, base + 1, and so on, and builds the object id
  *   (u16 << 48) | (9 << 40) | gidId. A removed entry keeps its number.
- * - The base is drawn so that base + MaxSlots never wraps past 2^32.
+ * - The base is drawn so that base + MAX_SLOTS never wraps past 2^32.
  *
  * TODO:
  *
@@ -45,7 +45,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.Types;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Items;
 
 internal static class HousingGids {
 
@@ -53,29 +53,29 @@ internal static class HousingGids {
     /// The most entries one blob holds: a string field is at most 65,535 bytes, the blob header takes 47 and every
     /// entry 21.
     /// </summary>
-    internal const int MaxSlots = (65535 - 47) / 21;
+    internal const int MAX_SLOTS = (65535 - 47) / 21;
 
-    private const int ObjectGidType = 9;
-    private const long LowestBase = 0x80000000L;
-    private const long HighestBase = 0xFFFF0000L;
+    private const int OBJECT_GID_TYPE = 9;
+    private const long LOWEST_BASE = 0x80000000L;
+    private const long HIGHEST_BASE = 0xFFFF0000L;
 
     /// <summary>
-    /// Draws the base the client numbers a blob's entries from. The range leaves room for <see cref="MaxSlots"/> entries
+    /// Draws the base the client numbers a blob's entries from. The range leaves room for <see cref="MAX_SLOTS"/> entries
     /// above any base without wrapping.
     /// </summary>
     /// <returns>A new base.</returns>
     internal static uint NewBase()
-        => (uint) Random.Shared.NextInt64(LowestBase, HighestBase);
+        => (uint) Random.Shared.NextInt64(LOWEST_BASE, HIGHEST_BASE);
 
     /// <summary>
     /// Draws a base whose entries cannot share an id with the entries of the other bases.
     /// </summary>
     /// <param name="others">The bases already in use.</param>
-    /// <returns>A new base at least <see cref="MaxSlots"/> away from every other.</returns>
+    /// <returns>A new base at least <see cref="MAX_SLOTS"/> away from every other.</returns>
     internal static uint NewBaseApart(IReadOnlyCollection<uint> others) {
         while (true) {
             var candidate = NewBase();
-            if (others.All(other => candidate + (long) MaxSlots <= other || other + (long) MaxSlots <= candidate)) {
+            if (others.All(other => candidate + (long) MAX_SLOTS <= other || other + (long) MAX_SLOTS <= candidate)) {
                 return candidate;
             }
         }
@@ -92,7 +92,7 @@ internal static class HousingGids {
     internal static bool TryGetSlot(ulong gid, uint gidBase, int slotCount, out int slot) {
         slot = -1;
         var parts = new GID(gid).MParts;
-        if (parts.Type != ObjectGidType || parts.Block != 0) {
+        if (parts.Type != OBJECT_GID_TYPE || parts.Block != 0) {
             return false;
         }
 

@@ -42,10 +42,11 @@
 
 using System;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing.Houses;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
-namespace Imlight.CoreLib.Game.Housing;
+namespace Imlight.CoreLib.Game.Housing.Access;
 
 internal static class HouseAttach {
 
