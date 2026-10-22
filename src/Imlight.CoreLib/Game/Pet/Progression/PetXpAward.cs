@@ -85,7 +85,8 @@ internal static class PetXpAward {
     }
 
     /// <summary>
-    /// Applies a set of stat changes to a pet, then gives it the XP those points are worth: the stats are saved and sent even if the pet cannot gain XP.
+    /// Applies a set of stat changes to a pet, then gives it the XP those points are worth: 
+    /// the stats are saved and sent even if the pet cannot gain XP.
     /// </summary>
     /// <param name="session">The owner's session, which receives the messages.</param>
     /// <param name="playerObj">The owner's game object, which the level loot requirements are checked against.</param>
@@ -94,11 +95,16 @@ internal static class PetXpAward {
     /// <param name="mods">The stat changes. The set itself is left as it is.</param>
     /// <param name="source">Where the points come from, which decides the XP bonus.</param>
     /// <returns>The stat result, whose Mods copy is what a game result sends, and the XP result.</returns>
-    internal static (PetStatModResult Stats, PetXpResult Xp) GiveStatMods(IActorRef session, CoreObject playerObj, Wizard wizard, WizClientObjectItem pet, PetStatModificationSet mods, PetXpSource source) {
+    internal static (PetStatModResult Stats, PetXpResult Xp) GiveStatMods(IActorRef session,
+                                                                          CoreObject playerObj,
+                                                                          Wizard wizard,
+                                                                          WizClientObjectItem pet,
+                                                                          PetStatModificationSet mods,
+                                                                          PetXpSource source) {
         var stats = PetProgression.ApplyStatMods(pet, mods);
         var xp = Give(session, playerObj, wizard, pet, stats.Xp, source);
         if (stats.Applied > 0 && !xp.Applied) {
-                wizard.SavePet(pet);
+            wizard.SavePet(pet);
 
             if (PetBehaviorUpdate.TryCreate(pet, out var update)) {
                 session.Tell(update, null);

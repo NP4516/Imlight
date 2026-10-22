@@ -41,7 +41,6 @@
 
 using System;
 using Imcodec.ObjectProperty.TypeCache;
-using Imlight.CoreLib.Game.Pet.Config;
 
 namespace Imlight.CoreLib.Game.Pet.Progression;
 

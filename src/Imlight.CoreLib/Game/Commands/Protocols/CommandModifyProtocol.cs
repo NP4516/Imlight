@@ -348,10 +348,6 @@ internal class CommandModifyProtocol : CommandProtocol {
 
             return false;
         }
-
-        // Pets that were hatched before genes existed get theirs here.
-        Context.Character.InitializePet(pet);
-
         return true;
     }
 

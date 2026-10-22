@@ -28,21 +28,15 @@
  * NOTE:
  * A table that SpiralDB does not have is skipped and logged once, never replaced with invented loot.
  *
- * TODO:
- * - All the level loot tables the pet templates name are missing from SpiralDB today.
- *
  * Created by: Jay
  * Version: KALI 1.0
  * Last Updated: 10/14/2026
  */
 
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Linq;
 using System;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
-using Imlight.Common;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.Pet.Config;
 using Imlight.CoreLib.WizardData.Collections;
@@ -55,8 +49,6 @@ namespace Imlight.CoreLib.Game.Pet.Progression;
 /// </summary>
 internal static class PetLevelLoot {
 
-    private static readonly ConcurrentDictionary<string, byte> s_missingTables = new(StringComparer.Ordinal);
-
     /// <summary>
     /// Finds the loot tables a pet's template names for a level and SpiralDB has.
     /// </summary>
@@ -68,17 +60,9 @@ internal static class PetLevelLoot {
             return [];
         }
 
-        List<string> tables = [];
         var named = template.m_Levels?.FirstOrDefault(info => info.m_level == level)?.m_lootTable ?? [];
-        foreach (var name in named.Select(table => table.ToString()).Where(table => !string.IsNullOrWhiteSpace(table))) {
-            if (DropTableCollection.GetDropTable(name) is not null) {
-                tables.Add(name);
-            } else if (s_missingTables.TryAdd(name, 0)) {
-                Logger.Warning("The pet level loot table {Table} is not in SpiralDB, so it is skipped.", Logger.Args(name));
-            }
-        }
 
-        return [.. tables];
+        return DropTableRoller.KeepKnownTables(named.Select(table => table.ToString()).Where(table => !string.IsNullOrWhiteSpace(table)));
     }
 
     /// <summary>

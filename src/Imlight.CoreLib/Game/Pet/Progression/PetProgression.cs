@@ -28,12 +28,10 @@
  *
  * NOTE:
  * A pet at level L has L - 1 expressed combat talents and L - 1 expressed derby talents, taken in
- * gene order. The rating lists follow gene order too: an expressed gene shows its talent name, any
- * other shows the rank label.
+ * gene order. The rating lists show the genes in ascending id order: an expressed gene shows its
+ * talent name, any other shows the rank label.
  *
  * TODO:
- * - The rank labels for ranks 0, 4 and 5 are inferred, live data only shows ranks 1 to 3.
- * - Live puts the guaranteed talent at a later position of the rating lists, the rule is unknown.
  * - Pets with no start stats use their conversion stats, and any stat neither lists starts at 1; unverified.
  * - m_rarity and m_costToMorph are left at 0, their formulas are unknown.
  *
@@ -131,7 +129,8 @@ internal static class PetProgression {
     /// <param name="pet">The pet item.</param>
     /// <param name="xp">The XP to add, before any bonus for the source.</param>
     /// <param name="source">Where the XP comes from, which decides the bonus.</param>
-    /// <returns>What the pet received and the levels it reached, or <see cref="PetXpResult.None"/> if it cannot gain XP (not hatched, no XP ladder, at the top level, unknown).</returns>
+    /// <returns>What the pet received and the levels it reached, or <see cref="PetXpResult.None"/> 
+    /// if it cannot gain XP (not hatched, no XP ladder, at the top level, unknown).</returns>
     internal static PetXpResult AddXp(WizClientObjectItem pet, uint xp, PetXpSource source) {
         if (xp == 0 || !TryGetPet(pet, out var behavior, out var template) || behavior.m_level == 0) {
             return PetXpResult.None;
@@ -166,7 +165,6 @@ internal static class PetProgression {
         behavior.m_XP = level >= maxLevel ? 0 : (uint) total;
         EnsureInitialized(pet);
 
-        // Each level expressed one more talent of each kind at the end of the lists.
         List<PetLevelUp> levelUps = [];
         for (var gained = 0; gained < level - startLevel; gained++) {
             var talent = behavior.m_expressedTalents.ElementAtOrDefault(talentsBefore + gained);
@@ -183,7 +181,8 @@ internal static class PetProgression {
     /// </summary>
     /// <param name="pet">The pet item.</param>
     /// <param name="mods">The changes, such as a snack's or a game track's. The set itself is left as it is.</param>
-    /// <returns>The points that raised stats and the points the maximums turned away, with a filled-in copy of the set. A pet that cannot take stats (not hatched, unknown) takes none.</returns>
+    /// <returns>The points that raised stats and the points the maximums turned away, with a filled-in copy of the set. 
+    /// A pet that cannot take stats (not hatched, unknown) takes none.</returns>
     internal static PetStatModResult ApplyStatMods(WizClientObjectItem pet, PetStatModificationSet mods) {
         var changes = mods?.m_modifications ?? [];
         var taken = new uint[changes.Count];
@@ -316,7 +315,8 @@ internal static class PetProgression {
         var current = behavior.m_currentStats?.FirstOrDefault(stat => stat.m_name == change.m_name);
         var maximum = behavior.m_maxStats?.FirstOrDefault(stat => stat.m_name == change.m_name);
         if (current is null || maximum is null) {
-            Logger.Warning("The pet {PetId} has no stat {Stat}, so its {Change} points are not applied.", Logger.Args(pet.m_globalID.Full, change.m_name.ToString(), change.m_change));
+            Logger.Warning("The pet {PetId} has no stat {Stat}, so its {Change} points are not applied.", 
+                Logger.Args(pet.m_globalID.Full, change.m_name.ToString(), change.m_change));
 
             return 0;
         }
@@ -330,14 +330,15 @@ internal static class PetProgression {
     private static List<uint> ResolveIds(IEnumerable<ByteString> names) {
         var ids = new List<uint>();
         foreach (var name in names ?? []) {
-            if (!PetTalentRegistry.TryGetTemplateId(name.ToString(), out var id)) {
-                Logger.Warning("The pet talent {Talent} has no template, so it is not a gene.", Logger.Args(name.ToString()));
+            if (!PetTalentRegistry.TryGetByName(name.ToString(), out var talent)) {
+                Logger.Warning("The pet talent {Talent} has no template, so it is not a gene.", 
+                    Logger.Args(name.ToString()));
 
                 continue;
             }
 
-            if (!ids.Contains(id)) {
-                ids.Add(id);
+            if (!ids.Contains(talent.Id)) {
+                ids.Add(talent.Id);
             }
         }
 
@@ -378,7 +379,7 @@ internal static class PetProgression {
         return changed;
     }
 
-    private static PetStat CopyStat(PetStat stat, int value)
+    internal static PetStat CopyStat(PetStat stat, int value)
         => new() { m_name = stat.m_name, m_statID = StringHash.Compute(stat.m_name), m_value = value };
 
     private static bool EnsureHappiness(ClientPetItemBehavior behavior) {
@@ -472,7 +473,7 @@ internal static class PetProgression {
     }
 
     private static List<string> BuildRatings(List<uint> genes, List<uint> expressed)
-        => [.. genes.Select(gene => expressed.Contains(gene) && PetTalentRegistry.TryGetById(gene, out var talent)
+        => [.. genes.Order().Select(gene => expressed.Contains(gene) && PetTalentRegistry.TryGetById(gene, out var talent)
             ? talent.Name
             : RankLabel(RankOf(gene)))];
 
@@ -483,11 +484,11 @@ internal static class PetProgression {
         => PetTalentRegistry.TryGetById(talentId, out var talent) ? talent.Rank : 0;
 
     private static string RankLabel(int rank) => rank switch {
-        <= 1 => "TalentRankCommon",
         2 => "TalentRankUncommon",
         3 => "TalentRankRare",
         4 => "TalentRankUltraRare",
-        _ => "TalentRankEpic"
+        5 => "TalentRankEpic",
+        _ => "TalentRankCommon"
     };
 
     private static int MaxLevel(PetItemBehaviorTemplate template)

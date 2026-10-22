@@ -1081,10 +1081,14 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// <summary>The arrival position inside the instance, "X,Y,Z,heading".</summary>
         public string DestinationLoc;
 
-        /// <summary>The sigil circle the player stands in, counted over the player circles of the template.</summary>
+        /// <summary>
+        /// The sigil circle the player stands in, counted over the player circles of the template.
+        /// </summary>
         public int SlotIndex;
 
-        /// <summary>The countdown length; zero uses the default.</summary>
+        /// <summary>
+        /// The countdown length; zero uses the default.
+        /// </summary>
         public float CountdownSeconds;
 
         /// <summary>
@@ -1093,10 +1097,14 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public IActorRef SigilRef;
 
-        /// <summary>The character whose private instance the sigil's players share; zero is the player.</summary>
+        /// <summary>
+        /// The character whose private instance the sigil's players share; zero is the player.
+        /// </summary>
         public ulong RoomOwnerCharId;
 
-        /// <summary>The other player on the sigil, or zero.</summary>
+        /// <summary>
+        /// The other player on the sigil, or zero.
+        /// </summary>
         public ulong PartnerCharId;
 
     }
@@ -1322,7 +1330,9 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
         public ulong CharId;
 
-        /// <summary>True if the player went through the sigil, so the other player is not told.</summary>
+        /// <summary>
+        /// True if the player went through the sigil, so the other player is not told.
+        /// </summary>
         public bool Entered;
 
     }
@@ -1339,10 +1349,14 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public ulong RoomOwnerCharId;
         public ulong PartnerCharId;
 
-        /// <summary>The zone the player left from, to go back to.</summary>
+        /// <summary>
+        /// The zone the player left from, to go back to.
+        /// </summary>
         public string ReturnZone;
 
-        /// <summary>The sigil's position in <see cref="ReturnZone"/>, "X,Y,Z,heading".</summary>
+        /// <summary>
+        /// The sigil's position in <see cref="ReturnZone"/>, "X,Y,Z,heading".
+        /// </summary>
         public string ReturnLocation;
 
     }
@@ -1355,10 +1369,14 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte MessageOrder { get; } = 92;
         public byte ServiceID { get; } = 102;
 
-        /// <summary>The pet game the room's game object runs.</summary>
+        /// <summary>
+        /// The pet game the room's game object runs.
+        /// </summary>
         public string GameName;
 
-        /// <summary>The players already in the room, by character id, with their sessions.</summary>
+        /// <summary>
+        /// The players already in the room, by character id, with their sessions.
+        /// </summary>
         public Dictionary<ulong, IActorRef> OtherPlayers;
 
     }

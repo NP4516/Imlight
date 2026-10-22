@@ -501,6 +501,7 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
         public byte MessageOrder { get; } = 44;
         public byte ServiceID { get; } = 103;
 
+        public ulong CharId;
         public ulong PetId;
 
     }
@@ -513,6 +514,7 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
         public byte MessageOrder { get; } = 45;
         public byte ServiceID { get; } = 103;
 
+        public ulong CharId;
         public bool Lends;
 
     }
@@ -525,6 +527,7 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
         public byte MessageOrder { get; } = 46;
         public byte ServiceID { get; } = 103;
 
+        public ulong CharId;
         public bool Ready;
 
     }
@@ -556,6 +559,18 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
 
         public byte MessageOrder { get; } = 49;
         public byte ServiceID { get; } = 103;
+
+    }
+
+    /// <summary>
+    /// Sent by a player's HatchingService to the partner's session: the player's egg was made, so a lent pet counts.
+    /// </summary>
+    public sealed class MSG_HATCHPARTNERHATCHED : IServerMessage {
+
+        public byte MessageOrder { get; } = 50;
+        public byte ServiceID { get; } = 103;
+
+        public ulong CharId;
 
     }
 

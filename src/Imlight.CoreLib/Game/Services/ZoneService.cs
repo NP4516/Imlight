@@ -245,7 +245,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         SnapPlayerToSigilFace(message);
         StartSigilCountdown(message);
 
-        Logger.Information("Dungeon sigil countdown started -> '{0}'",
+        Logger.Information("Sigil countdown started -> '{0}'",
             Logger.Args(message.DestinationZone));
     }
 
@@ -1141,21 +1141,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             return false;
         }
 
-        var template = SigilFactory.GetSigilTemplate(entry.SigilType);
-        var subCircles = template?.m_subCircles;
-        if (subCircles is null || subCircles.Count == 0) {
-            return false;
-        }
-
-        // Player faces only (dungeon-entry sigils shouldn't carry monster circles, but filter defensively).
-        var playerSlots = new List<SigilSubCircle>();
-        foreach (var sc in subCircles) {
-            if (sc is null || sc.m_locationType == "MonsterCircle") {
-                continue;
-            }
-
-            playerSlots.Add(sc);
-        }
+        var playerSlots = SigilFactory.GetPlayerCircles(entry.SigilType);
         if (playerSlots.Count == 0) {
             return false;
         }

@@ -57,7 +57,6 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class PetService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private static int EnergyTickIntervalInSeconds => AdvancedPetsConfig.EnergyTickInSeconds;
     private const int PET_ENERGY_TICK_DELAY = 2;
 
     protected static Props Props(SessionActor parentActor)
@@ -75,7 +74,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
 
         var tickTime = petOwnerBehavior.LastEnergyTickEpoch;
         if (tickTime <= DateTimeOffset.UtcNow.ToUnixTimeSeconds()) {
-            tickTime = (uint) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + EnergyTickIntervalInSeconds);
+            tickTime = (uint) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + AdvancedPetsConfig.EnergyTickInSeconds);
         }
 
         var tickMsg = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
@@ -89,7 +88,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
 
         var tickTimeSeconds = tickTime - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var firstTickDelay = TimeSpan.FromSeconds(tickTimeSeconds + PET_ENERGY_TICK_DELAY);
-        var tickInterval = TimeSpan.FromSeconds(EnergyTickIntervalInSeconds + PET_ENERGY_TICK_DELAY);
+        var tickInterval = TimeSpan.FromSeconds(AdvancedPetsConfig.EnergyTickInSeconds + PET_ENERGY_TICK_DELAY);
         Timers.StartPeriodicTimer("petEnergyTick", new CHARACTER_103_PROTOCOL.MSG_DOENERGYTICK(), firstTickDelay, tickInterval);
 
         InitializeEggs(wizard);
@@ -105,7 +104,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
         var normMaxEnergy = baseStats.m_petEnergy;
 
-        var tickTime = (int) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + EnergyTickIntervalInSeconds);
+        var tickTime = (int) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + AdvancedPetsConfig.EnergyTickInSeconds);
 
         if (petOwnerBehavior.Energy < normMaxEnergy) {
             wizard.UpdateEnergy(petOwnerBehavior.Energy + 1);
@@ -144,11 +143,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
             return;
         }
 
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHINGSLOT {
-            GlobalID = egg.m_globalID,
-            Removed = 0,
-            ExpireTimeCount = (uint) egg.m_timeFinished
-        });
+        SendEggCreatedMessages(egg);
         StartEggTimer(egg);
     }
 
@@ -221,10 +216,22 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
     }
 
     private void SendEggCreatedMessages(CraftingSlot egg) {
+        if (!ServerPetOwnerBehavior.TryGetPetTemplateFromEgg(egg, out var petTemplateId)) {
+            Logger.Warning("The egg {EggId} names no pet template, so the client is not told about it.", Logger.Args(egg.m_globalID.Full));
+
+            return;
+        }
+
+        var eggItem = GetActiveWizard().FindPetItem(egg.m_globalID);
+        ClientPetNameBehavior eggName = null;
+        if (eggItem is not null) {
+            CoreObjectFactory.FindBehaviorInstance(eggItem, out eggName);
+        }
+
         SendToSocket(new PET_9_PROTOCOL.MSG_PETEGGMORPHED {
-            PetTemplateGID = egg.m_globalID,
-            PetName = 0,
-            HatchTime = (uint) egg.m_timeFinished
+            PetTemplateGID = petTemplateId,
+            PetName = eggName?.m_nameKeys ?? 0,
+            HatchTime = (uint) Math.Max(0, egg.m_timeFinished - DateTimeOffset.UtcNow.ToUnixTimeSeconds())
         });
 
         SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHINGSLOT {

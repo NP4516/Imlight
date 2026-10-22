@@ -37,7 +37,6 @@
  */
 
 using System.Collections.Generic;
-using Imlight.CoreLib.Game.Pet.Config;
 
 namespace Imlight.CoreLib.Game.Pet.Progression;
 

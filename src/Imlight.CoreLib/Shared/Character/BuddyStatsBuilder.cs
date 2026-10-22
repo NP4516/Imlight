@@ -50,6 +50,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Pet.Progression;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
 
@@ -67,7 +68,6 @@ internal static class BuddyStatsBuilder {
 
     // Live names these two blocks after the server-side behaviors.
     private static readonly uint s_equipmentWireHash = StringHash.Compute("class WizEquipmentBehavior");
-    private static readonly uint s_petWireHash = StringHash.Compute("class PetItemBehavior");
 
     // Magic, version, an unknown 16-bit 1, then a 16-bit entry count of 0.
     private static readonly byte[] s_emptyWishlist = [
@@ -217,7 +217,7 @@ internal static class BuddyStatsBuilder {
             return;
         }
 
-        if (TrySerializeBlock(source.Pet, TransmitMask, s_petWireHash, out var petBlock)) {
+        if (TrySerializeBlock(source.Pet, TransmitMask, PetBehaviorUpdate.WireClassHash, out var petBlock)) {
             reply.PetStatBlock = petBlock;
             reply.PetStatBlockCRC = source.PetTemplateId;
         }

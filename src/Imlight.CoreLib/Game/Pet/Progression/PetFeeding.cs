@@ -69,7 +69,8 @@ internal static class PetFeeding {
     /// <param name="pet">The pet item, which must be hatched.</param>
     /// <param name="snackTemplateId">The template id of the snack, which picks the stack in the bag.</param>
     /// <param name="wholeStack">True to feed snacks until the pet is full or the stack is empty, false to feed one.</param>
-    /// <returns>What the pet ate. Nothing is eaten, and the bag and pet are left as they were, if the bag lacks the snack, the snack gives no happiness, or the pet is full.</returns>
+    /// <returns>What the pet ate. Nothing is eaten, and the bag and pet are left as they were, 
+    /// if the bag lacks the snack, the snack gives no happiness, or the pet is full.</returns>
     internal static PetFeedResult Feed(Wizard wizard, WizClientObjectItem pet, uint snackTemplateId, bool wholeStack) {
         var stack = wizard.PetSnackBehavior?.GetSnack(snackTemplateId);
         if (stack is null || !PetProgression.TryGetPet(pet, out var behavior, out _) || behavior.m_level == 0) {
@@ -77,7 +78,8 @@ internal static class PetFeeding {
         }
 
         if (CoreObjectFactory.GetCoreTemplate(snackTemplateId) is not PetSnackItemTemplate template) {
-            Logger.Warning("The snack stack {SnackId} has the template {TemplateId}, which is not a pet snack.", Logger.Args(stack.m_globalID.Full, snackTemplateId));
+            Logger.Warning("The snack stack {SnackId} has the template {TemplateId}, which is not a pet snack.", 
+                Logger.Args(stack.m_globalID.Full, snackTemplateId));
 
             return PetFeedResult.None;
         }

@@ -297,7 +297,6 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         }
 
         // The client reads the pet's level, XP and talents from this behavior, so every summon sends it.
-        GetActiveWizard().InitializePet(petItem);
         if (PetBehaviorUpdate.TryCreate(petItem, out var behaviorUpdate)) {
             SendToSocket(behaviorUpdate);
         }

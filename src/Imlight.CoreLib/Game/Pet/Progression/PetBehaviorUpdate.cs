@@ -55,7 +55,7 @@ internal static class PetBehaviorUpdate {
 
     private const PropertyFlags TRANSMIT_MASK = PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit;
 
-    private static readonly uint s_wireClassHash = StringHash.Compute("class PetItemBehavior");
+    internal static uint WireClassHash { get; } = StringHash.Compute("class PetItemBehavior");
 
     /// <summary>
     /// Creates the update for a pet item, sent as the item's current state.
@@ -77,7 +77,7 @@ internal static class PetBehaviorUpdate {
         }
 
         var bytes = (byte[]) blob;
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes, s_wireClassHash);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, WireClassHash);
         update = new PET_9_PROTOCOL.MSG_PETUPDATEBEHAVIOR {
             GlobalID = pet.m_globalID,
             Data = bytes

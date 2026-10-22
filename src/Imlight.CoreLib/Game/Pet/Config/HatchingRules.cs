@@ -68,12 +68,16 @@ internal static class HatchingRules {
     /// <summary>
     /// The youngest pet level that can be a parent.
     /// </summary>
-    internal static byte MinParentLevel { get; } = (byte) Math.Clamp(ConfigurationManager.GetValue("Hatching.MinParentLevel", ADULT_PET_LEVEL), YOUNGEST_PET_LEVEL, OLDEST_PET_LEVEL);
+    internal static byte MinParentLevel { get; } = (byte) Math.Clamp(ConfigurationManager.GetValue("Hatching.MinParentLevel", ADULT_PET_LEVEL),
+                                                                     YOUNGEST_PET_LEVEL,
+                                                                     OLDEST_PET_LEVEL);
 
     /// <summary>
     /// The pets a wizard can lend each day. Zero turns lending off.
     /// </summary>
-    internal static byte LendsPerDay { get; } = (byte) Math.Clamp(ConfigurationManager.GetValue("Hatching.LendsPerDay", DEFAULT_LENDS_PER_DAY), 0, MOST_LENDS_THE_WINDOW_SHOWS);
+    internal static byte LendsPerDay { get; } = (byte) Math.Clamp(ConfigurationManager.GetValue("Hatching.LendsPerDay", DEFAULT_LENDS_PER_DAY),
+                                                                  0,
+                                                                  MOST_LENDS_THE_WINDOW_SHOWS);
 
     /// <summary>
     /// How long a wizard can stay in the hatching room.

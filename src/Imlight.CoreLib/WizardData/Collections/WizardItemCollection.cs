@@ -268,12 +268,10 @@ public static class WizardItemCollection {
         var associatedItem = session.Query<WizClientObjectItem>(collectionName: CollectionName)
             .Customize(query => query.WaitForNonStaleResults())
             .FirstOrDefault(x => x.m_globalID == pet.m_globalID && x.m_characterId == pet.m_characterId);
-        var index = associatedItem?.m_inactiveBehaviors?.FindIndex(stored => stored is ClientPetItemBehavior) ?? -1;
-        if (index < 0) {
+        if (!TryReplacePetBehavior(associatedItem, behavior)) {
             return false;
         }
 
-        associatedItem.m_inactiveBehaviors[index] = behavior;
         session.SaveChanges();
 
         return true;
@@ -301,16 +299,11 @@ public static class WizardItemCollection {
         var saved = 0;
         foreach (var pet in pets) {
             if (!CoreObjectFactory.FindBehaviorInstance<ClientPetItemBehavior>(pet, out var behavior)
-                || !storedByGlobalId.TryGetValue(pet.m_globalID.Full, out var associatedItem)) {
+                || !storedByGlobalId.TryGetValue(pet.m_globalID.Full, out var associatedItem)
+                || !TryReplacePetBehavior(associatedItem, behavior)) {
                 continue;
             }
 
-            var index = associatedItem.m_inactiveBehaviors?.FindIndex(stored => stored is ClientPetItemBehavior) ?? -1;
-            if (index < 0) {
-                continue;
-            }
-
-            associatedItem.m_inactiveBehaviors[index] = behavior;
             saved++;
         }
 
@@ -319,6 +312,17 @@ public static class WizardItemCollection {
         }
 
         return saved;
+    }
+
+    private static bool TryReplacePetBehavior(WizClientObjectItem stored, ClientPetItemBehavior behavior) {
+        var index = stored?.m_inactiveBehaviors?.FindIndex(existing => existing is ClientPetItemBehavior) ?? -1;
+        if (index < 0) {
+            return false;
+        }
+
+        stored.m_inactiveBehaviors[index] = behavior;
+
+        return true;
     }
 
     /// <summary>

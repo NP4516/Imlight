@@ -35,33 +35,14 @@
  * Last Updated: 10/14/2026
  */
 
-using Imlight.CoreLib.Game.Pet.Config;
 
 namespace Imlight.CoreLib.Game.Pet.Progression;
 
-/// <summary>
-/// Where a grant of pet XP comes from.
-/// </summary>
 internal enum PetXpSource {
 
-    /// <summary>
-    /// A moderator command, which grants exactly the amount given.
-    /// </summary>
     Command,
-
-    /// <summary>
-    /// A combat reward.
-    /// </summary>
     Combat,
-
-    /// <summary>
-    /// The points a pet game awards.
-    /// </summary>
     Game,
-
-    /// <summary>
-    /// A snack the pet ate.
-    /// </summary>
     Snack
 
 }

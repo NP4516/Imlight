@@ -31,22 +31,17 @@
  * SpiralDB does not have is skipped and logged once, never replaced with invented XP.
  *
  * TODO:
- * - None of the loot tables the pet XP talents name are in SpiralDB today, so no pet gains combat XP yet.
  * - Do talents of the same effect category stack? Every expressed one rolls its table here.
- * - Does combat XP get the member bonus? The community sources only name games and snacks.
  *
  * Created by: Jay
  * Version: KALI 1.0
  * Last Updated: 10/14/2026
  */
 
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Linq;
 using System;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
-using Imlight.Common;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.Pet.Config;
 using Imlight.CoreLib.WizardData.Collections;
@@ -59,8 +54,6 @@ namespace Imlight.CoreLib.Game.Pet.Progression;
 /// </summary>
 internal static class PetCombatXp {
 
-    private static readonly ConcurrentDictionary<string, byte> s_missingTables = new(StringComparer.Ordinal);
-
     /// <summary>
     /// Finds the loot tables the pet's expressed talents roll after a duel and SpiralDB has.
     /// </summary>
@@ -71,7 +64,6 @@ internal static class PetCombatXp {
             return [];
         }
 
-        List<string> tables = [];
         var names = (behavior.m_expressedTalents ?? [])
             .Select(talentId => PetTalentRegistry.TryGetById(talentId, out var talent) ? talent.Template as PetTalentTemplate : null)
             .Where(template => template is not null)
@@ -79,15 +71,8 @@ internal static class PetCombatXp {
             .Select(effect => effect.m_lootTableName.ToString())
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.Ordinal);
-        foreach (var name in names) {
-            if (DropTableCollection.GetDropTable(name) is not null) {
-                tables.Add(name);
-            } else if (s_missingTables.TryAdd(name, 0)) {
-                Logger.Warning("The pet combat XP loot table {Table} is not in SpiralDB, so it is skipped.", Logger.Args(name));
-            }
-        }
 
-        return [.. tables];
+        return DropTableRoller.KeepKnownTables(names);
     }
 
     /// <summary>

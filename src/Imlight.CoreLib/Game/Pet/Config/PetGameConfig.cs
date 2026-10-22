@@ -69,17 +69,20 @@ internal sealed class PetGameConfig : RootSingleResourceSingleton<PetGameConfig>
         foreach (var game in config.m_games) {
             var name = game.m_name.ToString();
             if (name.Length == 0 || !byName.TryAdd(name, game)) {
-                Logger.Error("PetGames.xml has a game with the empty or duplicate name {Name}.", Logger.Args(name));
+                Logger.Error("PetGames.xml has a game with the empty or duplicate name {Name}.", 
+                    Logger.Args(name));
             }
 
             if (!HasAscendingRanks(game)) {
-                Logger.Error("PetGames.xml: the energy costs of {Name} do not have strictly ascending ranks.", Logger.Args(name));
+                Logger.Error("PetGames.xml: the energy costs of {Name} do not have strictly ascending ranks.", 
+                    Logger.Args(name));
             }
         }
 
         s_games = config.m_games;
         s_gamesByName = byName;
-        Logger.Information("Loaded {Count} pet games.", Logger.Args(s_games.Count));
+        Logger.Information("Loaded {Count} pet games.", 
+            Logger.Args(s_games.Count));
 
         DisposeStream();
     }
@@ -96,7 +99,7 @@ internal sealed class PetGameConfig : RootSingleResourceSingleton<PetGameConfig>
     }
 
     /// <summary>
-    /// Every game in file order: the six pet games, the morph game and the web game.
+    /// Every game in file order.
     /// </summary>
     internal static IReadOnlyList<PetGameInfo> Games => s_games;
 

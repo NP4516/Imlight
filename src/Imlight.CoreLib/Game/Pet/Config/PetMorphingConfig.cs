@@ -81,10 +81,18 @@ internal sealed class PetMorphingConfig : RootSingleResourceSingleton<PetMorphin
         var tier = level - FIRST_PRICED_PET_LEVEL;
         var pedigree = Math.Max(first.m_overallRating, second.m_overallRating);
 
-        var combat = GetTalentCost(s_config.m_inPersonCombatTalentCostMin, s_config.m_inPersonCombatTalentCostGrowth,
-            tier, pedigree, s_config.m_inPersonCombatDivisor, s_config.m_inPersonCombatExponent);
-        var derby = GetTalentCost(s_config.m_inPersonDerbyTalentCostMin, s_config.m_inPersonDerbyTalentCostGrowth,
-            tier, pedigree, s_config.m_inPersonDerbyDivisor, s_config.m_inPersonDerbyExponent);
+        var combat = GetTalentCost(s_config.m_inPersonCombatTalentCostMin,
+                                   s_config.m_inPersonCombatTalentCostGrowth,
+                                   tier,
+                                   pedigree,
+                                   s_config.m_inPersonCombatDivisor,
+                                   s_config.m_inPersonCombatExponent);
+        var derby = GetTalentCost(s_config.m_inPersonDerbyTalentCostMin,
+                                  s_config.m_inPersonDerbyTalentCostGrowth,
+                                  tier,
+                                  pedigree,
+                                  s_config.m_inPersonDerbyDivisor,
+                                  s_config.m_inPersonDerbyExponent);
 
         return combat + derby;
     }

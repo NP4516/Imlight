@@ -479,19 +479,6 @@ public class Wizard {
     }
 
     /// <summary>
-    /// Completes a hatched pet's state (genes, stats, happiness, talents, ratings) and saves the pet if that changed it.
-    /// </summary>
-    /// <param name="pet">The pet item.</param>
-    /// <returns>True if the pet changed and was saved.</returns>
-    public bool InitializePet(WizClientObjectItem pet) {
-        if (!PetProgression.EnsureInitialized(pet)) {
-            return false;
-        }
-
-        return SavePet(pet);
-    }
-
-    /// <summary>
     /// Saves a pet's item behavior to the database.
     /// </summary>
     /// <param name="pet">The pet item.</param>
@@ -1613,18 +1600,18 @@ public class Wizard {
         };
     }
 
-    private void AfterDatabaseLoadPets() {
-        // Pets hatched before genes existed get theirs on this first load, saved together.
-        List<WizClientObjectItem> completedPets = [];
-        foreach (var pet in (InventoryBehavior?.Items ?? []).Concat(EquipmentBehavior?.EquippedItems ?? [])) {
-            try {
-                if (PetProgression.EnsureInitialized(pet)) {
-                    completedPets.Add(pet);
-                }
-            } catch (Exception ex) {
-                Logger.Error("Could not complete pet {PetId} of {CharId}: {Message}", Logger.Args(pet.m_globalID.Full, CharId, ex.Message));
-            }
+    private bool TryCompletePet(WizClientObjectItem pet) {
+        try {
+            return PetProgression.EnsureInitialized(pet);
+        } catch (Exception ex) {
+            Logger.Error("Could not complete pet {PetId} of {CharId}: {Message}", Logger.Args(pet.m_globalID.Full, CharId, ex.Message));
+
+            return false;
         }
+    }
+
+    private void AfterDatabaseLoadPets() {
+        List<WizClientObjectItem> completedPets = [.. (InventoryBehavior?.Items ?? []).Concat(EquipmentBehavior?.EquippedItems ?? []).Where(TryCompletePet)];
 
         if (completedPets.Count == 0) {
             return;

@@ -141,8 +141,8 @@ public class WizardNameBank : RootSingleResourceSingleton<WizardNameBank>, IMemo
     /// <param name="random">The random source.</param>
     /// <returns>The packed name keys, with no middle part.</returns>
     public static uint CreateRandomPetName(Random random) {
-        var first = random.Next(Math.Max(1, GetTableSize(PetFirstNameTableName)));
-        var last = random.Next(Math.Max(1, GetTableSize(PetLastNameTableName)));
+        var first = random.Next(Math.Clamp(GetTableSize(PetFirstNameTableName), 1, byte.MaxValue + 1));
+        var last = random.Next(Math.Clamp(GetTableSize(PetLastNameTableName), 1, byte.MaxValue + 1));
 
         return (uint) ((first << 16) | last);
     }

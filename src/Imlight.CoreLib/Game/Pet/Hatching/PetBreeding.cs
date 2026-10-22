@@ -31,7 +31,6 @@
  *
  * TODO:
  * - The game's talent inheritance rule is not known; shown talents are passed on more often than hidden genes.
- * - Is a morphing exception's probability a fraction or a percentage?
  * - Maximum stats are capped at the egg kind's own maximum; does the server have a higher cap?
  *
  * Created by: Jay
@@ -57,7 +56,6 @@ internal static class PetBreeding {
     private const double SHOWN_TALENT_INHERIT_CHANCE = 0.5;
     private const double HIDDEN_GENE_INHERIT_CHANCE = 0.2;
     private const int MAX_STAT_SPREAD_FROM_PARENT_AVERAGE = 5;
-    private const int SECONDS_PER_MINUTE = 60;
 
     /// <summary>
     /// Creates the egg two parents make. It is a level 0 pet item that is not stored anywhere yet.
@@ -67,7 +65,10 @@ internal static class PetBreeding {
     /// <param name="secondParent">The other parent pet.</param>
     /// <param name="random">The random source.</param>
     /// <returns>The egg, or null if a parent is not a known pet or the egg's kind has no template.</returns>
-    internal static WizClientObjectItem CreateEgg(ulong ownerCharId, WizClientObjectItem firstParent, WizClientObjectItem secondParent, Random random) {
+    internal static WizClientObjectItem CreateEgg(ulong ownerCharId,
+                                                  WizClientObjectItem firstParent,
+                                                  WizClientObjectItem secondParent,
+                                                  Random random) {
         if (!PetProgression.TryGetPet(firstParent, out var first, out _) || !PetProgression.TryGetPet(secondParent, out var second, out _)) {
             return null;
         }
@@ -100,7 +101,7 @@ internal static class PetBreeding {
     /// <returns>The seconds from the [Hatching] setting, or the template's own hatch time.</returns>
     internal static uint GetHatchSeconds(uint eggTemplateId)
         => HatchingRules.HatchMinutes is { } minutes
-            ? (uint) (minutes * SECONDS_PER_MINUTE)
+            ? (uint) TimeSpan.FromMinutes(minutes).TotalSeconds
             : PetFactory.GetHatchSeconds(eggTemplateId);
 
     private static (uint TemplateId, WizClientObjectItem ColorParent) PickKind(WizClientObjectItem firstParent,
@@ -121,7 +122,10 @@ internal static class PetBreeding {
         return (hatchesAs != 0 ? hatchesAs : (uint) kindParent.m_templateID, kindParent);
     }
 
-    private static bool TryMorphingException(WizClientObjectItem parent, WizClientObjectItem mate, Random random, out uint eggTemplateId) {
+    private static bool TryMorphingException(WizClientObjectItem parent,
+                                             WizClientObjectItem mate,
+                                             Random random,
+                                             out uint eggTemplateId) {
         eggTemplateId = 0;
         var exceptions = PetFactory.GetPetItemBehaviorTemplate((uint) parent.m_templateID)?.m_morphingExceptions;
         var exception = exceptions?.FirstOrDefault(entry => (uint) entry.m_secondPetTemplateID == (uint) mate.m_templateID);
@@ -134,7 +138,11 @@ internal static class PetBreeding {
         return eggTemplateId != 0;
     }
 
-    private static List<uint> Inherit(List<uint> firstGenes, List<uint> firstShown, List<uint> secondGenes, List<uint> secondShown, Random random) {
+    private static List<uint> Inherit(List<uint> firstGenes,
+                                      List<uint> firstShown,
+                                      List<uint> secondGenes,
+                                      List<uint> secondShown,
+                                      Random random) {
         var shown = (firstShown ?? []).Concat(secondShown ?? []).Distinct().ToArray();
         var hidden = (firstGenes ?? []).Concat(secondGenes ?? []).Except(shown).ToArray();
         random.Shuffle(shown);
@@ -146,8 +154,10 @@ internal static class PetBreeding {
         ];
     }
 
-    private static List<PetStat> AverageMaxStats(ClientPetItemBehavior first, ClientPetItemBehavior second,
-                                                 PetItemBehaviorTemplate eggTemplate, Random random) {
+    private static List<PetStat> AverageMaxStats(ClientPetItemBehavior first,
+                                                 ClientPetItemBehavior second,
+                                                 PetItemBehaviorTemplate eggTemplate,
+                                                 Random random) {
         var stats = new List<PetStat>();
         foreach (var kindMaximum in eggTemplate.m_maxStats ?? []) {
             var firstMaximum = first.m_maxStats?.FirstOrDefault(stat => stat.m_name == kindMaximum.m_name)?.m_value ?? kindMaximum.m_value;
@@ -155,11 +165,7 @@ internal static class PetBreeding {
             var spread = random.Next(-MAX_STAT_SPREAD_FROM_PARENT_AVERAGE, MAX_STAT_SPREAD_FROM_PARENT_AVERAGE + 1);
             var value = Math.Clamp(((firstMaximum + secondMaximum) / 2) + spread, 1, Math.Max(1, kindMaximum.m_value));
 
-            stats.Add(new PetStat {
-                m_name = kindMaximum.m_name,
-                m_statID = kindMaximum.m_statID,
-                m_value = value,
-            });
+            stats.Add(PetProgression.CopyStat(kindMaximum, value));
         }
 
         return stats;

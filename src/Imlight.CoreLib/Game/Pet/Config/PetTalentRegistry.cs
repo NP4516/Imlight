@@ -53,19 +53,8 @@ namespace Imlight.CoreLib.Game.Pet.Config;
 /// </summary>
 internal enum PetTalentKind {
 
-    /// <summary>
-    /// A combat talent, in TalentData.
-    /// </summary>
     Combat,
-
-    /// <summary>
-    /// A derby talent, in TalentData.
-    /// </summary>
     Derby,
-
-    /// <summary>
-    /// A pet power, in TalentData/PetPowers. Pet combat talent pools list these too.
-    /// </summary>
     Power,
 
 }
@@ -109,7 +98,8 @@ internal sealed class PetTalentRegistry : RootDirectoryResourceSingleton<PetTale
             }
 
             if (!serializer.Deserialize<PetTalentBaseTemplate>(fileStream?.ToArray(), out var template)) {
-                Logger.Error("Could not deserialize {File} as {Type}", Logger.Args(fileRecord.FileName, nameof(PetTalentBaseTemplate)));
+                Logger.Error("Could not deserialize {File} as {Type}", 
+                    Logger.Args(fileRecord.FileName, nameof(PetTalentBaseTemplate)));
 
                 continue;
             }
@@ -123,20 +113,23 @@ internal sealed class PetTalentRegistry : RootDirectoryResourceSingleton<PetTale
             var info = new PetTalentInfo(StringHash.Compute(name), name, kind, template);
 
             if (!byName.TryAdd(name, info)) {
-                Logger.Error("{File} repeats the talent name {Talent}.", Logger.Args(fileRecord.FileName, name));
+                Logger.Error("{File} repeats the talent name {Talent}.", 
+                    Logger.Args(fileRecord.FileName, name));
 
                 continue;
             }
 
             if (!byId.TryAdd(info.Id, info)) {
-                Logger.Error("The talent {Talent} has the same id as {Other}.", Logger.Args(name, byId[info.Id].Name));
+                Logger.Error("The talent {Talent} has the same id as {Other}.", 
+                    Logger.Args(name, byId[info.Id].Name));
                 byName.Remove(name);
             }
         }
 
         s_byName = byName;
         s_byId = byId;
-        Logger.Information("Loaded {Count} pet talent templates.", Logger.Args(byName.Count));
+        Logger.Information("Loaded {Count} pet talent templates.", 
+            Logger.Args(byName.Count));
     }
 
     /// <summary>
@@ -164,18 +157,5 @@ internal sealed class PetTalentRegistry : RootDirectoryResourceSingleton<PetTale
     /// <returns>True if a talent has this id.</returns>
     internal static bool TryGetById(uint id, out PetTalentInfo talent)
         => s_byId.TryGetValue(id, out talent);
-
-    /// <summary>
-    /// Gets the template id of the talent with an exact name.
-    /// </summary>
-    /// <param name="name">The talent name.</param>
-    /// <param name="id">The template id, if the name is known.</param>
-    /// <returns>True if a talent has exactly this name.</returns>
-    internal static bool TryGetTemplateId(string name, out uint id) {
-        var found = TryGetByName(name, out var talent);
-        id = found ? talent.Id : 0;
-
-        return found;
-    }
 
 }

@@ -53,7 +53,6 @@ namespace Imlight.CoreLib.Game.Commands.Protocols;
 internal class CommandHatchProtocol : CommandProtocol {
 
     private const int PARENTS_PER_EGG = 2;
-    private const int SECONDS_PER_MINUTE = 60;
 
     internal override string Group { get; set; } = "";
 
@@ -100,7 +99,7 @@ internal class CommandHatchProtocol : CommandProtocol {
             return;
         }
 
-        var minutes = Math.Ceiling(PetHatching.GetSecondsToHatch(egg) / (double) SECONDS_PER_MINUTE);
+        var minutes = Math.Ceiling(TimeSpan.FromSeconds(PetHatching.GetSecondsToHatch(egg)).TotalMinutes);
         InformSenderClient($"{GetName(first)} and {GetName(second)} made {GetName(egg)}, which hatches in {minutes} minutes.");
     }
 

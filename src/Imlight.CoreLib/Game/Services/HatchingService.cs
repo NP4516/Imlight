@@ -107,7 +107,13 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PETGAMEROOMJOINED))]
     private void ReceivePetGameRoomJoined(ZONE_102_PROTOCOL.MSG_PETGAMEROOMJOINED message) {
-        if (_room is null || string.IsNullOrEmpty(message.GameName)) {
+        if (string.IsNullOrEmpty(message.GameName)) {
+            return;
+        }
+
+        if (_room is null) {
+            Teleport(GetActiveWizard().PreviousZone, doTeleportEffects: false);
+
             return;
         }
 
@@ -152,7 +158,6 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
             return;
         }
 
-        // The window shows that the partner left; the player follows shortly after.
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEEND { Game = _room.GameName });
         Timers.StartSingleTimer(RETURN_TIMER_KEY, new CHARACTER_103_PROTOCOL.MSG_HATCHRETURN(), s_partnerLeftReturnDelay);
     }
@@ -166,6 +171,15 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
         _room.PartnerPets = message.Pets ?? [];
         SendPetsToPartner();
         TrySendStart();
+    }
+
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERHATCHED))]
+    private void ReceivePartnerHatched(CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERHATCHED message) {
+        if (_room is not { IsDuo: true, Lends: true, Done: false } || message.CharId != _room.PartnerCharId) {
+            return;
+        }
+
+        LendPet();
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERWAITOVER))]
@@ -207,7 +221,7 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERPICK))]
     private void ReceivePartnerPick(CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERPICK message) {
-        if (_room is not { IsDuo: true }) {
+        if (_room is not { IsDuo: true } || message.CharId != _room.PartnerCharId) {
             return;
         }
 
@@ -220,17 +234,19 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERCHOICE))]
     private void ReceivePartnerChoice(CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERCHOICE message) {
-        if (_room is not { IsDuo: true }) {
+        if (_room is not { IsDuo: true } || message.CharId != _room.PartnerCharId) {
             return;
         }
 
         _room.PartnerLends = message.Lends;
-        SendChoiceOutcome();
+        if (_room.Started) {
+            SendChoiceOutcome();
+        }
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERREADY))]
     private void ReceivePartnerReady(CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERREADY message) {
-        if (_room is not { IsDuo: true }) {
+        if (_room is not { IsDuo: true } || message.CharId != _room.PartnerCharId) {
             return;
         }
 
@@ -347,7 +363,7 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
 
         _room.Picks[side] = petId;
         if (_room.IsDuo && side == HatchingRoom.OWN_PET_PICK_SIDE) {
-            _room.PartnerSession?.Tell(new CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERPICK { PetId = petId });
+            _room.PartnerSession?.Tell(new CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERPICK { CharId = GetActiveWizard().CharId, PetId = petId });
         }
 
         SendCanAfford();
@@ -356,7 +372,7 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
     private void ReceiveReady(Dictionary<string, string> fields) {
         _room.Ready = fields.GetValueOrDefault(READY_FIELD) == READY_TICKED_VALUE;
         if (_room.IsDuo) {
-            _room.PartnerSession?.Tell(new CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERREADY { Ready = _room.Ready });
+            _room.PartnerSession?.Tell(new CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERREADY { CharId = GetActiveWizard().CharId, Ready = _room.Ready });
         }
 
         TryFinish();
@@ -372,7 +388,7 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
         }
 
         _room.Lends = lends;
-        _room.PartnerSession?.Tell(new CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERCHOICE { Lends = lends });
+        _room.PartnerSession?.Tell(new CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERCHOICE { CharId = GetActiveWizard().CharId, Lends = lends });
         SendChoiceOutcome();
     }
 
@@ -404,7 +420,6 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
     }
 
     private void SendCanAfford() {
-        // A lender pays nothing.
         var canAfford = _room.Lends == true || (TryGetParents(out var first, out var second) && CanPay(first, second));
         SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHCANAFFORD { CanAfford = (sbyte) (canAfford ? 1 : 0) });
     }
@@ -419,8 +434,6 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
         }
 
         if (_room.Lends == true) {
-            LendPet();
-
             return;
         }
 
@@ -442,18 +455,17 @@ internal class HatchingService(SessionActor sessionActor) : MessageService(sessi
         }
 
         var goldCost = PetHatching.GetGoldCost(first, second);
-        if (!PetHatching.TryLayEgg(SessionActor.ActorRef, wizard, first, second, out var egg)) {
+        if (!PetHatching.TryLayEgg(SessionActor.ActorRef, wizard, first, second, out _)) {
+            InformGameClient("The egg could not be made.");
+
             return;
         }
 
         _room.Done = true;
         PayGold(goldCost);
-        CoreObjectFactory.FindBehaviorInstance<ClientPetNameBehavior>(egg, out var eggName);
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETEGGMORPHED {
-            PetTemplateGID = egg.m_templateID.Full,
-            PetName = eggName?.m_nameKeys ?? 0,
-            HatchTime = PetHatching.GetSecondsToHatch(egg),
-        });
+        if (_room.PartnerLends == true) {
+            _room.PartnerSession?.Tell(new CHARACTER_103_PROTOCOL.MSG_HATCHPARTNERHATCHED { CharId = wizard.CharId });
+        }
     }
 
     private void LendPet() {

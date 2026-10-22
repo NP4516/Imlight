@@ -78,7 +78,6 @@ internal abstract class CommandProtocol {
         var methodParameters = method.GetParameters();
         var expectedParameterCount = methodParameters.Length;
         if (expectedParameterCount > 0) {
-            // A command whose parameters all have defaults runs with them when none were provided.
             if (parameters.Length == 0 && methodParameters.All(parameter => parameter.HasDefaultValue)) {
                 method.Invoke(this, [.. methodParameters.Select(parameter => parameter.DefaultValue)]);
 
