@@ -138,6 +138,10 @@ internal static class Program {
         Logger.Information("Akka.NET system created.");
         s_imlightSystem = system;
 
+        Imlight.CoreLib.Game.Commands.AgentBridge.Actors = s_imlightSystem;
+        AgentScripting.Map();
+        Imlight.CoreLib.Game.Commands.AgentBridge.StartIfEnabled();
+
         // =============================================================
         // RESOURCES
         // =============================================================
