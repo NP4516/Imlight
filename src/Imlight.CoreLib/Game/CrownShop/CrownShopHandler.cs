@@ -168,7 +168,7 @@ public static class CrownShopHandler {
                 foreach(var item in tab.Items) {
 
                     var displayPriority = new StringBuilder();
-                    for(int i = 0; i < item.DisplayPriority.Count; i++) {
+                    for (int i = 0; i < item.DisplayPriority.Count; i++) {
                         displayPriority.Append($"{item.DisplayPriority[i]}:{i},");
                     }
                     displayPriority.Length--; // Remove last comma

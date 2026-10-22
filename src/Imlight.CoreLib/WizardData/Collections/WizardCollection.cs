@@ -571,19 +571,21 @@ public static class WizardCollection {
         ];
     }
 
-private static Wizard LoadWizard(Wizard wizard) {
+    private static Wizard LoadWizard(Wizard wizard) {
         using var session = s_store.OpenSession();
+
         // `Wizard` only keeps track of the IDs of the items in the inventory.
         // The actual items are stored in the `WizClientObjectItem` collection.
         // Load the items in the inventory.
         var items = session.Query<WizClientObjectItem>(collectionName: WizardItemCollection.CollectionName)
             .Where(x => x.m_characterId == wizard.CharId)
             .ToList();
+
         wizard.InventoryBehavior.Items = [.. items
             .Where(i => wizard.InventoryBehavior.InventoryItemIds
             .Contains(i.m_globalID))
         ];
-  
+
         // Load the character's equipment.
         // The equipped items are stored as global IDs in the character's EquipmentBehavior.
         // Find any items in the inventory that match the equipped item IDs.
@@ -591,10 +593,10 @@ private static Wizard LoadWizard(Wizard wizard) {
             .Where(i => wizard.EquipmentBehavior.EquippedItemIds
             .Any(e => i.m_globalID == e))
         ];
-  
+
         // Synchronize active elixir behaviors with their remaining playtime seconds from SlotList.
         wizard.EquipmentBehavior?.SyncActiveElixirTimes();
-  
+
         // Load the character's snacks.
         wizard.PetSnackBehavior ??= new();
         if (WizardPetSnackCollection.TryGetWizardSnackBag(wizard.CharId, out var snacks)) {
@@ -604,7 +606,7 @@ private static Wizard LoadWizard(Wizard wizard) {
             wizard.PetSnackBehavior.Snacks = [];
         }
         wizard.PetSnackBehavior.SnackItemIds = wizard.PetSnackBehavior.Snacks.Select(s => (ulong) s.m_globalID).ToList();
-  
+
         // Load the character's reagents.
         wizard.AlchemyBehavior ??= new();
         if (WizardReagentCollection.TryGetWizardReagentBag(wizard.CharId, out var reagents)) {
@@ -613,12 +615,11 @@ private static Wizard LoadWizard(Wizard wizard) {
         else {
             wizard.AlchemyBehavior.Reagents = [];
         }
-  
         wizard.AlchemyBehavior.ReagentItemIds = wizard.AlchemyBehavior.Reagents.Select(r => (ulong) r.m_globalID).ToList();
-  
+
         // Migrate any snacks or reagents mistakenly placed in InventoryBehavior / WizardItemCollection.
         MigrateMisplacedInventoryItems(wizard);
-  
+
         // The friends list is expanded to include a 'relationship' model
         // which helps keep track of the relationship between two players for moderation purposes.
         // `Wizard` only keeps track of the IDs of the relationships.
@@ -629,14 +630,14 @@ private static Wizard LoadWizard(Wizard wizard) {
             .ToList();
         wizard.FriendsBehavior ??= new();
         wizard.FriendsBehavior.Relationships = relationships;
-  
+
         // Load character dynamic modifications.
         var dynamods = session
             .Query<DynamodSet>(collectionName: DynamodCollection.CollectionName)
             .Where(d => d.CharId == wizard.CharId)
             .ToList();
         wizard.DynamodSet = dynamods.FirstOrDefault() ?? new DynamodSet(wizard.CharId);
-  
+
         // Load the actual quests the character has.
         if (wizard.QuestBehavior != null) {
             var currentQuestIDs = wizard.QuestBehavior.CurrentQuestIDs;
@@ -644,12 +645,14 @@ private static Wizard LoadWizard(Wizard wizard) {
                 .Query<QuestInstance>(collectionName: QuestInstanceCollection.CollectionName)
                 .Where(q => q.OwnerCharId == wizard.CharId)
                 .ToList();
+
             wizard.QuestBehavior.CurrentQuestInstances = myQuests;
         }
-  
+
         // The wizard may still have some initialization to do. Inform the wizard
         // that their data has been loaded from the database.
         wizard.AfterDatabaseLoad();
+
         return wizard;
     }
 
@@ -665,26 +668,36 @@ private static Wizard LoadWizard(Wizard wizard) {
         Logger.Information("Migrating {0} misplaced snack/reagent items from player {1}'s inventory.",
             Logger.Args(misplacedItems.Count, wizard.CharId));
 
+        var anyMigrated = false;
         foreach (var item in misplacedItems) {
-            wizard.InventoryBehavior.Items.Remove(item);
-            wizard.InventoryBehavior.InventoryItemIds.Remove(item.m_globalID);
-            WizardItemCollection.RemoveItem(wizard.CharId, item.m_globalID);
+            var added = item switch {
+                ClientPetSnackItem => wizard.AddSnack(item.m_templateID, out _),
+                ClientReagentItem => wizard.AddReagent(item.m_templateID, out _),
+                _ => false
+            };
 
-            if (item is ClientPetSnackItem snack) {
-                wizard.AddSnack(snack);
+            if (added) {
+                wizard.InventoryBehavior.Items.Remove(item);
+                wizard.InventoryBehavior.InventoryItemIds.Remove(item.m_globalID);
+                WizardItemCollection.RemoveItem(wizard.CharId, item.m_globalID);
+                anyMigrated = true;
             }
-            else if (item is ClientReagentItem reagent) {
-                wizard.AddReagent(reagent);
+            else {
+                Logger.Warning("Failed to migrate misplaced item {0} (template {1}) to bag for player {2}.",
+                    Logger.Args(item.m_globalID, item.m_templateID, wizard.CharId));
             }
         }
 
-        UpdateCharacterItems(wizard);
+        if (anyMigrated) {
+            UpdateCharacterItems(wizard);
+        }
     }
 
-    private static Wizard GetCharacterByCharId(IDocumentSession session, ulong charId)
-        => session.Query<Wizard>(collectionName: CollectionName)
+    private static Wizard GetCharacterByCharId(IDocumentSession session, ulong charId) {
+        var character = session.Query<Wizard>(collectionName: CollectionName)
             .Customize(query => query.WaitForNonStaleResults(s_nonStaleWaitTimeout))
             .FirstOrDefault(c => c.CharId == charId);
+
         if (character is not null) {
             s_documentIdByCharId[charId] = session.Advanced.GetDocumentId(character);
         }

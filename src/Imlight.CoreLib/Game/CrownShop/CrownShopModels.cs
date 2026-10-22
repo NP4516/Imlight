@@ -58,7 +58,7 @@ public class CrownShopItemConfig {
     public int CrownsCost { get; set; } = 0;
     public int StrikethruCrowns { get; set; } = 0;
     public int TicketCost { get; set; } = 0;
-    public List<uint> DisplayPriority { get; set; }
+    public List<uint> DisplayPriority { get; set; } = new() { 0 };
     public CrownShopItemFlags CrownShopItemFlags { get; set; } = new();
 }
 

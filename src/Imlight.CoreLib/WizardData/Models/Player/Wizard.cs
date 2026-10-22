@@ -19,7 +19,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Numerics
+using System.Numerics;
 using System.Text.Json.Serialization;
 using Imcodec.IO;
 using Imcodec.Cryptography;
@@ -1710,8 +1710,8 @@ public class Wizard {
         var energyRegained = timeDifference / energyTickIntervalInSeconds;
 
         // If the player has regained more energy than their max, set it to the max.
-        var newEnergy = PetOwnerBehavior.Energy + energyRegained > normMaxEnergy
-            ? normMaxEnergy
+        var newEnergy = PetOwnerBehavior.Energy + energyRegained > maxEnergy
+            ? maxEnergy
             : (int) (PetOwnerBehavior.Energy + energyRegained);
         if (newEnergy == PetOwnerBehavior.Energy) {
             PetOwnerBehavior.SetEnergy(newEnergy);
