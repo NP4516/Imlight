@@ -29,11 +29,7 @@
  * Attached to every game session by GameServiceFactory.
  *
  * NOTE:
- * The client never names itself in a trade request, so the session's own wizard is always the source.
- * Hold, claim and refund run here because only the owning session may change its wizard: each changes the
- * stored spellbook and the TradeEscrow document in one save, then mirrors the same cards in memory, once.
- * The client moves the cards itself when the swap succeeds, so no treasure book message is sent. A step
- * left half done when the session ends is settled in OnPreDispose.
+ * The session's own wizard is always the trade source; hold, claim and refund run here because only the owning session may change its wizard.
  *
  * TODO:
  *
@@ -59,6 +55,8 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class TradeService(SessionActor sessionActor) : MessageService(sessionActor) {
 
+    private const int TREASURE_BOOK_CAPACITY = 999;
+
     private static readonly uint s_shopState = StringHash.Compute("Shop");
     private static readonly uint s_notShoppingState = StringHash.Compute("NotShopping");
 
@@ -68,7 +66,8 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
     private bool _isLoggingOut;
     private Guid _escrowTradeId;
     private Wizard _escrowWizard;
-    private readonly HashSet<(Guid TradeId, TradeStep Step)> _mirroredSteps = [];
+    private readonly HashSet<Guid> _mirroredHolds = [];
+    private readonly HashSet<Guid> _mirroredEnds = [];
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new TradeService(parentActor));
@@ -117,8 +116,8 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_TRADE_JOIN_STATUS))]
     private void ReceiveTradeJoinStatus(WIZARD_12_PROTOCOL.MSG_TRADE_JOIN_STATUS message) {
-        // Accepting is a 1 and declining or cancelling a 0; the client sends nothing else.
-        if (message.PlayerStatus is not (0 or 1) || !TryGetPeer(message.TargetGID, out var wizard, out var peerCharId)) {
+        if (message.PlayerStatus is not ((int) TradeJoinStatus.Left or (int) TradeJoinStatus.Joined) 
+                              || !TryGetPeer(message.TargetGID, out var wizard, out var peerCharId)) {
             return;
         }
 
@@ -127,7 +126,7 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             Session = SessionActor.ActorRef,
             Zone = SessionActor.GetZoneActor(),
             PeerCharId = peerCharId,
-            Join = message.PlayerStatus
+            Join = (TradeJoinStatus) message.PlayerStatus
         });
     }
 
@@ -140,7 +139,7 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
         TellDirectory(new TRADE_110_PROTOCOL.MSG_READYCHANGED {
             CharId = wizard.CharId,
             PeerCharId = peerCharId,
-            Ready = message.PlayerStatus
+            Ready = (TradeReadyStatus) message.PlayerStatus
         });
     }
 
@@ -180,23 +179,8 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             Zone = zone
         };
 
-        if (wizard is null) {
-            screened.ErrorCode = (int) TradeError.CannotTradeNow;
-            TellDirectory(screened);
-
-            return;
-        }
-
-        var error = ScreenInvite(wizard, message, zone);
-        if (error != TradeError.None) {
-            screened.ErrorCode = (int) error;
-            TellDirectory(screened);
-
-            return;
-        }
-
-        if (BuddyRelationshipCollection.HasBlocked(wizard.CharId, message.RequesterCharId)) {
-            // A blocked requester sees the same cancelled trade as when the player declines.
+        screened.Error = wizard is null ? TradeError.CannotTradeNow : ScreenInvite(wizard, message, zone);
+        if (screened.Error != TradeError.None || BuddyRelationshipCollection.HasBlocked(wizard.CharId, message.RequesterCharId)) {
             TellDirectory(screened);
 
             return;
@@ -223,7 +207,6 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
-        // The directory has ended the trade, so there is nothing left to announce when this session ends.
         var wasLocked = _isLocked;
         _isLocked = false;
         _isInvolved = false;
@@ -241,8 +224,8 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             Step = message.Step
         };
 
-        if (wizard is null) {
-            done.ErrorCode = (int) TradeError.Failed;
+        if (wizard is null || !_isInvolved) {
+            done.Error = TradeError.Failed;
             TellDirectory(done);
 
             return;
@@ -252,8 +235,7 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
         _escrowTradeId = message.TradeId;
         _escrowWizard = wizard;
 
-        done.ErrorCode = (int) RunStep(wizard, message.TradeId, message.Step);
-        done.Success = done.ErrorCode == (int) TradeError.None;
+        done.Error = RunStep(wizard, message.TradeId, message.Step);
         TellDirectory(done);
     }
 
@@ -284,7 +266,6 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
-        // A logout the player backs out of must not leave the player standing in the Shop state.
         if (release && _isLocked) {
             BroadcastState(s_notShoppingState);
         }
@@ -304,17 +285,11 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
-        // The directory may have given up on this swap, so this player's side is finished from here:
-        // claimed when both sides held, refunded otherwise. The memory copy is brought in line before any
-        // other save of the spellbook can run.
         var result = TradeEscrowCollection.Settle(_escrowTradeId, _charId);
-        if (result.Outcome == EscrowOutcome.Done
-            && !_mirroredSteps.Contains((_escrowTradeId, TradeStep.Claim)) && !_mirroredSteps.Contains((_escrowTradeId, TradeStep.Refund))) {
-            // A side ends in a claim or a refund, never both, so a step that already mirrored its end is not added again.
-            Mirror(_escrowWizard, _escrowTradeId, TradeStep.Claim, result.Cards, result.Given);
+        if (result.Outcome == EscrowOutcome.Done) {
+            Mirror(_escrowWizard, _escrowTradeId, isHold: false, result.Cards, result.Given);
         }
 
-        // Whoever finishes last removes the document.
         _ = TradeEscrowCollection.DeleteIfSettled(_escrowTradeId);
 
         Logger.Debug("Trade {TradeId} settled for character {CharId} while the session ended: {Outcome}.",
@@ -338,30 +313,16 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             TradeStep.Claim => TradeEscrowCollection.Claim(tradeId, wizard.CharId),
             _ => TradeEscrowCollection.Refund(tradeId, wizard.CharId),
         };
-
-        switch (result.Outcome) {
-            case EscrowOutcome.Done:
-            case EscrowOutcome.AlreadyDone:
-                // A repeated step mirrors too: the call that did the work may have landed without its reply.
-                Mirror(wizard, tradeId, step, result.Cards, result.Given);
-
-                return TradeError.None;
-            case EscrowOutcome.Failed:
-                // The save may have landed even though the call gave up, and then the memory copy has to follow.
-                if (!LandedAnyway(tradeId, wizard.CharId, step, out var landed, out var given)) {
-                    return TradeError.Failed;
-                }
-
-                Mirror(wizard, tradeId, step, landed, given);
-
-                return TradeError.None;
-            default:
-                return TradeError.Failed;
+        if (result.Outcome is not (EscrowOutcome.Done or EscrowOutcome.AlreadyDone)) {
+            return TradeError.Failed;
         }
+
+        Mirror(wizard, tradeId, step == TradeStep.Hold, result.Cards, result.Given);
+
+        return TradeError.None;
     }
 
     private static TradeError CheckHold(Wizard wizard, Guid tradeId) {
-        // Checked in memory before anything is written, so a player who cannot hold the swap is refused cleanly.
         if (!TryPeek(tradeId, out var escrow) || (escrow.CharIdA != wizard.CharId && escrow.CharIdB != wizard.CharId)) {
             return TradeError.Failed;
         }
@@ -369,48 +330,40 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
         var isA = escrow.CharIdA == wizard.CharId;
         var give = isA ? escrow.CardsFromA : escrow.CardsFromB;
         var receive = isA ? escrow.CardsFromB : escrow.CardsFromA;
+        if (!wizard.SpellbookBehavior.HasTreasureCards(give)) {
+            return TradeError.Failed;
+        }
+
         var book = wizard.SpellbookBehavior.TreasureCardTemplateIds ?? [];
-
-        var owned = new Dictionary<uint, int>();
-        foreach (var card in book) {
-            owned[card] = owned.GetValueOrDefault(card) + 1;
-        }
-
-        foreach (var card in give) {
-            if (!owned.TryGetValue(card, out var copies) || copies == 0) {
-                return TradeError.Failed;
-            }
-
-            owned[card] = copies - 1;
-        }
-
         var given = TreasureCardTradePolicy.CountCapacityUsed(give);
         var received = TreasureCardTradePolicy.CountCapacityUsed(receive);
         var projected = TreasureCardTradePolicy.CountCapacityUsed(book) - given + received;
+        var bookGrows = received > given;
 
-        // A book above the limit (loot and shops do not enforce it) can still trade as long as it does not grow.
-        return projected > TradeLimits.TREASURE_BOOK_CAPACITY && received > given ? TradeError.CannotHold : TradeError.None;
+        return projected > TREASURE_BOOK_CAPACITY && bookGrows ? TradeError.CannotHold : TradeError.None;
     }
 
-    private void Mirror(Wizard wizard, Guid tradeId, TradeStep step, IReadOnlyList<uint> cards, IReadOnlyList<uint> given = null) {
-        // A claim or refund can only follow a hold that landed, so a hold this session never heard about is taken out first.
-        if (step != TradeStep.Hold && given is { Count: > 0 }) {
-            Mirror(wizard, tradeId, TradeStep.Hold, given);
+    private void Mirror(Wizard wizard,
+                        Guid tradeId,
+                        bool isHold,
+                        IReadOnlyList<uint> cards,
+                        IReadOnlyList<uint> given = null) {
+        if (!isHold && given is { Count: > 0 }) {
+            Mirror(wizard, tradeId, isHold: true, given);
         }
 
-        if (!_mirroredSteps.Add((tradeId, step))) {
+        if (!(isHold ? _mirroredHolds : _mirroredEnds).Add(tradeId)) {
             return;
         }
 
         var book = wizard.SpellbookBehavior;
-        if (step != TradeStep.Hold) {
+        if (!isHold) {
             book.AddTreasureCards(cards);
 
             return;
         }
 
-        if (!book.TryRemoveTreasureCards([.. cards])) {
-            // The stored document is the truth; the next login reads it.
+        if (!book.TryRemoveTreasureCards(cards)) {
             Logger.Error("Trade {TradeId}: the memory copy of character {CharId} did not hold the cards the hold took.",
                 Logger.Args(tradeId, wizard.CharId));
         }
@@ -422,37 +375,11 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
 
             return escrow is not null;
         } catch (Exception ex) {
-            // An unreadable document answers the step as failed, so the directory decides at once.
             Logger.Error("Trade {TradeId}: the escrow document could not be read. {Exception}", Logger.Args(tradeId, ex));
             escrow = null;
 
             return false;
         }
-    }
-
-    private static bool LandedAnyway(Guid tradeId, ulong charId, TradeStep step, out List<uint> cards, out List<uint> given) {
-        cards = [];
-        given = [];
-        if (!TryPeek(tradeId, out var escrow)) {
-            return false;
-        }
-
-        var isA = escrow.CharIdA == charId;
-        var landed = step switch {
-            TradeStep.Hold => isA ? escrow.HeldA : escrow.HeldB,
-            TradeStep.Claim => isA ? escrow.ClaimedA : escrow.ClaimedB,
-            _ => isA ? escrow.RefundedA : escrow.RefundedB,
-        };
-        if (!landed) {
-            return false;
-        }
-
-        var own = isA ? escrow.CardsFromA : escrow.CardsFromB;
-        var other = isA ? escrow.CardsFromB : escrow.CardsFromA;
-        cards = [.. step == TradeStep.Claim ? other : own];
-        given = step == TradeStep.Hold ? [] : [.. own];
-
-        return true;
     }
 
     #endregion

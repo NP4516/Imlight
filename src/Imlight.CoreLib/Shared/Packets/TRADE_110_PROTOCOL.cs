@@ -39,20 +39,12 @@
  * Last Updated: 10/14/2026
  */
 
-using Akka.Actor;
 using System;
+using Akka.Actor;
+using Imlight.CoreLib.Game.Trading;
 using Imlight.CoreLib.Shared.Networking;
 
 namespace Imlight.CoreLib.Shared.Packets;
-
-/// <summary>
-/// One database step of the escrow swap, run by the session that owns the wizard.
-/// </summary>
-public enum TradeStep : byte {
-    Hold,
-    Claim,
-    Refund,
-}
 
 public sealed class TRADE_110_PROTOCOL : IServerProtocol {
 
@@ -104,11 +96,7 @@ public sealed class TRADE_110_PROTOCOL : IServerProtocol {
         public IActorRef Session;
         public IActorRef Zone;
         public bool Delivered;
-
-        /// <summary>
-        /// A TradeError value; 0 with <see cref="Delivered"/> false is a silent decline.
-        /// </summary>
-        public int ErrorCode;
+        internal TradeError Error;
 
     }
 
@@ -122,10 +110,7 @@ public sealed class TRADE_110_PROTOCOL : IServerProtocol {
         public IActorRef Zone;
         public ulong PeerCharId;
 
-        /// <summary>
-        /// 1 joins, 0 leaves or declines.
-        /// </summary>
-        public int Join;
+        internal TradeJoinStatus Join;
 
     }
 
@@ -137,10 +122,7 @@ public sealed class TRADE_110_PROTOCOL : IServerProtocol {
         public ulong CharId;
         public ulong PeerCharId;
 
-        /// <summary>
-        /// 0 not ready, 1 ready, 2 confirmed.
-        /// </summary>
-        public int Ready;
+        internal TradeReadyStatus Ready;
 
     }
 
@@ -154,14 +136,7 @@ public sealed class TRADE_110_PROTOCOL : IServerProtocol {
         public uint TemplateId;
         public uint Enchant;
 
-        /// <summary>
-        /// 1 adds one copy, 0 removes one copy.
-        /// </summary>
         public byte Action;
-
-        /// <summary>
-        /// Copies of the card in the sender's treasure book right now.
-        /// </summary>
         public int OwnedCount;
 
     }
@@ -198,7 +173,7 @@ public sealed class TRADE_110_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 110;
 
         public Guid TradeId;
-        public TradeStep Step;
+        internal TradeStep Step;
 
     }
 
@@ -209,13 +184,8 @@ public sealed class TRADE_110_PROTOCOL : IServerProtocol {
 
         public Guid TradeId;
         public ulong CharId;
-        public TradeStep Step;
-        public bool Success;
-
-        /// <summary>
-        /// A TradeError value when <see cref="Success"/> is false.
-        /// </summary>
-        public int ErrorCode;
+        internal TradeStep Step;
+        internal TradeError Error;
 
     }
 

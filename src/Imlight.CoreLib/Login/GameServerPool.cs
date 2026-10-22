@@ -70,7 +70,6 @@ internal class GameServerPool : ReceiveProtocolDispatcher {
         // Groups span every realm, so the pool owns the one directory all game servers share.
         Context.ActorOf(GroupDirectory.Props(), nameof(GroupDirectory));
 
-        // Trades span every realm and zone too.
         Context.ActorOf(TradeDirectory.Props(), nameof(TradeDirectory));
 
         Logger.Information("GameServerPool created.");

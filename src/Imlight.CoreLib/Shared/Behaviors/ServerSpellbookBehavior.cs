@@ -92,12 +92,12 @@ public class ServerSpellbookBehavior : IClientBehaviorProvider<ClientSpellbookBe
     /// Removes every card in <paramref name="templateIds"/> (one copy per entry), or none of them when
     /// any copy is missing.
     /// </summary>
+    public bool HasTreasureCards(IEnumerable<uint> templateIds)
+        => templateIds.GroupBy(x => x).All(x => TreasureCardCount(x.Key) >= x.Count());
+
     public bool TryRemoveTreasureCards(IReadOnlyCollection<uint> templateIds) {
-        var owned = (TreasureCardTemplateIds ?? []).GroupBy(x => x).ToDictionary(x => x.Key, x => x.Count());
-        foreach (var required in templateIds.GroupBy(x => x)) {
-            if (!owned.TryGetValue(required.Key, out var copies) || copies < required.Count()) {
-                return false;
-            }
+        if (!HasTreasureCards(templateIds)) {
+            return false;
         }
 
         foreach (var templateId in templateIds) {

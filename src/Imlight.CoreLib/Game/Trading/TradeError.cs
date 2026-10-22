@@ -27,8 +27,6 @@
  * SendToSocket(new WIZARD_12_PROTOCOL.MSG_TRADE_RESULT { Status = (uint) TradeError.CannotHold });
  * 
  * NOTE:
- * Codes the live client can show but this server never sends are declared for completeness.
- * The Imlight protocol messages carry the value as an int ErrorCode.
  * 
  * TODO:
  * 

@@ -61,9 +61,22 @@ internal enum TradeApplyStep {
     Done,
 }
 
-internal enum TradeLeaveResult {
-    Left,
-    Ignored,
+internal enum TradeStep : byte {
+    Hold,
+    Claim,
+    Refund,
+}
+
+internal enum TradeJoinStatus {
+    Pending = -1,
+    Left = 0,
+    Joined = 1,
+}
+
+internal enum TradeReadyStatus {
+    NotReady,
+    Ready,
+    Confirmed,
 }
 
 internal enum TradeReadyResult {
@@ -83,7 +96,7 @@ internal enum TradeOfferResult {
 
 internal sealed class TradeSession {
 
-    private const int READY_CONFIRMED = 2;
+    private const int MAX_DISTINCT_CARDS_PER_SIDE = 4;
 
     internal Guid TradeId { get; }
     internal TradeParticipant A { get; }
@@ -94,7 +107,7 @@ internal sealed class TradeSession {
 
     internal bool IsAborting => AbortError != TradeError.None;
     internal bool IsCommitted => ApplyStep >= TradeApplyStep.ClaimA;
-    internal bool BothConfirmed => Phase == TradePhase.Open && A.Ready == READY_CONFIRMED && B.Ready == READY_CONFIRMED;
+    internal bool BothConfirmed => Phase == TradePhase.Open && A.Ready == TradeReadyStatus.Confirmed && B.Ready == TradeReadyStatus.Confirmed;
 
     internal TradeParticipant ApplyActor => ApplyStep switch {
         TradeApplyStep.HoldA or TradeApplyStep.ClaimA => A,
@@ -107,10 +120,10 @@ internal sealed class TradeSession {
         A = requester;
         B = invitee;
 
-        // The requester's window is open as soon as it presses Trade.
-        A.Join = 1;
-        B.Join = -1;
+        A.Join = TradeJoinStatus.Joined;
     }
+
+    internal TradeParticipant[] Participants => [A, B];
 
     internal TradeParticipant Find(ulong charId)
         => A.CharId == charId ? A : B.CharId == charId ? B : null;
@@ -119,29 +132,28 @@ internal sealed class TradeSession {
         => ReferenceEquals(participant, A) ? B : A;
 
     internal bool TryJoin(TradeParticipant participant) {
-        if (Phase != TradePhase.Inviting || !ReferenceEquals(participant, B) || B.Join != -1) {
+        if (Phase != TradePhase.Inviting || !ReferenceEquals(participant, B) || B.Join != TradeJoinStatus.Pending) {
             return false;
         }
 
-        B.Join = 1;
+        B.Join = TradeJoinStatus.Joined;
         Phase = TradePhase.Open;
 
         return true;
     }
 
-    internal TradeLeaveResult TryLeave(TradeParticipant participant) {
-        // Leaving ends the trade for both sides; a committed trade can only finish.
+    internal bool TryLeave(TradeParticipant participant) {
         if (Phase == TradePhase.Ended || IsCommitted) {
-            return TradeLeaveResult.Ignored;
+            return false;
         }
 
-        participant.Join = 0;
+        participant.Join = TradeJoinStatus.Left;
         Phase = TradePhase.Ended;
 
-        return TradeLeaveResult.Left;
+        return true;
     }
 
-    internal TradeReadyResult TryChangeReady(TradeParticipant participant, int ready) {
+    internal TradeReadyResult TryChangeReady(TradeParticipant participant, TradeReadyStatus ready) {
         if (Phase is TradePhase.Applying or TradePhase.Ended) {
             return TradeReadyResult.Ignored;
         }
@@ -150,12 +162,12 @@ internal sealed class TradeSession {
             return TradeReadyResult.NotJoined;
         }
 
-        if (ready is < 0 or > READY_CONFIRMED) {
+        if (!Enum.IsDefined(ready)) {
             return TradeReadyResult.Invalid;
         }
 
-        if (ready == READY_CONFIRMED && participant.Ready != READY_CONFIRMED
-            && (participant.Ready != 1 || PeerOf(participant).Ready < 1)) {
+        if (ready == TradeReadyStatus.Confirmed && participant.Ready != TradeReadyStatus.Confirmed
+            && (participant.Ready != TradeReadyStatus.Ready || PeerOf(participant).Ready == TradeReadyStatus.NotReady)) {
             return TradeReadyResult.NotReady;
         }
 
@@ -165,8 +177,6 @@ internal sealed class TradeSession {
     }
 
     internal TradeOfferResult TryChangeOffer(TradeParticipant participant, uint templateId, uint enchant, bool add, int ownedCount) {
-        // ownedCount is the copies in the participant's treasure book right now; an accepted change
-        // adds or withdraws one copy and resets both sides to not ready.
         if (Phase is TradePhase.Applying or TradePhase.Ended) {
             return TradeOfferResult.Ignored;
         }
@@ -183,24 +193,23 @@ internal sealed class TradeSession {
         offer.TryGetValue(templateId, out var copies);
 
         var changed = add
-            ? TryAddCopy(offer, templateId, enchant, copies, ownedCount)
+            ? TryAddCopy(offer, templateId, copies, ownedCount)
             : TryRemoveCopy(offer, templateId, copies);
         if (!changed) {
             return TradeOfferResult.Rejected;
         }
 
-        A.Ready = 0;
-        B.Ready = 0;
+        A.Ready = TradeReadyStatus.NotReady;
+        B.Ready = TradeReadyStatus.NotReady;
 
         return TradeOfferResult.Changed;
     }
 
-    private static bool TryAddCopy(Dictionary<uint, int> offer, uint templateId, uint enchant, int copies, int ownedCount) {
-        // The owned and offered counts are checked first, so an id the player does not hold never reaches the template lookup.
+    private static bool TryAddCopy(Dictionary<uint, int> offer, uint templateId, int copies, int ownedCount) {
         var isNewCard = copies == 0;
         if (copies + 1 > ownedCount
-            || (isNewCard && offer.Count >= TradeLimits.MAX_DISTINCT_CARDS_PER_SIDE)
-            || !TreasureCardTradePolicy.IsTradable(templateId, enchant)) {
+            || (isNewCard && offer.Count >= MAX_DISTINCT_CARDS_PER_SIDE)
+            || !TreasureCardTradePolicy.IsTradable(templateId)) {
             return false;
         }
 
@@ -242,14 +251,12 @@ internal sealed class TradeSession {
         return true;
     }
 
-    internal TradeApplyStep AdvanceApply() {
+    internal void AdvanceApply() {
         if (Phase != TradePhase.Applying || ApplyStep == TradeApplyStep.Done) {
-            return ApplyStep;
+            return;
         }
 
         ApplyStep++;
-
-        return ApplyStep;
     }
 
     internal void BeginAbort(TradeError error)
@@ -261,13 +268,10 @@ internal sealed class TradeSession {
     internal List<uint> GivenCards(TradeParticipant participant)
         => [.. participant.Offer.OrderBy(x => x.Key).SelectMany(x => Enumerable.Repeat(x.Key, x.Value))];
 
-    internal List<uint> ReceivedCards(TradeParticipant participant)
-        => GivenCards(PeerOf(participant));
-
     internal uint ItemsGained(TradeParticipant participant)
-        => (uint) ReceivedCards(participant).Count;
+        => (uint) PeerOf(participant).Offer.Values.Sum();
 
     internal uint ItemsLost(TradeParticipant participant)
-        => (uint) GivenCards(participant).Count;
+        => (uint) participant.Offer.Values.Sum();
 
 }

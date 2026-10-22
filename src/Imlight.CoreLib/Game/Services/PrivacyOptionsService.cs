@@ -23,7 +23,7 @@
  * Answers the settings window's privacy options request and saves the options the player changes.
  * 
  * USAGE EXAMPLE:
- * Internal service handling privacy option messages within the game server session.
+ * Attached to every game session by GameServiceFactory.
  * 
  * NOTE:
  * The client expects no reply to an update. Every value is stored as 0 or 1.

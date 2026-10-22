@@ -27,9 +27,7 @@
  * var escrow = TradeEscrowCollection.Peek(tradeId);
  * 
  * NOTE:
- * A card is always in exactly one place: a stored spellbook, or here. Side A is the player who pressed
- * Trade. HeldX means X's cards left X's spellbook into this document; ClaimedX means X received the other
- * side's cards; RefundedX means X got its own cards back after a cancel.
+ * A card is always in exactly one place: a stored spellbook, or here. Side A is the player who pressed Trade.
  * 
  * TODO:
  * 
@@ -60,15 +58,8 @@ public sealed class TradeEscrow {
     public bool Cancelled { get; set; }
     public DateTime CreatedUtc { get; set; }
 
-    /// <summary>
-    /// Both sides have handed over their cards, so the trade can only finish, never be undone.
-    /// </summary>
     [JsonIgnore] public bool IsCommitted => HeldA && HeldB && !Cancelled;
 
-    /// <summary>
-    /// Every card is back in a spellbook: both sides claimed, or the trade was cancelled and each side
-    /// that held got its cards back.
-    /// </summary>
     [JsonIgnore] public bool IsSettled
         => (ClaimedA && ClaimedB) || (Cancelled && (!HeldA || RefundedA) && (!HeldB || RefundedB));
 
@@ -88,17 +79,8 @@ public enum EscrowOutcome {
     Failed,
 }
 
-/// <summary>
-/// What an escrow call did. <see cref="Cards"/> are the cards the step moved: removed from the spellbook
-/// by a hold, added to it by a claim or a refund. A call that returns <see cref="EscrowOutcome.Done"/>
-/// moved them; with <see cref="EscrowOutcome.AlreadyDone"/> an earlier call did.
-/// </summary>
 public readonly record struct EscrowResult(EscrowOutcome Outcome, IReadOnlyList<uint> Cards) {
 
-    /// <summary>
-    /// The cards the calling side handed over, set by a claim or a refund. A session that never learned of
-    /// its hold uses them to take the held cards out of its memory copy before it adds the new ones.
-    /// </summary>
     public IReadOnlyList<uint> Given { get; init; }
 
     public static EscrowResult Of(EscrowOutcome outcome) => new(outcome, []);

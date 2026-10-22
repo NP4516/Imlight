@@ -29,10 +29,7 @@
  * messages; it never touches a Wizard, only the TradeEscrow document.
  *
  * NOTE:
- * Trades live in memory only: an invite or an open trade cannot outlive a session or a restart. The
- * swap is the exception, see TradeEscrowCollection. A step the directory sends to a session is repeated
- * safely, because every escrow step is idempotent. Before both sides held, any failure, timeout or
- * departure cancels the swap and refunds; from then on the swap can only finish.
+ * Trades live in memory only; the swap itself is kept in TradeEscrowCollection.
  *
  * TODO:
  *
@@ -55,13 +52,13 @@ using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Trading;
 
-/// <summary>
-/// Owns every trade on the server and speaks the trade protocol to each participant's client.
-/// </summary>
 internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
     private const int MAX_STEP_ATTEMPTS = 3;
-    private const int JOINED_STATUS = 1;
+
+    private static readonly TimeSpan s_inviteTimeout
+        = TimeSpan.FromSeconds(ConfigurationManager.Settings["Game Server.TradeInviteTimeoutSeconds"].AsUShort());
+    private static readonly TimeSpan s_stepTimeout = TimeSpan.FromSeconds(15);
 
     private static string InviteTimerKey(Guid tradeId) => $"invite-{tradeId}";
     private static string ApplyTimerKey(Guid tradeId) => $"apply-{tradeId}";
@@ -70,22 +67,14 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
     public ITimerScheduler Timers { get; set; }
 
-    private readonly TimeSpan _inviteTimeout;
-    private readonly TimeSpan _stepTimeout;
     private readonly Dictionary<ulong, TradeSession> _tradesByChar = [];
     private readonly Dictionary<Guid, TradeSession> _tradesById = [];
 
-    public TradeDirectory(TimeSpan inviteTimeout, TimeSpan stepTimeout) {
-        Instance = Self;
-        _inviteTimeout = inviteTimeout;
-        _stepTimeout = stepTimeout;
-    }
+    public TradeDirectory()
+        => Instance = Self;
 
     public static Props Props()
-        => Props(TradeLimits.InviteTimeout, TradeLimits.ApplyStepTimeout);
-
-    internal static Props Props(TimeSpan inviteTimeout, TimeSpan stepTimeout)
-        => Akka.Actor.Props.Create(() => new TradeDirectory(inviteTimeout, stepTimeout));
+        => Akka.Actor.Props.Create(() => new TradeDirectory());
 
     protected override bool AroundReceive(Receive receive, object message) {
         // A restart would rebuild the directory empty and strand every open trade.
@@ -109,7 +98,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        // A trade left by an earlier session of the requester must not block the new one.
         if (_tradesByChar.TryGetValue(requesterId, out var leftBehind)) {
             var previous = leftBehind.Find(requesterId);
             if (previous.Session is not null && !previous.Session.Equals(message.Session)) {
@@ -126,7 +114,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        // The client opens its window and sends the request without a busy check, so it is always answered.
         if (_tradesByChar.ContainsKey(requesterId) || _tradesByChar.ContainsKey(targetId)) {
             Logger.Debug("Character {RequesterId} cannot trade with {TargetId}: a trade is already open.",
                 Logger.Args(requesterId, targetId));
@@ -153,7 +140,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
         Timers.StartSingleTimer(
             InviteTimerKey(trade.TradeId),
             new TRADE_110_PROTOCOL.MSG_INVITEEXPIRED { TradeId = trade.TradeId },
-            _inviteTimeout
+            s_inviteTimeout
         );
 
         Context.ActorSelection(message.TargetSessionPath).Tell(new TRADE_110_PROTOCOL.MSG_TRADEINVITE {
@@ -168,7 +155,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
     [MessageHandler(typeof(TRADE_110_PROTOCOL.MSG_INVITESCREENED))]
     private void ReceiveInviteScreened(TRADE_110_PROTOCOL.MSG_INVITESCREENED message) {
-        // The invite may have been accepted by a reverse request, expired or been cancelled in the meantime.
         if (!_tradesById.TryGetValue(message.TradeId, out var trade)) {
             if (message.Delivered) {
                 DismissInvite(message);
@@ -191,9 +177,8 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (message.ErrorCode != 0) {
-            // A refusal the requester is told about; a silent decline shows as a cancelled trade.
-            Send(trade.A, ResultMessage(trade.B.ObjectId, (TradeError) message.ErrorCode));
+        if (message.Error != TradeError.None) {
+            Send(trade.A, ResultMessage(trade.B.ObjectId, message.Error));
             EndTrade(trade);
 
             return;
@@ -212,7 +197,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
         Logger.Debug("Trade {TradeId} invite expired.", Logger.Args(trade.TradeId));
 
-        // The requester withdraws the invite, which also dismisses the invitee's tip.
         trade.TryLeave(trade.A);
         SendJoinStatuses(trade);
         EndTrade(trade);
@@ -224,8 +208,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (message.Join == JOINED_STATUS) {
-            // Only the invitee, once it screened the invite, can join.
+        if (message.Join == TradeJoinStatus.Joined) {
             if (trade.Phase != TradePhase.Inviting || !ReferenceEquals(participant, trade.B) || participant.Session is null) {
                 Logger.Debug("Character {CharId} cannot join trade {TradeId}.", Logger.Args(message.CharId, trade.TradeId));
 
@@ -237,7 +220,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (message.Join == 0) {
+        if (message.Join == TradeJoinStatus.Left) {
             Leave(trade, participant);
         }
     }
@@ -258,7 +241,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
     }
 
     private static void DismissInvite(TRADE_110_PROTOCOL.MSG_INVITESCREENED message) {
-        // The invitee's client already shows the tip; the requester has left, which is what removes it.
         message.Session.Tell(new WIZARD_12_PROTOCOL.MSG_TRADE_JOIN_STATUS {
             TargetGID = Wizard.GetGameObjectId(message.RequesterCharId),
             TargetStatus = 0,
@@ -295,7 +277,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
     private void Leave(TradeSession trade, TradeParticipant participant) {
         if (trade.Phase == TradePhase.Applying) {
-            // Leaving cancels a swap that has not committed, and cannot undo one that has.
             if (!trade.IsCommitted && !trade.IsAborting) {
                 AbortApply(trade, TradeError.Failed);
             }
@@ -303,7 +284,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (trade.TryLeave(participant) != TradeLeaveResult.Left) {
+        if (!trade.TryLeave(participant)) {
             return;
         }
 
@@ -318,8 +299,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        // The departing client is told too, as far as its session still forwards.
-        if (trade.TryLeave(participant) == TradeLeaveResult.Left) {
+        if (trade.TryLeave(participant)) {
             SendJoinStatuses(trade);
         }
 
@@ -345,7 +325,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        // The session settles its own side while it disposes; the directory finishes with the others.
         if (ReferenceEquals(trade.ApplyActor, participant)) {
             trade.AdvanceApply();
             SendStep(trade);
@@ -405,7 +384,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
         var peer = trade.PeerOf(participant);
         switch (trade.TryChangeOffer(participant, message.TemplateId, message.Enchant, add, message.OwnedCount)) {
             case TradeOfferResult.Changed:
-                // Both ready values were reset, then the other player sees the card change.
                 SendReadyStatuses(trade);
                 Send(peer, new WIZARD_12_PROTOCOL.MSG_TRADE_CHANGE_ITEM {
                     TargetGID = participant.ObjectId,
@@ -463,7 +441,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
     }
 
     private void SendStep(TradeSession trade) {
-        // A participant that left after the commit settles its own side while its session disposes.
         while (trade.IsCommitted && trade.ApplyActor is { IsGone: true }) {
             trade.AdvanceApply();
         }
@@ -486,8 +463,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
     [MessageHandler(typeof(TRADE_110_PROTOCOL.MSG_TRADESTEPDONE))]
     private void ReceiveTradeStepDone(TRADE_110_PROTOCOL.MSG_TRADESTEPDONE message) {
         if (!_tradesById.TryGetValue(message.TradeId, out var trade) || trade.Phase != TradePhase.Applying) {
-            // The trade gave up on this step; whoever finished it last has to remove the document.
-            if (message.Success && message.Step != TradeStep.Hold) {
+            if (message.Error == TradeError.None && message.Step != TradeStep.Hold) {
                 _ = TradeEscrowCollection.DeleteIfSettled(message.TradeId);
             }
 
@@ -511,13 +487,21 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (!message.Success && !TryRecoverFailedStep(trade, participant, message)) {
+        if (message.Error == TradeError.None) {
+            participant.StepAttempts = 0;
+            trade.AdvanceApply();
+            SendStep(trade);
+
             return;
         }
 
-        participant.StepAttempts = 0;
-        trade.AdvanceApply();
-        SendStep(trade);
+        if (message.Step == TradeStep.Hold) {
+            AbortApply(trade, message.Error);
+
+            return;
+        }
+
+        RetryOrSkipClaim(trade, participant);
     }
 
     private void ReceiveRefundDone(TradeSession trade, TradeParticipant participant, TRADE_110_PROTOCOL.MSG_TRADESTEPDONE message) {
@@ -525,8 +509,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        // A refund that failed may have landed anyway; asked again, the session finds out and fixes its memory copy.
-        if (!message.Success && participant.StepAttempts < MAX_STEP_ATTEMPTS && CanReach(participant)) {
+        if (message.Error != TradeError.None && participant.StepAttempts < MAX_STEP_ATTEMPTS && CanReach(participant)) {
             SendRefund(trade, participant);
 
             return;
@@ -537,32 +520,26 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
         }
     }
 
-    private bool TryRecoverFailedStep(TradeSession trade, TradeParticipant participant, TRADE_110_PROTOCOL.MSG_TRADESTEPDONE message) {
-        if (message.Step == TradeStep.Hold) {
-            var known = Enum.IsDefined((TradeError) message.ErrorCode) && message.ErrorCode != 0;
-            AbortApply(trade, known ? (TradeError) message.ErrorCode : TradeError.Failed);
-
-            return false;
-        }
-
-        // The trade is committed, so a failed claim is repeated and then left to the next settle.
+    private void RetryOrSkipClaim(TradeSession trade, TradeParticipant participant) {
         if (participant.StepAttempts < MAX_STEP_ATTEMPTS) {
             SendStep(trade);
 
-            return false;
+            return;
         }
 
         Logger.Error("Trade {TradeId} could not claim for character {CharId}. The escrow stays until it is settled.",
             Logger.Args(trade.TradeId, participant.CharId));
-
-        return true;
+        participant.PendingStep = null;
+        participant.StepAttempts = 0;
+        trade.AdvanceApply();
+        SendStep(trade);
     }
 
     private void StartStepTimer(TradeSession trade)
         => Timers.StartSingleTimer(
             ApplyTimerKey(trade.TradeId),
             new TRADE_110_PROTOCOL.MSG_APPLYTIMEOUT { TradeId = trade.TradeId },
-            _stepTimeout
+            s_stepTimeout
         );
 
     [MessageHandler(typeof(TRADE_110_PROTOCOL.MSG_APPLYTIMEOUT))]
@@ -591,30 +568,18 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (actor.StepAttempts < MAX_STEP_ATTEMPTS) {
-            SendStep(trade);
-
-            return;
-        }
-
-        Logger.Error("Trade {TradeId} timed out waiting for character {CharId} to claim. The escrow stays until it is settled.",
-            Logger.Args(trade.TradeId, actor.CharId));
-        actor.PendingStep = null;
-        actor.StepAttempts = 0;
-        trade.AdvanceApply();
-        SendStep(trade);
+        RetryOrSkipClaim(trade, actor);
     }
 
     private void AbortApply(TradeSession trade, TradeError error) {
         var cancel = TradeEscrowCollection.Cancel(trade.TradeId);
         switch (cancel.Outcome) {
             case EscrowOutcome.Committed:
-                // A hold the directory had given up on landed after all: the swap can only finish now.
                 while (!trade.IsCommitted) {
                     trade.AdvanceApply();
                 }
 
-                foreach (var participant in new[] { trade.A, trade.B }) {
+                foreach (var participant in trade.Participants) {
                     participant.PendingStep = null;
                     participant.StepAttempts = 0;
                 }
@@ -634,8 +599,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
         trade.BeginAbort(error);
 
-        // Whether a hold landed is only known to the session, so both are asked; a side that never held has nothing to get back.
-        foreach (var participant in new[] { trade.A, trade.B }) {
+        foreach (var participant in trade.Participants) {
             participant.StepAttempts = 0;
             if (!CanReach(participant)) {
                 participant.PendingStep = null;
@@ -672,7 +636,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
     }
 
     private void FinishWithError(TradeSession trade, TradeError error) {
-        foreach (var participant in new[] { trade.A, trade.B }) {
+        foreach (var participant in trade.Participants) {
             Send(participant, ResultMessage(trade.PeerOf(participant).ObjectId, error));
         }
 
@@ -682,8 +646,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
     private void CompleteTrade(TradeSession trade) {
         DeleteSettledEscrow(trade);
 
-        // The client moves the cards itself when it gets the success, so no spellbook message is sent.
-        foreach (var participant in new[] { trade.A, trade.B }) {
+        foreach (var participant in trade.Participants) {
             Send(participant, ResultMessage(
                 trade.PeerOf(participant).ObjectId, TradeError.None, trade.ItemsGained(participant), trade.ItemsLost(participant)));
         }
@@ -701,7 +664,6 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
     private bool TryGetTrade(ulong charId, ulong peerCharId, IActorRef session, out TradeSession trade, out TradeParticipant participant) {
         participant = null;
 
-        // A packet for a trade that already ended is normal, for example one sent just after a cancel.
         if (!_tradesByChar.TryGetValue(charId, out trade)) {
             Logger.Debug("Character {CharId} has no open trade.", Logger.Args(charId));
 
@@ -728,16 +690,12 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
         Timers.Cancel(ApplyTimerKey(trade.TradeId));
         _tradesById.Remove(trade.TradeId);
 
-        foreach (var participant in new[] { trade.A, trade.B }) {
+        foreach (var participant in trade.Participants) {
             if (_tradesByChar.TryGetValue(participant.CharId, out var current) && ReferenceEquals(current, trade)) {
                 _tradesByChar.Remove(participant.CharId);
             }
 
-            // The session also drops its own record of the trade, and releases movement if it was locked.
-            if (CanReach(participant)) {
-                participant.Session.Tell(new TRADE_110_PROTOCOL.MSG_SETTRADESTATE { Trading = false });
-            }
-
+            participant.Session?.Tell(new TRADE_110_PROTOCOL.MSG_SETTRADESTATE { Trading = false });
             participant.IsLocked = false;
         }
     }
@@ -778,8 +736,8 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
         return new WIZARD_12_PROTOCOL.MSG_TRADE_JOIN_STATUS {
             TargetGID = peer.ObjectId,
-            TargetStatus = peer.Join,
-            PlayerStatus = to.Join
+            TargetStatus = (int) peer.Join,
+            PlayerStatus = (int) to.Join
         };
     }
 
@@ -788,8 +746,8 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
         return new WIZARD_12_PROTOCOL.MSG_TRADE_READY_STATUS {
             TargetGID = peer.ObjectId,
-            TargetStatus = peer.Ready,
-            PlayerStatus = to.Ready
+            TargetStatus = (int) peer.Ready,
+            PlayerStatus = (int) to.Ready
         };
     }
 

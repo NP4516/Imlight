@@ -26,8 +26,7 @@
  * var offered = participant.Offer.TryGetValue(templateId, out var copies) ? copies : 0;
  * 
  * NOTE:
- * Join is -1 pending, 0 left or declined, 1 joined. Ready is 0 not ready, 1 ready, 2 confirmed. Offer
- * maps a card template ID to the copies offered. The session and zone refs of the invitee are known
+ * Offer maps a card template ID to the copies offered. The session and zone refs of the invitee are known
  * only once it has screened the invite. The directory also keeps here whether the player's movement is
  * locked, whether the session left, and the escrow step it is waiting on.
  * 
@@ -40,7 +39,6 @@
 
 using System.Collections.Generic;
 using Akka.Actor;
-using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Trading;
@@ -51,8 +49,8 @@ internal sealed class TradeParticipant(ulong charId, IActorRef session, IActorRe
     internal ulong ObjectId { get; } = Wizard.GetGameObjectId(charId);
     internal IActorRef Session { get; set; } = session;
     internal IActorRef Zone { get; set; } = zone;
-    internal int Join { get; set; } = -1;
-    internal int Ready { get; set; }
+    internal TradeJoinStatus Join { get; set; } = TradeJoinStatus.Pending;
+    internal TradeReadyStatus Ready { get; set; }
 
     internal bool IsLocked { get; set; }
     internal bool IsGone { get; set; }

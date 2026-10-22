@@ -65,12 +65,11 @@ public static class TradeEscrowCollection {
 
     static TradeEscrowCollection() => s_store = PlayerDatabase.Instance.Store;
 
-    public static string DocumentId(Guid tradeId) => ID_PREFIX + tradeId.ToString("D");
+    private static string DocumentId(Guid tradeId) => ID_PREFIX + tradeId.ToString("D");
 
     /// <summary>
-    /// Reads the escrow document without tracking it.
+    /// Reads the escrow document, or null when there is none.
     /// </summary>
-    /// <returns>The document, or null when there is none.</returns>
     public static TradeEscrow Peek(Guid tradeId) {
         using var session = s_store.OpenSession();
 
@@ -216,9 +215,7 @@ public static class TradeEscrowCollection {
         });
 
     /// <summary>
-    /// Finishes one side of a swap that its participant or the server left half done: a committed swap is
-    /// claimed, any other is cancelled and the side's held cards are refunded. The decision is made
-    /// again from the stored document on every attempt.
+    /// Finishes one side of a swap left half done: a committed swap is claimed, any other is cancelled and refunded.
     /// </summary>
     public static EscrowResult Settle(Guid tradeId, ulong charId) {
         for (var attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -276,42 +273,32 @@ public static class TradeEscrowCollection {
     /// <summary>
     /// Settles every swap a previous run left in the database. Runs before any session exists.
     /// </summary>
-    /// <returns>The number of documents that are still there afterwards.</returns>
-    public static int RecoverAll() {
-        try {
-            var tradeIds = new List<Guid>();
-            using (var session = s_store.OpenSession()) {
-                while (true) {
-                    var page = session.Advanced.LoadStartingWith<TradeEscrow>(ID_PREFIX, start: tradeIds.Count, pageSize: RECOVER_PAGE_SIZE);
-                    tradeIds.AddRange(page.Select(x => x.TradeId));
-                    if (page.Length < RECOVER_PAGE_SIZE) {
-                        break;
-                    }
-                }
-            }
+    public static void RecoverAll() {
+        foreach (var escrow in LoadAll()) {
+            Recover(escrow);
+        }
+    }
 
-            var remaining = 0;
-            foreach (var tradeId in tradeIds) {
-                var escrow = Peek(tradeId);
-                if (escrow is null) {
-                    continue;
-                }
+    private static List<TradeEscrow> LoadAll() {
+        using var session = s_store.OpenSession();
 
-                Logger.Warning("Settling trade {TradeId} left over from a previous run.", Logger.Args(tradeId));
-                _ = Settle(tradeId, escrow.CharIdA);
-                _ = Settle(tradeId, escrow.CharIdB);
+        var escrows = new List<TradeEscrow>();
+        TradeEscrow[] page;
+        do {
+            page = session.Advanced.LoadStartingWith<TradeEscrow>(ID_PREFIX, start: escrows.Count, pageSize: RECOVER_PAGE_SIZE);
+            escrows.AddRange(page);
+        } while (page.Length == RECOVER_PAGE_SIZE);
 
-                if (DeleteIfSettled(tradeId).Outcome is not (EscrowOutcome.Done or EscrowOutcome.Missing)) {
-                    remaining++;
-                    Logger.Error("Trade {TradeId} could not be settled and stays in the database.", Logger.Args(tradeId));
-                }
-            }
+        return escrows;
+    }
 
-            return remaining;
-        } catch (Exception ex) {
-            Logger.Error("Settling leftover trades failed. {Exception}", Logger.Args(ex));
+    private static void Recover(TradeEscrow escrow) {
+        Logger.Warning("Settling trade {TradeId} left over from a previous run.", Logger.Args(escrow.TradeId));
+        _ = Settle(escrow.TradeId, escrow.CharIdA);
+        _ = Settle(escrow.TradeId, escrow.CharIdB);
 
-            return -1;
+        if (DeleteIfSettled(escrow.TradeId).Outcome is not (EscrowOutcome.Done or EscrowOutcome.Missing)) {
+            Logger.Error("Trade {TradeId} could not be settled and stays in the database.", Logger.Args(escrow.TradeId));
         }
     }
 
@@ -347,23 +334,18 @@ public static class TradeEscrowCollection {
         => session.Store(escrow, session.Advanced.GetChangeVectorFor(escrow), DocumentId(tradeId));
 
     private static EscrowResult Run(Guid tradeId, string step, Func<EscrowResult> attempt) {
-        // Runs the idempotent step again when it lost a race or when its outcome is unknown. A save that
-        // reached the database but not the caller shows up as AlreadyDone on the next attempt and is
-        // reported as Done, so the caller still mirrors it.
-        var unknownOutcome = false;
+        var mayHaveLanded = false;
         for (var i = 0; i < MAX_ATTEMPTS; i++) {
             try {
                 var result = attempt();
-                if (unknownOutcome && (result.Outcome == EscrowOutcome.AlreadyDone
-                    || (step == nameof(DeleteIfSettled) && result.Outcome == EscrowOutcome.Missing))) {
-                    return result with { Outcome = EscrowOutcome.Done };
-                }
 
-                return result;
+                return mayHaveLanded && result.Outcome == EscrowOutcome.AlreadyDone
+                    ? result with { Outcome = EscrowOutcome.Done }
+                    : result;
             } catch (ConcurrencyException) {
                 Logger.Debug("Trade {TradeId} step {Step} lost a race, trying again.", Logger.Args(tradeId, step));
             } catch (Exception ex) {
-                unknownOutcome = true;
+                mayHaveLanded = true;
                 Logger.Error("Trade {TradeId} step {Step} failed. {Exception}", Logger.Args(tradeId, step, ex));
             }
         }

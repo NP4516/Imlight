@@ -23,12 +23,11 @@
  * Decides which treasure cards may be traded and which of them count toward the treasure book limit.
  * 
  * USAGE EXAMPLE:
- * if (!TreasureCardTradePolicy.IsTradable(templateId, enchant)) { ... }
+ * if (!TreasureCardTradePolicy.IsTradable(templateId)) { ... }
  * 
  * NOTE:
  * Mirrors the client's vault list filter (PopulateLocalSpellVaultList, is_spell_entry_tradable): the
- * template must be a treasure card without the FLAG_NoTrade adjective, outside the CastleMagic school,
- * and carry no enchantment.
+ * template must be a treasure card without the FLAG_NoTrade adjective, outside the CastleMagic school.
  * 
  * TODO:
  * 
@@ -49,11 +48,7 @@ internal static class TreasureCardTradePolicy {
     private const string NO_TRADE_FLAG = "FLAG_NoTrade";
     private const string CASTLE_MAGIC_SCHOOL = "CastleMagic";
 
-    internal static bool IsTradable(uint templateId, uint enchant) {
-        if (enchant != 0) {
-            return false;
-        }
-
+    internal static bool IsTradable(uint templateId) {
         if (CoreObjectFactory.GetCoreTemplate(templateId) is not SpellTemplate template || !template.m_Treasure) {
             return false;
         }
@@ -62,7 +57,7 @@ internal static class TreasureCardTradePolicy {
             && template.m_adjectives?.Any(x => x == NO_TRADE_FLAG) != true;
     }
 
-    internal static bool CountsTowardCapacity(uint templateId)
+    private static bool CountsTowardCapacity(uint templateId)
         => CoreObjectFactory.GetCoreTemplate(templateId) is not SpellTemplate template
             || template.m_sMagicSchoolName != CASTLE_MAGIC_SCHOOL;
 

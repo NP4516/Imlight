@@ -26,9 +26,7 @@
  * if (wizard.PrivacyOptions.AllowTradeRequest == 0) { ... }
  * 
  * NOTE:
- * Each value is 0 or 1, as the client sends it. The defaults are what the live server answered for
- * every character in the captures. Only AllowTradeRequest is read by the server so far; the other
- * flags are stored and echoed.
+ * Each value is 0 or 1, as the client sends it.
  * 
  * TODO:
  * 
