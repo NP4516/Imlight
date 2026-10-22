@@ -348,9 +348,13 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
                 return TradeError.None;
             case EscrowOutcome.Failed:
                 // The save may have landed even though the call gave up, and then the memory copy has to follow.
-                return LandedAnyway(tradeId, wizard.CharId, step, out var landed, out var given) && Mirror(wizard, tradeId, step, landed, given)
-                    ? TradeError.None
-                    : TradeError.Failed;
+                if (!LandedAnyway(tradeId, wizard.CharId, step, out var landed, out var given)) {
+                    return TradeError.Failed;
+                }
+
+                Mirror(wizard, tradeId, step, landed, given);
+
+                return TradeError.None;
             default:
                 return TradeError.Failed;
         }
@@ -385,24 +389,24 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
         var projected = TreasureCardTradePolicy.CountCapacityUsed(book) - given + received;
 
         // A book above the limit (loot and shops do not enforce it) can still trade as long as it does not grow.
-        return projected > TradeLimits.TreasureBookCapacity && received > given ? TradeError.CannotHold : TradeError.None;
+        return projected > TradeLimits.TREASURE_BOOK_CAPACITY && received > given ? TradeError.CannotHold : TradeError.None;
     }
 
-    private bool Mirror(Wizard wizard, Guid tradeId, TradeStep step, IReadOnlyList<uint> cards, IReadOnlyList<uint> given = null) {
+    private void Mirror(Wizard wizard, Guid tradeId, TradeStep step, IReadOnlyList<uint> cards, IReadOnlyList<uint> given = null) {
         // A claim or refund can only follow a hold that landed, so a hold this session never heard about is taken out first.
         if (step != TradeStep.Hold && given is { Count: > 0 }) {
             Mirror(wizard, tradeId, TradeStep.Hold, given);
         }
 
         if (!_mirroredSteps.Add((tradeId, step))) {
-            return true;
+            return;
         }
 
         var book = wizard.SpellbookBehavior;
         if (step != TradeStep.Hold) {
             book.AddTreasureCards(cards);
 
-            return true;
+            return;
         }
 
         if (!book.TryRemoveTreasureCards([.. cards])) {
@@ -410,8 +414,6 @@ internal class TradeService(SessionActor sessionActor) : MessageService(sessionA
             Logger.Error("Trade {TradeId}: the memory copy of character {CharId} did not hold the cards the hold took.",
                 Logger.Args(tradeId, wizard.CharId));
         }
-
-        return true;
     }
 
     private static bool TryPeek(Guid tradeId, out TradeEscrow escrow) {

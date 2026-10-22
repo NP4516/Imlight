@@ -23,7 +23,7 @@
  * The numeric limits of a treasure card trade.
  * 
  * USAGE EXAMPLE:
- * if (offer.Count >= TradeLimits.MaxDistinctCardsPerSide) { ... }
+ * if (offer.Count >= TradeLimits.MAX_DISTINCT_CARDS_PER_SIDE) { ... }
  * 
  * NOTE:
  * The two constants are client rules, not game data. The invite timeout is a server policy value
@@ -43,25 +43,25 @@ namespace Imlight.CoreLib.Game.Trading;
 
 internal static class TradeLimits {
 
-    private const ushort DefaultInviteTimeoutSeconds = 60;
-    private const ushort ApplyStepTimeoutSeconds = 15;
+    private const ushort DEFAULT_INVITE_TIMEOUT_SECONDS = 60;
+    private const ushort APPLY_STEP_TIMEOUT_SECONDS = 15;
 
     // Client rule: TradeWindow::Handle_LocalPlayerSpellVaultList refuses a fifth distinct card.
-    internal const int MaxDistinctCardsPerSide = 4;
+    internal const int MAX_DISTINCT_CARDS_PER_SIDE = 4;
 
     // Client rule: has_room_for_items allows this many non-CastleMagic cards in the treasure book.
-    internal const int TreasureBookCapacity = 999;
+    internal const int TREASURE_BOOK_CAPACITY = 999;
 
     // Server policy: how long the directory waits for a session to finish one escrow step.
-    internal static TimeSpan ApplyStepTimeout { get; } = TimeSpan.FromSeconds(ApplyStepTimeoutSeconds);
+    internal static TimeSpan ApplyStepTimeout { get; } = TimeSpan.FromSeconds(APPLY_STEP_TIMEOUT_SECONDS);
 
     internal static TimeSpan InviteTimeout { get; } = TimeSpan.FromSeconds(ReadInviteTimeoutSeconds());
 
     private static ushort ReadInviteTimeoutSeconds() {
-        var seconds = ConfigurationManager.Settings["Game Server.TradeInviteTimeoutSeconds"].AsUShort(DefaultInviteTimeoutSeconds);
+        var seconds = ConfigurationManager.Settings["Game Server.TradeInviteTimeoutSeconds"].AsUShort(DEFAULT_INVITE_TIMEOUT_SECONDS);
 
         // A missing or blank key reads as 0, and an invite that expires at once is never wanted.
-        return seconds == 0 ? DefaultInviteTimeoutSeconds : seconds;
+        return seconds == 0 ? DEFAULT_INVITE_TIMEOUT_SECONDS : seconds;
     }
 
 }

@@ -46,8 +46,8 @@ namespace Imlight.CoreLib.Game.Trading;
 
 internal static class TreasureCardTradePolicy {
 
-    private const string NoTradeFlag = "FLAG_NoTrade";
-    private const string CastleMagicSchool = "CastleMagic";
+    private const string NO_TRADE_FLAG = "FLAG_NoTrade";
+    private const string CASTLE_MAGIC_SCHOOL = "CastleMagic";
 
     internal static bool IsTradable(uint templateId, uint enchant) {
         if (enchant != 0) {
@@ -58,13 +58,13 @@ internal static class TreasureCardTradePolicy {
             return false;
         }
 
-        return template.m_sMagicSchoolName != CastleMagicSchool
-            && template.m_adjectives?.Any(x => x == NoTradeFlag) != true;
+        return template.m_sMagicSchoolName != CASTLE_MAGIC_SCHOOL
+            && template.m_adjectives?.Any(x => x == NO_TRADE_FLAG) != true;
     }
 
     internal static bool CountsTowardCapacity(uint templateId)
         => CoreObjectFactory.GetCoreTemplate(templateId) is not SpellTemplate template
-            || template.m_sMagicSchoolName != CastleMagicSchool;
+            || template.m_sMagicSchoolName != CASTLE_MAGIC_SCHOOL;
 
     internal static int CountCapacityUsed(IEnumerable<uint> templateIds)
         => templateIds.Count(CountsTowardCapacity);

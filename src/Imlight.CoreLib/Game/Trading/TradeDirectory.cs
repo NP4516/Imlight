@@ -60,8 +60,8 @@ namespace Imlight.CoreLib.Game.Trading;
 /// </summary>
 internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
-    private const int MaxStepAttempts = 3;
-    private const int JoinedStatus = 1;
+    private const int MAX_STEP_ATTEMPTS = 3;
+    private const int JOINED_STATUS = 1;
 
     private static string InviteTimerKey(Guid tradeId) => $"invite-{tradeId}";
     private static string ApplyTimerKey(Guid tradeId) => $"apply-{tradeId}";
@@ -224,7 +224,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (message.Join == JoinedStatus) {
+        if (message.Join == JOINED_STATUS) {
             // Only the invitee, once it screened the invite, can join.
             if (trade.Phase != TradePhase.Inviting || !ReferenceEquals(participant, trade.B) || participant.Session is null) {
                 Logger.Debug("Character {CharId} cannot join trade {TradeId}.", Logger.Args(message.CharId, trade.TradeId));
@@ -313,22 +313,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
     private void Depart(TradeSession trade, TradeParticipant participant) {
         if (trade.Phase == TradePhase.Applying) {
-            participant.IsGone = true;
-            participant.PendingStep = null;
-
-            if (trade.IsAborting) {
-                if (!HasPendingStep(trade)) {
-                    FinishAbort(trade);
-                }
-            } else if (trade.IsCommitted) {
-                // The session settles its own side while it disposes; the directory finishes with the others.
-                if (ReferenceEquals(trade.ApplyActor, participant)) {
-                    trade.AdvanceApply();
-                    SendStep(trade);
-                }
-            } else {
-                AbortApply(trade, TradeError.Failed);
-            }
+            DepartDuringApply(trade, participant);
 
             return;
         }
@@ -340,6 +325,31 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
 
         participant.IsGone = true;
         EndTrade(trade);
+    }
+
+    private void DepartDuringApply(TradeSession trade, TradeParticipant participant) {
+        participant.IsGone = true;
+        participant.PendingStep = null;
+
+        if (trade.IsAborting) {
+            if (!HasPendingStep(trade)) {
+                FinishAbort(trade);
+            }
+
+            return;
+        }
+
+        if (!trade.IsCommitted) {
+            AbortApply(trade, TradeError.Failed);
+
+            return;
+        }
+
+        // The session settles its own side while it disposes; the directory finishes with the others.
+        if (ReferenceEquals(trade.ApplyActor, participant)) {
+            trade.AdvanceApply();
+            SendStep(trade);
+        }
     }
 
     #endregion
@@ -470,11 +480,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
         actor.StepAttempts++;
         actor.Session.Tell(new TRADE_110_PROTOCOL.MSG_TRADESTEP { TradeId = trade.TradeId, Step = step });
 
-        Timers.StartSingleTimer(
-            ApplyTimerKey(trade.TradeId),
-            new TRADE_110_PROTOCOL.MSG_APPLYTIMEOUT { TradeId = trade.TradeId },
-            _stepTimeout
-        );
+        StartStepTimer(trade);
     }
 
     [MessageHandler(typeof(TRADE_110_PROTOCOL.MSG_TRADESTEPDONE))]
@@ -496,20 +502,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
         participant.PendingStep = null;
 
         if (trade.IsAborting) {
-            if (message.Step != TradeStep.Refund) {
-                return;
-            }
-
-            // A refund that failed may have landed anyway; asked again, the session finds out and fixes its memory copy.
-            if (!message.Success && participant.StepAttempts < MaxStepAttempts && CanReach(participant)) {
-                SendRefund(trade, participant);
-
-                return;
-            }
-
-            if (!HasPendingStep(trade)) {
-                FinishAbort(trade);
-            }
+            ReceiveRefundDone(trade, participant, message);
 
             return;
         }
@@ -518,30 +511,59 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (!message.Success) {
-            if (message.Step == TradeStep.Hold) {
-                AbortApply(trade, Enum.IsDefined((TradeError) message.ErrorCode) && message.ErrorCode != 0
-                    ? (TradeError) message.ErrorCode
-                    : TradeError.Failed);
-
-                return;
-            }
-
-            // The trade is committed, so a failed claim is repeated and then left to the next settle.
-            if (participant.StepAttempts < MaxStepAttempts) {
-                SendStep(trade);
-
-                return;
-            }
-
-            Logger.Error("Trade {TradeId} could not claim for character {CharId}. The escrow stays until it is settled.",
-                Logger.Args(trade.TradeId, participant.CharId));
+        if (!message.Success && !TryRecoverFailedStep(trade, participant, message)) {
+            return;
         }
 
         participant.StepAttempts = 0;
         trade.AdvanceApply();
         SendStep(trade);
     }
+
+    private void ReceiveRefundDone(TradeSession trade, TradeParticipant participant, TRADE_110_PROTOCOL.MSG_TRADESTEPDONE message) {
+        if (message.Step != TradeStep.Refund) {
+            return;
+        }
+
+        // A refund that failed may have landed anyway; asked again, the session finds out and fixes its memory copy.
+        if (!message.Success && participant.StepAttempts < MAX_STEP_ATTEMPTS && CanReach(participant)) {
+            SendRefund(trade, participant);
+
+            return;
+        }
+
+        if (!HasPendingStep(trade)) {
+            FinishAbort(trade);
+        }
+    }
+
+    private bool TryRecoverFailedStep(TradeSession trade, TradeParticipant participant, TRADE_110_PROTOCOL.MSG_TRADESTEPDONE message) {
+        if (message.Step == TradeStep.Hold) {
+            var known = Enum.IsDefined((TradeError) message.ErrorCode) && message.ErrorCode != 0;
+            AbortApply(trade, known ? (TradeError) message.ErrorCode : TradeError.Failed);
+
+            return false;
+        }
+
+        // The trade is committed, so a failed claim is repeated and then left to the next settle.
+        if (participant.StepAttempts < MAX_STEP_ATTEMPTS) {
+            SendStep(trade);
+
+            return false;
+        }
+
+        Logger.Error("Trade {TradeId} could not claim for character {CharId}. The escrow stays until it is settled.",
+            Logger.Args(trade.TradeId, participant.CharId));
+
+        return true;
+    }
+
+    private void StartStepTimer(TradeSession trade)
+        => Timers.StartSingleTimer(
+            ApplyTimerKey(trade.TradeId),
+            new TRADE_110_PROTOCOL.MSG_APPLYTIMEOUT { TradeId = trade.TradeId },
+            _stepTimeout
+        );
 
     [MessageHandler(typeof(TRADE_110_PROTOCOL.MSG_APPLYTIMEOUT))]
     private void ReceiveApplyTimeout(TRADE_110_PROTOCOL.MSG_APPLYTIMEOUT message) {
@@ -569,7 +591,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (actor.StepAttempts < MaxStepAttempts) {
+        if (actor.StepAttempts < MAX_STEP_ATTEMPTS) {
             SendStep(trade);
 
             return;
@@ -634,19 +656,18 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
         participant.StepAttempts++;
         participant.Session.Tell(new TRADE_110_PROTOCOL.MSG_TRADESTEP { TradeId = trade.TradeId, Step = TradeStep.Refund });
 
-        Timers.StartSingleTimer(
-            ApplyTimerKey(trade.TradeId),
-            new TRADE_110_PROTOCOL.MSG_APPLYTIMEOUT { TradeId = trade.TradeId },
-            _stepTimeout
-        );
+        StartStepTimer(trade);
     }
 
-    private void FinishAbort(TradeSession trade) {
+    private static void DeleteSettledEscrow(TradeSession trade) {
         var deleted = TradeEscrowCollection.DeleteIfSettled(trade.TradeId);
         if (deleted.Outcome is not (EscrowOutcome.Done or EscrowOutcome.Missing)) {
             Logger.Debug("Trade {TradeId} keeps its escrow document: {Outcome}.", Logger.Args(trade.TradeId, deleted.Outcome));
         }
+    }
 
+    private void FinishAbort(TradeSession trade) {
+        DeleteSettledEscrow(trade);
         FinishWithError(trade, trade.AbortError);
     }
 
@@ -659,10 +680,7 @@ internal sealed class TradeDirectory : ReceiveProtocolDispatcher, IWithTimers {
     }
 
     private void CompleteTrade(TradeSession trade) {
-        var deleted = TradeEscrowCollection.DeleteIfSettled(trade.TradeId);
-        if (deleted.Outcome is not (EscrowOutcome.Done or EscrowOutcome.Missing)) {
-            Logger.Debug("Trade {TradeId} keeps its escrow document: {Outcome}.", Logger.Args(trade.TradeId, deleted.Outcome));
-        }
+        DeleteSettledEscrow(trade);
 
         // The client moves the cards itself when it gets the success, so no spellbook message is sent.
         foreach (var participant in new[] { trade.A, trade.B }) {

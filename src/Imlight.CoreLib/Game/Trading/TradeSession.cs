@@ -83,7 +83,7 @@ internal enum TradeOfferResult {
 
 internal sealed class TradeSession {
 
-    private const int ReadyConfirmed = 2;
+    private const int READY_CONFIRMED = 2;
 
     internal Guid TradeId { get; }
     internal TradeParticipant A { get; }
@@ -94,7 +94,7 @@ internal sealed class TradeSession {
 
     internal bool IsAborting => AbortError != TradeError.None;
     internal bool IsCommitted => ApplyStep >= TradeApplyStep.ClaimA;
-    internal bool BothConfirmed => Phase == TradePhase.Open && A.Ready == ReadyConfirmed && B.Ready == ReadyConfirmed;
+    internal bool BothConfirmed => Phase == TradePhase.Open && A.Ready == READY_CONFIRMED && B.Ready == READY_CONFIRMED;
 
     internal TradeParticipant ApplyActor => ApplyStep switch {
         TradeApplyStep.HoldA or TradeApplyStep.ClaimA => A,
@@ -150,11 +150,11 @@ internal sealed class TradeSession {
             return TradeReadyResult.NotJoined;
         }
 
-        if (ready is < 0 or > ReadyConfirmed) {
+        if (ready is < 0 or > READY_CONFIRMED) {
             return TradeReadyResult.Invalid;
         }
 
-        if (ready == ReadyConfirmed && participant.Ready != ReadyConfirmed
+        if (ready == READY_CONFIRMED && participant.Ready != READY_CONFIRMED
             && (participant.Ready != 1 || PeerOf(participant).Ready < 1)) {
             return TradeReadyResult.NotReady;
         }
@@ -182,30 +182,47 @@ internal sealed class TradeSession {
         var offer = participant.Offer;
         offer.TryGetValue(templateId, out var copies);
 
-        // The owned and offered counts are checked first, so an id the player does not hold never reaches the template lookup.
-        if (add) {
-            if (copies + 1 > ownedCount || (copies == 0 && offer.Count >= TradeLimits.MaxDistinctCardsPerSide)
-                || !TreasureCardTradePolicy.IsTradable(templateId, enchant)) {
-                return TradeOfferResult.Rejected;
-            }
-
-            offer[templateId] = copies + 1;
-        } else {
-            if (copies == 0) {
-                return TradeOfferResult.Rejected;
-            }
-
-            if (copies == 1) {
-                offer.Remove(templateId);
-            } else {
-                offer[templateId] = copies - 1;
-            }
+        var changed = add
+            ? TryAddCopy(offer, templateId, enchant, copies, ownedCount)
+            : TryRemoveCopy(offer, templateId, copies);
+        if (!changed) {
+            return TradeOfferResult.Rejected;
         }
 
         A.Ready = 0;
         B.Ready = 0;
 
         return TradeOfferResult.Changed;
+    }
+
+    private static bool TryAddCopy(Dictionary<uint, int> offer, uint templateId, uint enchant, int copies, int ownedCount) {
+        // The owned and offered counts are checked first, so an id the player does not hold never reaches the template lookup.
+        var isNewCard = copies == 0;
+        if (copies + 1 > ownedCount
+            || (isNewCard && offer.Count >= TradeLimits.MAX_DISTINCT_CARDS_PER_SIDE)
+            || !TreasureCardTradePolicy.IsTradable(templateId, enchant)) {
+            return false;
+        }
+
+        offer[templateId] = copies + 1;
+
+        return true;
+    }
+
+    private static bool TryRemoveCopy(Dictionary<uint, int> offer, uint templateId, int copies) {
+        if (copies == 0) {
+            return false;
+        }
+
+        if (copies == 1) {
+            offer.Remove(templateId);
+
+            return true;
+        }
+
+        offer[templateId] = copies - 1;
+
+        return true;
     }
 
     internal static bool TryParseAction(byte action, out bool add) {

@@ -56,16 +56,16 @@ namespace Imlight.CoreLib.WizardData.Collections;
 
 public static class TradeEscrowCollection {
 
-    public const string CollectionName = "TradeEscrows";
-    private const string IdPrefix = CollectionName + "/";
-    private const int MaxAttempts = 3;
-    private const int RecoverPageSize = 128;
+    public const string COLLECTION_NAME = "TradeEscrows";
+    private const string ID_PREFIX = COLLECTION_NAME + "/";
+    private const int MAX_ATTEMPTS = 3;
+    private const int RECOVER_PAGE_SIZE = 128;
 
     private static readonly IDocumentStore s_store;
 
     static TradeEscrowCollection() => s_store = PlayerDatabase.Instance.Store;
 
-    public static string DocumentId(Guid tradeId) => IdPrefix + tradeId.ToString("D");
+    public static string DocumentId(Guid tradeId) => ID_PREFIX + tradeId.ToString("D");
 
     /// <summary>
     /// Reads the escrow document without tracking it.
@@ -100,7 +100,7 @@ public static class TradeEscrowCollection {
 
             // An empty change vector means the document must not exist yet.
             session.Store(escrow, string.Empty, id);
-            session.Advanced.GetMetadataFor(escrow)[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+            session.Advanced.GetMetadataFor(escrow)[Raven.Client.Constants.Documents.Metadata.Collection] = COLLECTION_NAME;
             session.SaveChanges();
 
             return EscrowResult.Of(EscrowOutcome.Done);
@@ -221,7 +221,7 @@ public static class TradeEscrowCollection {
     /// again from the stored document on every attempt.
     /// </summary>
     public static EscrowResult Settle(Guid tradeId, ulong charId) {
-        for (var attempt = 0; attempt < MaxAttempts; attempt++) {
+        for (var attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             var escrow = Peek(tradeId);
             if (escrow is null) {
                 return EscrowResult.Of(EscrowOutcome.Missing);
@@ -282,9 +282,9 @@ public static class TradeEscrowCollection {
             var tradeIds = new List<Guid>();
             using (var session = s_store.OpenSession()) {
                 while (true) {
-                    var page = session.Advanced.LoadStartingWith<TradeEscrow>(IdPrefix, start: tradeIds.Count, pageSize: RecoverPageSize);
+                    var page = session.Advanced.LoadStartingWith<TradeEscrow>(ID_PREFIX, start: tradeIds.Count, pageSize: RECOVER_PAGE_SIZE);
                     tradeIds.AddRange(page.Select(x => x.TradeId));
-                    if (page.Length < RecoverPageSize) {
+                    if (page.Length < RECOVER_PAGE_SIZE) {
                         break;
                     }
                 }
@@ -351,7 +351,7 @@ public static class TradeEscrowCollection {
         // reached the database but not the caller shows up as AlreadyDone on the next attempt and is
         // reported as Done, so the caller still mirrors it.
         var unknownOutcome = false;
-        for (var i = 0; i < MaxAttempts; i++) {
+        for (var i = 0; i < MAX_ATTEMPTS; i++) {
             try {
                 var result = attempt();
                 if (unknownOutcome && (result.Outcome == EscrowOutcome.AlreadyDone
@@ -368,7 +368,7 @@ public static class TradeEscrowCollection {
             }
         }
 
-        Logger.Error("Trade {TradeId} step {Step} gave up after {Attempts} attempts.", Logger.Args(tradeId, step, MaxAttempts));
+        Logger.Error("Trade {TradeId} step {Step} gave up after {Attempts} attempts.", Logger.Args(tradeId, step, MAX_ATTEMPTS));
 
         return EscrowResult.Of(EscrowOutcome.Failed);
     }

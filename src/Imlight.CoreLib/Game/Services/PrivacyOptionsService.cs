@@ -49,7 +49,12 @@ internal class PrivacyOptionsService(SessionActor sessionActor) : MessageService
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_REQUESTPRIVACYOPTIONS))]
     private void ReceiveRequestPrivacyOptions() {
-        var options = GetActiveWizard().PrivacyOptions;
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        var options = wizard.PrivacyOptions;
 
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_RESPONSEPRIVACYOPTIONS {
             AllowFriendRequest = options.AllowFriendRequest,
@@ -65,6 +70,10 @@ internal class PrivacyOptionsService(SessionActor sessionActor) : MessageService
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_UPDATEPRIVACYOPTIONS))]
     private void ReceiveUpdatePrivacyOptions(WIZARD_12_PROTOCOL.MSG_UPDATEPRIVACYOPTIONS message) {
         var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
         var options = wizard.PrivacyOptions;
 
         options.AllowFriendRequest = AsFlag(message.AllowFriendRequest);
