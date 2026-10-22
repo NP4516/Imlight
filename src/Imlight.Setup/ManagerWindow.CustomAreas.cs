@@ -105,8 +105,10 @@ internal sealed partial class ManagerWindow {
     // ---------------------------------------------------------------------
 
     private Control CustomAreasCard() {
+        // The legend is one line, with the longer words behind its "?".
         var legend = new WrapPanel {
             Children = {
+                WithMargin(WithCenter(Sub("Changes count:")), new Thickness(0, 0, 8, 4)),
                 WithMargin(TimingTag(Timing.Live), new Thickness(0, 0, 8, 4)),
                 WithMargin(TimingTag(Timing.NextUse), new Thickness(0, 0, 8, 4)),
                 WithMargin(TimingTag(Timing.Reload), new Thickness(0, 0, 8, 4)),
@@ -114,12 +116,13 @@ internal sealed partial class ManagerWindow {
         };
 
         return Fold("pin", "zone", "Custom areas",
-            "Places the server changes or adds to the game, one file each (spiraldb-extra/ZoneObjects): objects and " +
-            "sigils, creatures, battles with helpers, who the boss of a room is, where leaving goes, and more. Open an " +
-            "area, then open any of its sections; every box says what it does. Press Save area when you are done. " +
-            "Nothing in the game files is ever changed, and updates keep the areas you saved here.",
-            Sub("Each section says when its changes count (point at the tag for more):"),
-            legend,
+            "Change places in the game, or make private copies of them.",
+            WithHint(legend,
+                "Places the server changes or adds to the game, one file each (spiraldb-extra/ZoneObjects): objects and " +
+                "sigils, creatures, battles with helpers, who the boss of a room is, where leaving goes, and more. Open an " +
+                "area, then open any of its sections; every box says what it does. Press Save area when you are done. " +
+                "Nothing in the game files is ever changed, and updates keep the areas you saved here. " +
+                "Each section says when its changes count: point at its tag for more."),
             NewAreaPanel(),
             _areaRows);
     }
@@ -128,7 +131,8 @@ internal sealed partial class ManagerWindow {
         var body = new StackPanel {
             Spacing = FIELD_SPACING,
             Children = {
-                Sub("Make a new area for a zone, or a variant: a private copy of a zone that only a sigil with that variant " +
+                WithHint(Sub("A zone with no variant changes the zone itself, for everyone."),
+                    "Make a new area for a zone, or a variant: a private copy of a zone that only a sigil with that variant " +
                     "sends teams into, fresh each time (as the Malistaire room is). A zone with no variant changes the zone " +
                     "itself for everyone."),
                 Field("Zone", "Which zone this area changes. Type a few letters to search.", _newAreaZone),

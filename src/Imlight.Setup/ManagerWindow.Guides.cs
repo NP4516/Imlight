@@ -81,12 +81,11 @@ internal sealed partial class ManagerWindow {
 
     private static readonly Guide[] s_guides = [
         new("mob", "paw", "Customs", "Custom mob", "How to make a custom mob",
-            "Your own creature, copied from one in the game. You pick a creature, give it a name, and Imlight gives it a number. " +
-            "The creature in the game never changes.",
+            "Your own creature, copied from one in the game; the game's creature never changes.",
             [
                 new GuideSteps("Make it",
-                    "Click [Customs] in the list on the left side of the window.",
-                    "Find the section [Make a custom, step by step]. If it is folded shut, click its title to open it.",
+                    "Click [Guides] in the list on the left side of the window (or press [New custom…] on the [Customs] tab).",
+                    "Near the top is the section [Make a custom, step by step]. If it is folded shut, click its title to open it.",
                     "Step 1: click in the search box and type the name of the creature to start from, such as `Gobbler` or `Malistaire`. " +
                     "Its ID number works too.",
                     "In the list that shows up, press [Use] beside the creature you want. Its picture and name show under the box and " +
@@ -95,7 +94,7 @@ internal sealed partial class ManagerWindow {
                     "filled in; keep it if you like.",
                     "Step 3 shows the number your custom gets (for example \"It will be custom 2\") and the line that brings it into " +
                     "a battle. There is nothing to type here.",
-                    "Step 4: press [Make the custom]. Its editor opens below, with the sections [Identity], [Stats], [Deck], [Drops], " +
+                    "Step 4: press [Make the custom]. The [Customs] tab opens with its editor, with the sections [Identity], [Stats], [Deck], [Drops], " +
                     "[XP and gold], [Forms] and [Cheats]. The round buttons at the top of the editor jump to each one."),
                 new GuideSteps("Change its stats and spells",
                     "Press [Stats] at the top of the editor. Type a new number in [Health], [Level] or any other box. An empty box " +
@@ -121,8 +120,7 @@ internal sealed partial class ManagerWindow {
             ]),
 
         new("boss", "bolt", "cheats", "Custom boss and cheats", "How to make a custom boss and give it cheats",
-            "A custom boss is made like any custom. Cheats are the extra moves a boss makes outside its turn. Each one is a few " +
-            "blocks that snap together and read like a sentence.",
+            "Cheats are a boss's extra moves outside its turn, made of blocks that read like a sentence.",
             [
                 new GuideSteps("Make the boss",
                     "Make a custom from the boss you want to start from (see How to make a custom mob). For example: search " +
@@ -178,8 +176,7 @@ internal sealed partial class ManagerWindow {
             ]),
 
         new("edit", "pencil", "Customs", "Change, copy or delete", "How to change, copy or delete a custom",
-            "Every custom you made is listed under Custom mobs on the Customs tab, with its number, its name and the creature it " +
-            "comes from.",
+            "Every custom you made is listed under Custom mobs on the Customs tab.",
             [
                 new GuideSteps("Change a custom",
                     "Click [Customs] on the left, then open [Custom mobs].",
@@ -203,8 +200,7 @@ internal sealed partial class ManagerWindow {
             ]),
 
         new("drops", "bag", "drops", "Drops, XP and gold", "How to set what it drops (drop tables, XP and gold)",
-            "What a creature gives when it is defeated comes from its drop tables, and from its XP and gold section. Both are in " +
-            "the editor of a custom (Customs tab) or of a boss (Bosses tab).",
+            "What a defeated creature gives: its drop tables, and its XP and gold, in a custom's or a boss's editor.",
             [
                 new GuideTerms("What is in a drop table",
                     ("Chance it drops", "How often the table gives anything at all in a won battle. 100 is every battle; 25 is about one in four."),
@@ -254,8 +250,7 @@ internal sealed partial class ManagerWindow {
             ]),
 
         new("areas", "pin", "zone", "Custom areas", "How to make a custom area",
-            "Change a place in the game, or make a private copy of it: add objects and sigils, add creatures, and choose who the " +
-            "boss of a room is.",
+            "Change a place in the game, or make a private copy of it, with its own objects, creatures and boss.",
             [
                 new GuideTerms("Words you will see",
                     ("Zone", "One place in the game, written like WizardCity/WC_Ravenwood. Type a few letters (Ravenwood) and pick it from the list."),
@@ -304,8 +299,7 @@ internal sealed partial class ManagerWindow {
             ]),
 
         new("real", "crown", "Bosses", "Real boss or custom", "How to change a real boss, or make a custom instead",
-            "The Bosses tab changes the boss everyone meets in the game. A custom is a separate copy that fights only where you " +
-            "bring it in, so the base creature never changes.",
+            "The Bosses tab changes the game's boss for everyone; a custom is a separate copy.",
             [
                 new GuideTerms("Which one to use",
                     ("Bosses tab", "Changes the game's own boss, everywhere it fights, for every player."),
@@ -323,8 +317,7 @@ internal sealed partial class ManagerWindow {
             ]),
 
         new("files", "folder", "Game Files", "Files and backups", "Where your work is kept, backups and undo",
-            "Everything you make here is kept in the server's additions folder, spiraldb-extra, inside the Server folder of the " +
-            "place Imlight is installed. Updates of Imlight keep it.",
+            "Everything you make is kept in the Server folder's spiraldb-extra, and updates keep it.",
             [
                 new GuideTerms("What is where (inside spiraldb-extra)",
                     ("Customs", "One file for each custom, by number (1.json, 2.json...): its stats, deck, cheats, drops and forms. " +
@@ -363,19 +356,25 @@ internal sealed partial class ManagerWindow {
 
     private readonly Dictionary<string, Section> _guideSections = [];
 
-    /// <summary>The Guides tab: every guide, folded, under a line on how to read them.</summary>
+    private Section? _newCustomSection;
+
+    /// <summary>
+    /// The Guides tab: a line on how to read the guides, the Make a custom wizard (moved here from the Customs tab,
+    /// Niduus, 2026-10-22: "move to guide"), then every guide, folded.
+    /// </summary>
     private Control GuidesTab() {
+        _newCustomSection = NewCustomWizard();
         var cards = new List<Control> {
             Card(new StackPanel {
                 Spacing = 8,
                 Children = {
-                    new TextBlock { Text = "New here? Start with How to make a custom mob.", FontSize = ManagerTheme.FONT_SECTION, FontWeight = FontWeight.SemiBold },
-                    GuideText("Each guide is a list of clicks, in order. Words like [Save changes] are the buttons, boxes and sections " +
-                              "exactly as the app names them, and words like `.joinme 1336035 1` are what to type. Click a guide's " +
-                              "title to open it."),
+                    new TextBlock { Text = "New here? Make a custom below, or open a guide.", FontSize = ManagerTheme.FONT_SECTION, FontWeight = FontWeight.SemiBold },
+                    GuideText("Each guide is a list of clicks. [Save changes] is a button or box as the app names it; " +
+                              "`.joinme 1336035 1` is something to type."),
                     GuideChips(),
                 },
             }),
+            _newCustomSection,
         };
         foreach (var guide in s_guides) {
             var section = HowTo(guide);
@@ -445,13 +444,29 @@ internal sealed partial class ManagerWindow {
         return row;
     }
 
-    /// <summary>Opens the Guides tab, with that guide open and in view.</summary>
-    private void ShowGuide(string? id) {
+    /// <summary>Shows the side bar's tab of that name (its Tag).</summary>
+    private void SelectTab(string name) {
         var tabs = this.GetLogicalDescendants().OfType<TabControl>().FirstOrDefault(t => t.TabStripPlacement == Dock.Left);
-        if (tabs?.Items.OfType<TabItem>().FirstOrDefault(t => (t.Tag as string) == "Guides") is { } tab) {
+        if (tabs?.Items.OfType<TabItem>().FirstOrDefault(t => (t.Tag as string) == name) is { } tab) {
             tabs.SelectedItem = tab;
         }
+    }
 
+    /// <summary>The Customs tab's New custom… button: the Guides tab, with the Make a custom wizard open and in view.</summary>
+    private void ShowNewCustom() {
+        SelectTab("Guides");
+        if (_newCustomSection is { } section) {
+            section.SetOpen(true);
+            Dispatcher.UIThread.Post(() => {
+                section.BringIntoView();
+                _customBaseSearch.Focus();
+            }, DispatcherPriority.Background);
+        }
+    }
+
+    /// <summary>Opens the Guides tab, with that guide open and in view.</summary>
+    private void ShowGuide(string? id) {
+        SelectTab("Guides");
         if (id is not null && _guideSections.TryGetValue(id, out var section)) {
             foreach (var other in _guideSections.Values) {
                 other.SetOpen(other == section);
@@ -674,7 +689,7 @@ internal sealed partial class ManagerWindow {
     }
 
     // ---------------------------------------------------------------------
-    // "?" hints beside the confusing boxes (the Customs tab's wizard and areas)
+    // "?" hints beside the confusing boxes (the Make a custom wizard and the Customs tab's areas)
     // ---------------------------------------------------------------------
 
     /// <summary>What each step of the Make a custom wizard means, in more words.</summary>

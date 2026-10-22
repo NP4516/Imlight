@@ -126,11 +126,11 @@ internal sealed partial class ManagerWindow {
         return Page(
             BossesGuide(),
             Fold("search", "Bosses", "Find a boss",
-                "Search for it, click it, change what you want and press Save changes. " +
-                "Turn off Bosses only to find any creature that fights.",
-                new DockPanel {
+                "Search for it, click it, change it and press Save changes.",
+                WithHint(new DockPanel {
                     Children = { WithDock(WithCenter(_bossesOnly), Dock.Right), _bossSearch },
-                },
+                }, "Search for it, click it, change what you want and press Save changes. " +
+                   "Turn off Bosses only to find any creature that fights."),
                 _bossCount,
                 _bossResults),
             _bossesEditorHost);

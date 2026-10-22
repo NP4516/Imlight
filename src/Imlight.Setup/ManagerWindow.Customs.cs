@@ -28,6 +28,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Imlight.Setup.Blocks;
 
 namespace Imlight.Setup;
 
@@ -78,15 +79,22 @@ internal sealed partial class ManagerWindow {
         _customHeaderCard.IsVisible = false;
         // The custom's own fields now sit in the editor's Identity, Drops and Forms sections (ManagerWindow.CustomBosses.cs).
 
+        // The step-by-step maker lives on the Guides tab (Niduus, 2026-10-22: "move to guide"); New custom… opens it there.
         return Page(
             CustomsGuide(),
             Fold("paw", "Customs", "Custom mobs",
-                "A custom is its own creature, made from a game creature: it has a number, a name, and stats, a deck, " +
-                "cheats and drops of its own. Changing it never changes the game's creature or the Bosses tab. " +
-                "Bring it into a battle with .joinme, the creature and its number, such as .joinme 1336035 1.",
-                _customCount,
+                "Your own creatures, copied from the game's. Bring one into a battle with .joinme.",
+                new DockPanel {
+                    Children = {
+                        WithDock(Action(Primary("New custom…"), () => {
+                            ShowNewCustom();
+
+                            return Task.CompletedTask;
+                        }), Dock.Right),
+                        WithCenter(_customCount),
+                    },
+                },
                 _customRows),
-            NewCustomWizard(),
             CustomAreasCard(),
             _customHeaderCard,
             _customsEditorHost);
@@ -105,7 +113,7 @@ internal sealed partial class ManagerWindow {
         UpdateCustomWizard();
         var customs = CustomMob.All(_manager.CustomsFolder);
         var rooms = SafeRooms();
-        _customCount.Text = customs.Count == 0 ? "No customs yet. Make one below." : customs.Count == 1 ? "1 custom." : $"{customs.Count} customs.";
+        _customCount.Text = customs.Count == 0 ? "No customs yet. Press New custom… to make one." : customs.Count == 1 ? "1 custom." : $"{customs.Count} customs.";
         foreach (var custom in customs) {
             var usedIn = rooms.Where(r => r.Value.Values.Contains(custom.Id)).Select(r => r.Key).ToList();
             var details = new[] {
@@ -153,7 +161,8 @@ internal sealed partial class ManagerWindow {
     private readonly TextBlock _customNumberText = new() { FontSize = ManagerTheme.FONT_HEADING, FontWeight = FontWeight.SemiBold };
     private readonly SelectableTextBlock _customJoinPreview = new() { FontFamily = MONO, FontSize = ManagerTheme.FONT_HEADING, Foreground = GOOD };
 
-    private Control NewCustomWizard() {
+    /// <summary>The wizard, as a section of the Guides tab (it is built there, under the guides' intro).</summary>
+    private Section NewCustomWizard() {
         _customNewName.TextChanged += (_, _) => UpdateCustomWizard();
         _customNewName.HorizontalAlignment = HorizontalAlignment.Left;
         _customNewBaseText.TextWrapping = TextWrapping.Wrap;
@@ -188,15 +197,18 @@ internal sealed partial class ManagerWindow {
                     "Each custom has a number, so several customs can come from the same creature. Imlight picks the next free one.",
                     number),
                 WizardStep(3, "Make it, then change what you like",
-                    "Its editor opens below: stats, deck, cheat blocks, drops and forms. Press Save changes there when you are done.",
+                    "Its editor opens on the Customs tab: stats, deck, cheat blocks, drops and forms. Press Save changes there when you are done.",
                     Row(Action(Primary("Make the custom"), MakeCustomAsync))),
             },
         };
         UpdateCustomWizard();
 
-        return Fold("plus", "Customs", "Make a custom, step by step",
+        var section = Fold("plus", "Customs", "Make a custom, step by step",
             "A custom is your own copy of a game creature, with its own name, stats, deck, cheats and drops. The game's creature never changes.",
             steps);
+        section.SetBadge("Try it");
+
+        return section;
     }
 
     /// <summary>One step of the wizard: a numbered circle (a tick once it is done), what to do, and its boxes.</summary>
@@ -334,8 +346,10 @@ internal sealed partial class ManagerWindow {
         _customBaseResults.Children.Clear();
         OpenCustom(custom);
         UpdateCustomWizard();
+        // The wizard is on the Guides tab and the custom's editor on the Customs tab, so it goes there.
+        SelectTab("Customs");
         Dispatcher.UIThread.Post(() => _customsEditorHost.BringIntoView(), DispatcherPriority.Background);
-        Say($"Made custom {custom.Id}. It fights as the game's {creature.Name} until you change it below. Bring it in with {custom.JoinMe}.");
+        Say($"Made custom {custom.Id}. It fights as the game's {creature.Name} until you change it in its editor. Bring it in with {custom.JoinMe}.");
 
         return Task.CompletedTask;
     }

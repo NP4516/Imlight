@@ -155,9 +155,10 @@ internal sealed partial class ManagerWindow {
             Margin = new Thickness(24, 12, 24, 16),
             Children = {
                 WithDock(Fold("cards", "Spells", "Find a card",
-                    "Search by name or template ID, or narrow the cards down with the filters. Click a card to see its stats, " +
-                    "effects and ID on the right. Hidden and cheat spells are the monsters', bosses' and tests' own copies.",
-                    _spellsSearch, filters, _spellsCount), Dock.Top),
+                    "Search or filter, then click a card to see its stats and ID.",
+                    WithHint(_spellsSearch, "Search by name or template ID, or narrow the cards down with the filters. Click a card to see its stats, " +
+                        "effects and ID on the right. Hidden and cheat spells are the monsters', bosses' and tests' own copies."),
+                    filters, _spellsCount), Dock.Top),
                 WithMargin(new DockPanel {
                     Children = { WithDock(details, Dock.Right), _spellsScroll },
                 }, new Thickness(0, 14, 0, 0)),
