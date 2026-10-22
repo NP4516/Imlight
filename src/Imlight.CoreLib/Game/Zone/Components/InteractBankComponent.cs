@@ -97,7 +97,6 @@ internal sealed class InteractBankComponent(ZoneEntity entity) : ZoneEntityCompo
         => IsInHorizontalRadius(playerObject, ((IServiceComponent) this).DEFAULT_INTERACTION_RADIUS);
 
     private void SendPlayerIntoWizbang(ulong playerObjID) {
-        // Create the wiz bang message, and wrap it in a broadcast message.
         var wizBangMsg = new GAME_5_PROTOCOL.MSG_WIZBANG {
             WizBangID = (uint) WizBang,
             GameObjectID = playerObjID
@@ -111,7 +110,6 @@ internal sealed class InteractBankComponent(ZoneEntity entity) : ZoneEntityCompo
     }
 
     private void SendPlayerIntoState(ulong playerObjID) {
-        // Create the change state message, and wrap it in a broadcast message.
         var changeStateMsg = new GAME_5_PROTOCOL.MSG_ENTERSTATE {
             State = StringHash.Compute(StateName),
             GameObjectID = playerObjID

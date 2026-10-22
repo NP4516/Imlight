@@ -57,11 +57,11 @@ namespace Imlight.CoreLib.Game.Bank;
 
 internal static class BankSync {
 
-    private const uint ReagentAddSerializationFlags = 27;
-    private const uint SnackAddSerializationFlags = 24;
-    private const sbyte Failed = 1;
-    private const sbyte Succeeded = 0;
-    private const uint FailedError = 1;
+    private const uint REAGENT_ADD_SERIALIZATION_FLAGS = 27;
+    private const uint SNACK_ADD_SERIALIZATION_FLAGS = 24;
+    private const sbyte FAILED = 1;
+    private const sbyte SUCCEEDED = 0;
+    private const uint FAILED_ERROR = 1;
     private static readonly CoreObjectSerializer s_stackSerializer = new(behaviors: SerializerFlags.None);
 
     /// <summary>
@@ -113,7 +113,7 @@ internal static class BankSync {
             OriginalGlobalID = originalId,
             GlobalID = newId,
             UseShared = ListNumber(useShared),
-            Failure = Succeeded,
+            Failure = SUCCEEDED,
         };
 
     /// <summary>
@@ -129,7 +129,7 @@ internal static class BankSync {
             OriginalGlobalID = requestedId,
             GlobalID = 0,
             UseShared = ListNumber(useShared),
-            Failure = Failed,
+            Failure = FAILED,
         };
 
     /// <summary>
@@ -144,7 +144,7 @@ internal static class BankSync {
             ClientRequestID = requestId,
             OriginalGlobalID = originalId,
             GlobalID = newId,
-            Failure = Succeeded,
+            Failure = SUCCEEDED,
         };
 
     /// <summary>
@@ -158,7 +158,7 @@ internal static class BankSync {
             ClientRequestID = requestId,
             OriginalGlobalID = requestedId,
             GlobalID = 0,
-            Failure = Failed,
+            Failure = FAILED,
         };
 
     /// <summary>
@@ -191,7 +191,7 @@ internal static class BankSync {
             OriginalGlobalID = requestedId,
             GlobalID = 0,
             UseShared = ListNumber(useShared),
-            Error = FailedError,
+            Error = FAILED_ERROR,
         };
 
     /// <summary>
@@ -206,7 +206,7 @@ internal static class BankSync {
             ClientRequestID = requestId,
             GlobalID = itemId,
             UseShared = ListNumber(useShared),
-            Failure = Succeeded,
+            Failure = SUCCEEDED,
         };
 
     /// <summary>
@@ -220,7 +220,7 @@ internal static class BankSync {
             ClientRequestID = requestId,
             GlobalID = 0,
             UseShared = ListNumber(useShared),
-            Failure = Failed,
+            Failure = FAILED,
         };
 
     /// <summary>
@@ -234,7 +234,7 @@ internal static class BankSync {
         => new() {
             ClientRequestID = requestId,
             GlobalID = failed ? 0 : stackId,
-            Failure = failed ? Failed : Succeeded,
+            Failure = failed ? FAILED : SUCCEEDED,
         };
 
     /// <summary>
@@ -312,7 +312,7 @@ internal static class BankSync {
     /// <param name="stack">The stack as it is now.</param>
     /// <returns>False if the stack could not be serialized, in which case nothing was sent.</returns>
     internal static bool SendBackpackStackAdded(IActorRef session, Wizard wizard, WizClientObjectItem stack) {
-        var flags = stack is ClientReagentItem ? ReagentAddSerializationFlags : SnackAddSerializationFlags;
+        var flags = stack is ClientReagentItem ? REAGENT_ADD_SERIALIZATION_FLAGS : SNACK_ADD_SERIALIZATION_FLAGS;
         if (!s_stackSerializer.Serialize(stack, flags, out var data)) {
             Logger.Error("Failed to serialize stack {ItemId} for the backpack add message.", Logger.Args(stack.m_globalID.Full));
 

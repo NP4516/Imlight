@@ -52,7 +52,7 @@ namespace Imlight.CoreLib.Shared.Items;
 
 internal static class ItemHelper {
 
-    private const string RentalAdjective = "Rental";
+    private const string RENTAL_ADJECTIVE = "Rental";
 
     /// <summary>
     /// Gets the <see cref="EquippedItemInfoList"/> for a <see cref="Wizard"/>. This is a lightweight version of the
@@ -96,7 +96,7 @@ internal static class ItemHelper {
     /// <param name="template">The item template, or null when the item has none.</param>
     /// <returns>True for a rental.</returns>
     internal static bool IsRental(WizItemTemplate template)
-        => template?.m_adjectiveList?.Any(adjective => string.Equals(adjective, RentalAdjective, StringComparison.OrdinalIgnoreCase)) == true
+        => template?.m_adjectiveList?.Any(adjective => string.Equals(adjective, RENTAL_ADJECTIVE, StringComparison.OrdinalIgnoreCase)) == true
            || template?.m_behaviors?.OfType<RentalBehaviorTemplate>().Any() == true;
 
     /// <summary>

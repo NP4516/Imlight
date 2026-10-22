@@ -54,7 +54,7 @@ namespace Imlight.CoreLib.Game.Bank;
 
 internal static class ItemPlacement {
 
-    private const string MaxJewelsAllowedKey = "Character.MaxJewelsAllowed";
+    private const string MAX_JEWELS_ALLOWED_KEY = "Character.MaxJewelsAllowed";
 
     /// <summary>
     /// Stores a new item where there is room for it.
@@ -63,8 +63,7 @@ internal static class ItemPlacement {
     /// <param name="item">The new item, with its behaviors initialized. It is stored nowhere yet.</param>
     /// <returns>Where the item is now. Lost means it was stored nowhere.</returns>
     internal static Placement Place(Wizard wizard, WizClientObjectItem item) {
-        var isJewel = BankRules.IsJewel(item);
-        if (!(isJewel && IsJewelPouchFull(wizard)) && wizard.InventoryBehavior.FreeSlots >= 1 && wizard.AddInitializedItemToInventory(item)) {
+        if (TryPlaceInBackpack(wizard, item)) {
             return Placement.Backpack;
         }
 
@@ -73,8 +72,7 @@ internal static class ItemPlacement {
         }
 
         // The shared bank is asked only when its stored state may agree, so a full bank does not log a refusal for every item.
-        if (isJewel && BankRules.CanMove(BankContainer.Backpack, BankContainer.SharedBank, item, 1, wizard, wizard.Account) == BankDenial.None
-            && BankCollection.TryAddShared(wizard, item).Success) {
+        if (BankRules.IsJewel(item) && CanGoToSharedBank(wizard, item) && BankCollection.TryAddShared(wizard, item).Success) {
             return Placement.SharedBank;
         }
 
@@ -126,8 +124,23 @@ internal static class ItemPlacement {
         session.Tell(BankSync.ItemOverflowToBank(item.m_globalID, countInBank));
     }
 
+    private static bool TryPlaceInBackpack(Wizard wizard, WizClientObjectItem item) {
+        if (wizard.InventoryBehavior.FreeSlots < 1) {
+            return false;
+        }
+
+        if (BankRules.IsJewel(item) && IsJewelPouchFull(wizard)) {
+            return false;
+        }
+
+        return wizard.AddInitializedItemToInventory(item);
+    }
+
+    private static bool CanGoToSharedBank(Wizard wizard, WizClientObjectItem item)
+        => BankRules.CanMove(BankContainer.Backpack, BankContainer.SharedBank, item, 1, wizard, wizard.Account) == BankDenial.None;
+
     private static bool IsJewelPouchFull(Wizard wizard) {
-        var allowed = ConfigurationManager.GetValue(MaxJewelsAllowedKey, 0);
+        var allowed = ConfigurationManager.GetValue(MAX_JEWELS_ALLOWED_KEY, 0);
 
         return allowed > 0 && wizard.InventoryBehavior.Items.Count(BankRules.IsJewel) >= allowed;
     }

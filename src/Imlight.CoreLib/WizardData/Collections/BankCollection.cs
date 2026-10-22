@@ -139,24 +139,10 @@ internal static class BankCollection {
         }
 
         account.SharedBank ??= new AccountSharedBank();
-        MoveState state = null;
-        try {
-            var stored = AccountCollection.UpdateAccountAndCharacterWithSession(account.AccountId, wizard.CharId,
-                (session, storedAccount, storedWizard) => {
-                    state = PlanMove(session, wizard, storedAccount, storedWizard, move);
-
-                    return state.Denial == BankDenial.None;
-                });
-            if (!stored) {
-                return state is { Denial: not BankDenial.None }
-                    ? Denied(move, state.Denial, state.Reason)
-                    : Denied(move, BankDenial.SaveFailed, "the account or the character is not stored");
-            }
-        } catch (Exception ex) {
-            Logger.Error("Failed to move {ItemId} from {From} to {To} for character {CharId}: {Reason}",
-                Logger.Args(move.ItemId, move.From, move.To, wizard.CharId, ex.Message));
-
-            return Denied(move, BankDenial.SaveFailed, ex.Message);
+        var failure = RunPlan(account.AccountId, wizard.CharId, move,
+            (session, storedAccount, storedWizard) => PlanMove(session, wizard, storedAccount, storedWizard, move), out var state);
+        if (failure is not null) {
+            return failure;
         }
 
         return MirrorMove(wizard, state);
@@ -177,24 +163,10 @@ internal static class BankCollection {
         }
 
         account.SharedBank ??= new AccountSharedBank();
-        MoveState state = null;
-        try {
-            var stored = AccountCollection.UpdateAccountAndCharacterWithSession(account.AccountId, wizard.CharId,
-                (session, storedAccount, _) => {
-                    state = PlanDelete(session, storedAccount, move);
-
-                    return state.Denial == BankDenial.None;
-                });
-            if (!stored) {
-                return state is { Denial: not BankDenial.None }
-                    ? Denied(move, state.Denial, state.Reason)
-                    : Denied(move, BankDenial.SaveFailed, "the account or the character is not stored");
-            }
-        } catch (Exception ex) {
-            Logger.Error("Failed to delete shared bank item {ItemId} for account {AccountId}: {Reason}",
-                Logger.Args(itemId, account.AccountId, ex.Message));
-
-            return Denied(move, BankDenial.SaveFailed, ex.Message);
+        var failure = RunPlan(account.AccountId, wizard.CharId, move,
+            (session, storedAccount, _) => PlanDelete(session, storedAccount, move), out var state);
+        if (failure is not null) {
+            return failure;
         }
 
         AdoptSharedBank(account.SharedBank, state);
@@ -219,27 +191,12 @@ internal static class BankCollection {
 
         account.SharedBank ??= new AccountSharedBank();
         var owner = item.m_characterId;
-        MoveState state = null;
-        try {
-            var stored = AccountCollection.UpdateAccountAndCharacterWithSession(account.AccountId, wizard.CharId,
-                (session, storedAccount, _) => {
-                    state = PlanAdd(session, wizard, storedAccount, item, move);
-
-                    return state.Denial == BankDenial.None;
-                });
-            if (!stored) {
-                item.m_characterId = owner;
-
-                return state is { Denial: not BankDenial.None }
-                    ? Denied(move, state.Denial, state.Reason)
-                    : Denied(move, BankDenial.SaveFailed, "the account or the character is not stored");
-            }
-        } catch (Exception ex) {
+        var failure = RunPlan(account.AccountId, wizard.CharId, move,
+            (session, storedAccount, _) => PlanAdd(session, wizard, storedAccount, item, move), out var state);
+        if (failure is not null) {
             item.m_characterId = owner;
-            Logger.Error("Failed to add item {ItemId} to the shared bank of account {AccountId}: {Reason}",
-                Logger.Args(item.m_globalID.Full, account.AccountId, ex.Message));
 
-            return Denied(move, BankDenial.SaveFailed, ex.Message);
+            return failure;
         }
 
         AdoptSharedBank(account.SharedBank, state);
@@ -311,6 +268,32 @@ internal static class BankCollection {
         }
 
         return new SharedMoveResult(BankDenial.None, string.Empty, BankItemKind.Item, itemId, 0, null, null);
+    }
+
+    private static SharedMoveResult RunPlan(ulong accountId, ulong charId, SharedMove move,
+                                            Func<IDocumentSession, Account, Wizard, MoveState> plan, out MoveState state) {
+        MoveState planned = null;
+        try {
+            var stored = AccountCollection.UpdateAccountAndCharacterWithSession(accountId, charId, (session, storedAccount, storedWizard) => {
+                planned = plan(session, storedAccount, storedWizard);
+
+                return planned.Denial == BankDenial.None;
+            });
+            state = planned;
+            if (stored) {
+                return null;
+            }
+
+            return planned is { Denial: not BankDenial.None }
+                ? Denied(move, planned.Denial, planned.Reason)
+                : Denied(move, BankDenial.SaveFailed, "the account or the character is not stored");
+        } catch (Exception ex) {
+            state = planned;
+            Logger.Error("Failed to store the shared bank request of item {ItemId} for character {CharId}: {Reason}",
+                Logger.Args(move.ItemId, charId, ex.Message));
+
+            return Denied(move, BankDenial.SaveFailed, ex.Message);
+        }
     }
 
     private static MoveState PlanMove(IDocumentSession session, Wizard wizard, Account storedAccount, Wizard storedWizard, SharedMove move) {
@@ -441,52 +424,81 @@ internal static class BankCollection {
         state.SourceDoc = source;
 
         if (destination is not null) {
-            access.SetQuantity(destination, access.GetQuantity(destination) + move.Quantity);
-            if (wholeStack) {
-                DeleteStack(session, source, sourceIds, move.From == BankContainer.SharedBank ? sharedStacks : null);
-                state.SourceGone = true;
-            } else {
-                access.SetQuantity(source, sourceQuantity - move.Quantity);
-            }
+            MergeIntoStack(session, state, access, source, destination, sourceIds, sharedStacks);
         } else if (wholeStack) {
-            // Nothing of this template is at the destination, so the stack itself changes owner and keeps its id.
-            if (destinationIds.Contains(source.m_globalID) || !sourceIds.Remove(source.m_globalID)) {
+            if (!HandOverStack(state, source, sourceIds, destinationIds, sharedStacks, destinationOwner)) {
                 return state.Deny(BankDenial.UnknownItem, $"the lists of {move.From} and {move.To} disagree about stack {move.ItemId}");
             }
 
-            destinationIds.Add(source.m_globalID);
-            source.m_characterId = (GID) destinationOwner;
-            if (move.To == BankContainer.SharedBank) {
-                sharedStacks.Add(source);
-            } else {
-                sharedStacks.Remove(source);
-            }
-
             destination = source;
-            state.SourceGone = true;
-            state.DestinationIsNew = true;
         } else {
-            destination = access.CreateLike(source);
+            destination = SplitStack(session, state, access, source, destinationIds, sharedStacks, destinationOwner);
             if (destination is null) {
                 return state.Deny(BankDenial.SaveFailed, $"a stack of template {source.m_templateID.Full} could not be created");
             }
-
-            destination.m_characterId = (GID) destinationOwner;
-            access.SetQuantity(destination, move.Quantity);
-            access.SetQuantity(source, sourceQuantity - move.Quantity);
-            StoreStack(session, destination, access.CollectionName);
-            destinationIds.Add(destination.m_globalID);
-            if (move.To == BankContainer.SharedBank) {
-                sharedStacks.Add(destination);
-            }
-
-            state.DestinationIsNew = true;
         }
 
         state.DestinationDoc = destination;
         state.NewId = destination.m_globalID;
 
         return state;
+    }
+
+    private static void MergeIntoStack<T>(IDocumentSession session, MoveState state, StackAccess<T> access, T source, T destination,
+                                          List<ulong> sourceIds, List<T> sharedStacks) where T : WizClientObjectItem {
+        var move = state.Move;
+        var sourceQuantity = access.GetQuantity(source);
+        access.SetQuantity(destination, access.GetQuantity(destination) + move.Quantity);
+        if (move.Quantity < sourceQuantity) {
+            access.SetQuantity(source, sourceQuantity - move.Quantity);
+
+            return;
+        }
+
+        DeleteStack(session, source, sourceIds, move.From == BankContainer.SharedBank ? sharedStacks : null);
+        state.SourceGone = true;
+    }
+
+    // Nothing of the template is at the destination, so the stack itself changes owner and keeps its id.
+    private static bool HandOverStack<T>(MoveState state, T source, List<ulong> sourceIds, List<ulong> destinationIds,
+                                         List<T> sharedStacks, ulong destinationOwner) where T : WizClientObjectItem {
+        if (destinationIds.Contains(source.m_globalID) || !sourceIds.Remove(source.m_globalID)) {
+            return false;
+        }
+
+        destinationIds.Add(source.m_globalID);
+        source.m_characterId = (GID) destinationOwner;
+        if (state.Move.To == BankContainer.SharedBank) {
+            sharedStacks.Add(source);
+        } else {
+            sharedStacks.Remove(source);
+        }
+
+        state.SourceGone = true;
+        state.DestinationIsNew = true;
+
+        return true;
+    }
+
+    private static T SplitStack<T>(IDocumentSession session, MoveState state, StackAccess<T> access, T source, List<ulong> destinationIds,
+                                   List<T> sharedStacks, ulong destinationOwner) where T : WizClientObjectItem {
+        var created = access.CreateLike(source);
+        if (created is null) {
+            return null;
+        }
+
+        created.m_characterId = (GID) destinationOwner;
+        access.SetQuantity(created, state.Move.Quantity);
+        access.SetQuantity(source, access.GetQuantity(source) - state.Move.Quantity);
+        StoreStack(session, created, access.CollectionName);
+        destinationIds.Add(created.m_globalID);
+        if (state.Move.To == BankContainer.SharedBank) {
+            sharedStacks.Add(created);
+        }
+
+        state.DestinationIsNew = true;
+
+        return created;
     }
 
     private static MoveState PlanDelete(IDocumentSession session, Account storedAccount, SharedMove move) {
@@ -593,48 +605,55 @@ internal static class BankCollection {
 
     private static SharedMoveResult MirrorStackMove<T>(Wizard wizard, MoveState state, StackAccess<T> access) where T : WizClientObjectItem {
         var move = state.Move;
-        var shared = wizard.Account.SharedBank;
-        var backpackStacks = access.BackpackStacks(wizard);
-        var backpackIds = access.BackpackIds(wizard);
-        var source = (T) state.SourceDoc;
-        var destination = (T) state.DestinationDoc;
-        WizClientObjectItem remaining;
-        WizClientObjectItem arrived;
-
-        if (move.From == BankContainer.Backpack) {
-            var held = backpackStacks.FirstOrDefault(stack => stack.m_globalID == move.ItemId);
-            if (state.SourceGone) {
-                if (held is not null) {
-                    backpackStacks.Remove(held);
-                }
-
-                backpackIds.Remove(move.ItemId);
-                remaining = null;
-            } else {
-                if (held is not null) {
-                    access.SetQuantity(held, access.GetQuantity(source));
-                }
-
-                remaining = held ?? source;
-            }
-
-            arrived = access.GetShared(shared).FirstOrDefault(stack => stack.m_globalID == state.NewId);
-        } else {
-            var held = backpackStacks.FirstOrDefault(stack => stack.m_globalID == state.NewId);
-            if (held is not null) {
-                access.SetQuantity(held, access.GetQuantity(destination));
-            } else {
-                backpackStacks.Add(destination);
-                if (!backpackIds.Contains(state.NewId)) {
-                    backpackIds.Add(state.NewId);
-                }
-            }
-
-            arrived = held ?? destination;
-            remaining = state.SourceGone ? null : access.GetShared(shared).FirstOrDefault(stack => stack.m_globalID == move.ItemId);
-        }
+        var sharedStacks = access.GetShared(wizard.Account.SharedBank);
+        var (remaining, arrived) = move.From == BankContainer.Backpack
+            ? MirrorStackFromBackpack(wizard, state, access, sharedStacks)
+            : MirrorStackToBackpack(wizard, state, access, sharedStacks);
 
         return new SharedMoveResult(BankDenial.None, string.Empty, state.Kind, move.ItemId, state.NewId, remaining, arrived);
+    }
+
+    private static (WizClientObjectItem Remaining, WizClientObjectItem Arrived) MirrorStackFromBackpack<T>(
+        Wizard wizard, MoveState state, StackAccess<T> access, List<T> sharedStacks) where T : WizClientObjectItem {
+        var itemId = state.Move.ItemId;
+        var backpackStacks = access.BackpackStacks(wizard);
+        var held = backpackStacks.FirstOrDefault(stack => stack.m_globalID == itemId);
+        var arrived = sharedStacks.FirstOrDefault(stack => stack.m_globalID == state.NewId);
+        if (!state.SourceGone) {
+            if (held is not null) {
+                access.SetQuantity(held, access.GetQuantity((T) state.SourceDoc));
+            }
+
+            return (held ?? state.SourceDoc, arrived);
+        }
+
+        if (held is not null) {
+            backpackStacks.Remove(held);
+        }
+
+        access.BackpackIds(wizard).Remove(itemId);
+
+        return (null, arrived);
+    }
+
+    private static (WizClientObjectItem Remaining, WizClientObjectItem Arrived) MirrorStackToBackpack<T>(
+        Wizard wizard, MoveState state, StackAccess<T> access, List<T> sharedStacks) where T : WizClientObjectItem {
+        var backpackStacks = access.BackpackStacks(wizard);
+        var backpackIds = access.BackpackIds(wizard);
+        var destination = (T) state.DestinationDoc;
+        var held = backpackStacks.FirstOrDefault(stack => stack.m_globalID == state.NewId);
+        if (held is not null) {
+            access.SetQuantity(held, access.GetQuantity(destination));
+        } else {
+            backpackStacks.Add(destination);
+            if (!backpackIds.Contains(state.NewId)) {
+                backpackIds.Add(state.NewId);
+            }
+        }
+
+        var remaining = state.SourceGone ? null : sharedStacks.FirstOrDefault(stack => stack.m_globalID == state.Move.ItemId);
+
+        return (remaining, held ?? destination);
     }
 
     private static void AdoptSharedBank(AccountSharedBank memory, MoveState state) {
@@ -695,6 +714,7 @@ internal static class BankCollection {
     private static List<ulong> IdsOf(BankContainer container, BankItemKind kind, Account storedAccount, Wizard storedWizard) {
         var shared = storedAccount.SharedBank;
         var isStack = kind is BankItemKind.Reagent or BankItemKind.PetSnack;
+
         return container switch {
             BankContainer.SharedBank => kind switch {
                 BankItemKind.Reagent => shared.ReagentIds,

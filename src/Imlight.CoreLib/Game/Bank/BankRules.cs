@@ -57,12 +57,12 @@ namespace Imlight.CoreLib.Game.Bank;
 /// </summary>
 internal static class BankRules {
 
-    private const string EmoteAdjective = "Emote";
-    private const string JewelAdjective = "Jewel";
-    private const string NoTradeAdjective = "FLAG_NoTrade";
-    private const string HouseAdjective = "Islands";
-    private const uint NoTradeItemFlag = 1;
-    private const int LockBit = unchecked((int) 0x80000000);
+    private const string EMOTE_ADJECTIVE = "Emote";
+    private const string JEWEL_ADJECTIVE = "Jewel";
+    private const string NO_TRADE_ADJECTIVE = "FLAG_NoTrade";
+    private const string HOUSE_ADJECTIVE = "Islands";
+    private const uint NO_TRADE_ITEM_FLAG = 1;
+    private const int LOCK_BIT = unchecked((int) 0x80000000);
 
     /// <summary>
     /// Tells what kind of item a bank request is about.
@@ -79,7 +79,7 @@ internal static class BankRules {
             return BankItemKind.PetSnack;
         }
 
-        return HasAdjective(template, JewelAdjective) ? BankItemKind.Jewel : BankItemKind.Item;
+        return HasAdjective(template, JEWEL_ADJECTIVE) ? BankItemKind.Jewel : BankItemKind.Item;
     }
 
     /// <summary>
@@ -92,7 +92,7 @@ internal static class BankRules {
             return false;
         }
 
-        return !HasAdjective(GetTemplate(item), EmoteAdjective);
+        return !HasAdjective(GetTemplate(item), EMOTE_ADJECTIVE);
     }
 
     /// <summary>
@@ -118,7 +118,7 @@ internal static class BankRules {
     /// <param name="template">The template of the item, or null when it has none.</param>
     /// <returns>True for the FLAG_NoTrade adjective or the no trade bit of the item flags.</returns>
     internal static bool IsNoTrade(WizClientObjectItem item, WizItemTemplate template)
-        => (item.m_itemFlags & NoTradeItemFlag) != 0 || HasAdjective(template, NoTradeAdjective);
+        => (item.m_itemFlags & NO_TRADE_ITEM_FLAG) != 0 || HasAdjective(template, NO_TRADE_ADJECTIVE);
 
     /// <summary>
     /// Whether jewels are socketed in the item, which the shared bank refuses.
@@ -134,7 +134,7 @@ internal static class BankRules {
     /// </summary>
     /// <param name="template">The template of the item, or null when it has none.</param>
     /// <returns>True for the Islands adjective.</returns>
-    internal static bool IsHouse(WizItemTemplate template) => HasAdjective(template, HouseAdjective);
+    internal static bool IsHouse(WizItemTemplate template) => HasAdjective(template, HOUSE_ADJECTIVE);
 
     /// <summary>
     /// Whether the item is a rental, which the bank and the shared bank refuse.
@@ -149,7 +149,7 @@ internal static class BankRules {
     /// </summary>
     /// <param name="item">The item in question.</param>
     /// <returns>True when bit 31 of the pattern is set.</returns>
-    internal static bool IsLocked(WizClientObjectItem item) => (item.m_pattern & LockBit) != 0;
+    internal static bool IsLocked(WizClientObjectItem item) => (item.m_pattern & LOCK_BIT) != 0;
 
     /// <summary>
     /// Whether other items are stored in the item, as in a vault, which stops it from being deleted.
@@ -263,20 +263,18 @@ internal static class BankRules {
     };
 
     private static bool HasBackpackRoom(WizClientObjectItem item, BankItemKind kind, int quantity, Wizard wizard) {
-        var held = kind switch {
-            BankItemKind.Reagent => wizard.AlchemyBehavior?.GetReagent(item.m_templateID)?.m_quantity,
-            BankItemKind.PetSnack => wizard.PetSnackBehavior?.GetSnack(item.m_templateID)?.m_quantity,
-            _ => null,
-        };
-        if (kind == BankItemKind.Reagent) {
-            return (held ?? 0) + quantity <= ServerAlchemyBehavior.MaxStack;
-        }
+        switch (kind) {
+            case BankItemKind.Reagent:
+                var reagent = wizard.AlchemyBehavior?.GetReagent(item.m_templateID);
 
-        if (kind == BankItemKind.PetSnack) {
-            return (held ?? 0) + quantity <= ServerPetSnackBehavior.MaxStack;
-        }
+                return (reagent?.m_quantity ?? 0) + quantity <= ServerAlchemyBehavior.MaxStack;
+            case BankItemKind.PetSnack:
+                var snack = wizard.PetSnackBehavior?.GetSnack(item.m_templateID);
 
-        return wizard.InventoryBehavior.FreeSlots >= 1;
+                return (snack?.m_quantity ?? 0) + quantity <= ServerPetSnackBehavior.MaxStack;
+            default:
+                return wizard.InventoryBehavior.FreeSlots >= 1;
+        }
     }
 
     private static BankDenial SharedRoomDenial(WizClientObjectItem item, BankItemKind kind, int quantity, Account account) {

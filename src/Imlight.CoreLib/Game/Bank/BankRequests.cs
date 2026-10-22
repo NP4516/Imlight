@@ -105,41 +105,59 @@ internal sealed class BankRequests(Wizard wizard, IActorRef session, Func<bool> 
             return;
         }
 
-        if (!useShared) {
-            if (!wizard.InventoryToBankTransfer(itemId)) {
-                Deny(request, itemId, "the character could not be saved");
-                session.Tell(BankSync.InvToBankFailed(message.ClientRequestID, itemId, useShared));
+        var moved = useShared
+            ? MoveBackpackToShared(request, message, to)
+            : MoveBackpackToBank(request, message, item);
+        if (!moved) {
+            session.Tell(BankSync.InvToBankFailed(message.ClientRequestID, itemId, useShared));
+        }
+    }
 
-                return;
-            }
+    private bool MoveBackpackToBank(string request, WIZARD_12_PROTOCOL.MSG_MOVEINVTOBANK message, WizClientObjectItem item) {
+        var itemId = message.GlobalID;
+        if (!wizard.InventoryToBankTransfer(itemId)) {
+            Deny(request, itemId, "the character could not be saved");
 
-            Send(BankSync.StorageAdd(wizard, item, shared: false));
-            ItemSync.SendRemoved(session, wizard, itemId);
-            session.Tell(BankSync.InvToBankConfirm(message.ClientRequestID, itemId, itemId, useShared: false));
-
-            return;
+            return false;
         }
 
+        Send(BankSync.StorageAdd(wizard, item, shared: false));
+        ItemSync.SendRemoved(session, wizard, itemId);
+        session.Tell(BankSync.InvToBankConfirm(message.ClientRequestID, itemId, itemId, useShared: false));
+
+        return true;
+    }
+
+    private bool MoveBackpackToShared(string request, WIZARD_12_PROTOCOL.MSG_MOVEINVTOBANK message, BankContainer to) {
+        var itemId = message.GlobalID;
         var result = BankCollection.TryMoveShared(wizard, new SharedMove(BankContainer.Backpack, to, itemId, message.Quantity));
         if (!result.Success) {
             Deny(request, itemId, $"{result.Denial}: {result.Reason}");
-            session.Tell(BankSync.InvToBankFailed(message.ClientRequestID, itemId, useShared));
+
+            return false;
+        }
+
+        Send(BankSync.StorageAdd(wizard, result.Destination, shared: true));
+        SendBackpackLeft(result, itemId);
+        session.Tell(BankSync.InvToBankConfirm(message.ClientRequestID, result.OriginalId, result.NewId, useShared: true));
+
+        return true;
+    }
+
+    private void SendBackpackLeft(SharedMoveResult result, ulong itemId) {
+        if (result.Kind is not (BankItemKind.Reagent or BankItemKind.PetSnack)) {
+            ItemSync.SendRemoved(session, wizard, itemId);
 
             return;
         }
 
-        Send(BankSync.StorageAdd(wizard, result.Destination, shared: true));
-        if (result.Kind is BankItemKind.Reagent or BankItemKind.PetSnack) {
-            if (result.Source is not null) {
-                BankSync.SendBackpackStackChanged(session, wizard, result.Source);
-            } else {
-                BankSync.SendBackpackStackRemoved(session, wizard, result.OriginalId, result.Kind);
-            }
-        } else {
-            ItemSync.SendRemoved(session, wizard, itemId);
+        if (result.Source is null) {
+            BankSync.SendBackpackStackRemoved(session, wizard, result.OriginalId, result.Kind);
+
+            return;
         }
 
-        session.Tell(BankSync.InvToBankConfirm(message.ClientRequestID, result.OriginalId, result.NewId, useShared: true));
+        BankSync.SendBackpackStackChanged(session, wizard, result.Source);
     }
 
     /// <summary>
@@ -158,42 +176,60 @@ internal sealed class BankRequests(Wizard wizard, IActorRef session, Func<bool> 
             return;
         }
 
-        if (!useShared) {
-            if (!wizard.BankToInventoryTransfer(itemId)) {
-                Deny(request, itemId, "the character could not be saved");
-                session.Tell(BankSync.BankToInvFailed(message.ClientRequestID, itemId));
+        var moved = useShared
+            ? MoveSharedToBackpack(request, message, from)
+            : MoveBankToBackpack(request, message, item);
+        if (!moved) {
+            session.Tell(BankSync.BankToInvFailed(message.ClientRequestID, itemId));
+        }
+    }
 
-                return;
-            }
+    private bool MoveBankToBackpack(string request, WIZARD_12_PROTOCOL.MSG_MOVEBANKTOINV message, WizClientObjectItem item) {
+        var itemId = message.GlobalID;
+        if (!wizard.BankToInventoryTransfer(itemId)) {
+            Deny(request, itemId, "the character could not be saved");
 
-            ItemSync.SendAdded(session, wizard, item);
-            session.Tell(BankSync.StorageRemove(wizard, itemId, shared: false));
-            session.Tell(BankSync.BankToInvConfirm(message.ClientRequestID, itemId, itemId));
-
-            return;
+            return false;
         }
 
+        ItemSync.SendAdded(session, wizard, item);
+        session.Tell(BankSync.StorageRemove(wizard, itemId, shared: false));
+        session.Tell(BankSync.BankToInvConfirm(message.ClientRequestID, itemId, itemId));
+
+        return true;
+    }
+
+    private bool MoveSharedToBackpack(string request, WIZARD_12_PROTOCOL.MSG_MOVEBANKTOINV message, BankContainer from) {
+        var itemId = message.GlobalID;
         var result = BankCollection.TryMoveShared(wizard, new SharedMove(from, BankContainer.Backpack, itemId, message.Quantity));
         if (!result.Success) {
             Deny(request, itemId, $"{result.Denial}: {result.Reason}");
-            session.Tell(BankSync.BankToInvFailed(message.ClientRequestID, itemId));
+
+            return false;
+        }
+
+        SendBackpackArrived(result, itemId);
+        session.Tell(BankSync.BankToInvConfirm(message.ClientRequestID, result.OriginalId, result.NewId));
+
+        return true;
+    }
+
+    private void SendBackpackArrived(SharedMoveResult result, ulong itemId) {
+        if (result.Kind is not (BankItemKind.Reagent or BankItemKind.PetSnack)) {
+            ItemSync.SendAdded(session, wizard, result.Destination);
+            session.Tell(BankSync.StorageRemove(wizard, itemId, shared: true));
 
             return;
         }
 
-        if (result.Kind is BankItemKind.Reagent or BankItemKind.PetSnack) {
-            BankSync.SendBackpackStackAdded(session, wizard, result.Destination);
-            if (result.Source is not null) {
-                Send(BankSync.StorageAdd(wizard, result.Source, shared: true));
-            } else {
-                session.Tell(BankSync.StorageRemove(wizard, result.OriginalId, shared: true));
-            }
-        } else {
-            ItemSync.SendAdded(session, wizard, result.Destination);
-            session.Tell(BankSync.StorageRemove(wizard, itemId, shared: true));
+        BankSync.SendBackpackStackAdded(session, wizard, result.Destination);
+        if (result.Source is null) {
+            session.Tell(BankSync.StorageRemove(wizard, result.OriginalId, shared: true));
+
+            return;
         }
 
-        session.Tell(BankSync.BankToInvConfirm(message.ClientRequestID, result.OriginalId, result.NewId));
+        Send(BankSync.StorageAdd(wizard, result.Source, shared: true));
     }
 
     /// <summary>
@@ -242,35 +278,61 @@ internal sealed class BankRequests(Wizard wizard, IActorRef session, Func<bool> 
         var itemId = message.GlobalID;
         var from = useShared ? BankContainer.SharedBank : fromBackpack ? BankContainer.Backpack : BankContainer.Bank;
         var request = $"delete of item {itemId} from the {from}";
+        if (!TryDelete(request, message, from, useShared)) {
+            session.Tell(BankSync.BankDeleteFailed(message.ClientRequestID, useShared));
+        }
+    }
+
+    private bool TryDelete(string request, WIZARD_12_PROTOCOL.MSG_BANKDELETE message, BankContainer from, bool useShared) {
+        var itemId = message.GlobalID;
         var item = FindItem(from, itemId);
         if (!bankIsOpen()) {
             Deny(request, itemId, "the bank is not open");
-        } else if (item is null) {
-            ReportUnknown(request, itemId);
-        } else if (item is ClientReagentItem or ClientPetSnackItem) {
-            Deny(request, itemId, "stacks are not deleted with this request");
-        } else if (BankRules.CanDelete(item) is var denial && denial != BankDenial.None) {
-            Deny(request, itemId, denial.ToString());
-        } else if (EnsureUnequipped(request, itemId)) {
-            var result = from == BankContainer.SharedBank
-                ? BankCollection.TryDeleteShared(wizard, itemId, 1)
-                : BankCollection.TryDeleteOwn(wizard, from, itemId);
-            if (result.Success) {
-                if (from == BankContainer.Backpack) {
-                    ItemSync.SendRemoved(session, wizard, itemId);
-                } else {
-                    session.Tell(BankSync.StorageRemove(wizard, itemId, shared: useShared));
-                }
 
-                session.Tell(BankSync.BankDeleteConfirm(message.ClientRequestID, itemId, useShared));
-
-                return;
-            }
-
-            Deny(request, itemId, $"{result.Denial}: {result.Reason}");
+            return false;
         }
 
-        session.Tell(BankSync.BankDeleteFailed(message.ClientRequestID, useShared));
+        if (item is null) {
+            ReportUnknown(request, itemId);
+
+            return false;
+        }
+
+        if (item is ClientReagentItem or ClientPetSnackItem) {
+            Deny(request, itemId, "stacks are not deleted with this request");
+
+            return false;
+        }
+
+        var denial = BankRules.CanDelete(item);
+        if (denial != BankDenial.None) {
+            Deny(request, itemId, denial.ToString());
+
+            return false;
+        }
+
+        if (!EnsureUnequipped(request, itemId)) {
+            return false;
+        }
+
+        var result = from == BankContainer.SharedBank
+            ? BankCollection.TryDeleteShared(wizard, itemId, 1)
+            : BankCollection.TryDeleteOwn(wizard, from, itemId);
+        if (!result.Success) {
+            Deny(request, itemId, $"{result.Denial}: {result.Reason}");
+
+            return false;
+        }
+
+        if (from == BankContainer.Backpack) {
+            ItemSync.SendRemoved(session, wizard, itemId);
+        } else {
+            session.Tell(BankSync.StorageRemove(wizard, itemId, shared: useShared));
+        }
+
+        session.Tell(BankSync.BankDeleteConfirm(message.ClientRequestID, itemId, useShared));
+
+        return true;
     }
 
     /// <summary>
@@ -280,31 +342,46 @@ internal sealed class BankRequests(Wizard wizard, IActorRef session, Func<bool> 
     internal void DeleteSharedStack(WIZARD_12_PROTOCOL.MSG_SHAREDBANKDELETEREAGENTORPETSNACK message) {
         var stackId = message.GlobalID;
         var request = $"delete of {message.Quantity} units of shared stack {stackId}";
+        var deleted = TryDeleteStack(request, stackId, message.Quantity);
+        session.Tell(BankSync.SharedStackDeleteConfirm(message.ClientRequestID, stackId, failed: !deleted));
+    }
+
+    private bool TryDeleteStack(string request, ulong stackId, int quantity) {
         var stack = FindItem(BankContainer.SharedBank, stackId);
         if (!bankIsOpen()) {
             Deny(request, stackId, "the bank is not open");
-        } else if (stack is null) {
-            ReportUnknown(request, stackId);
-        } else if (stack is not (ClientReagentItem or ClientPetSnackItem)) {
-            Deny(request, stackId, "the item is not a stack");
-        } else {
-            var result = BankCollection.TryDeleteShared(wizard, stackId, message.Quantity);
-            if (result.Success) {
-                if (result.Source is not null) {
-                    Send(BankSync.StorageAdd(wizard, result.Source, shared: true));
-                } else {
-                    session.Tell(BankSync.StorageRemove(wizard, stackId, shared: true));
-                }
 
-                session.Tell(BankSync.SharedStackDeleteConfirm(message.ClientRequestID, stackId, failed: false));
-
-                return;
-            }
-
-            Deny(request, stackId, $"{result.Denial}: {result.Reason}");
+            return false;
         }
 
-        session.Tell(BankSync.SharedStackDeleteConfirm(message.ClientRequestID, stackId, failed: true));
+        if (stack is null) {
+            ReportUnknown(request, stackId);
+
+            return false;
+        }
+
+        if (stack is not (ClientReagentItem or ClientPetSnackItem)) {
+            Deny(request, stackId, "the item is not a stack");
+
+            return false;
+        }
+
+        var result = BankCollection.TryDeleteShared(wizard, stackId, quantity);
+        if (!result.Success) {
+            Deny(request, stackId, $"{result.Denial}: {result.Reason}");
+
+            return false;
+        }
+
+        if (result.Source is null) {
+            session.Tell(BankSync.StorageRemove(wizard, stackId, shared: true));
+
+            return true;
+        }
+
+        Send(BankSync.StorageAdd(wizard, result.Source, shared: true));
+
+        return true;
     }
 
     /// <summary>
