@@ -66,7 +66,7 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
     public string InteractWizBang => "Registrar";
     public string DisplayKey      => "GUI_ShopOptionEquipment";
 
-    private const string DefaultShopTitle = "KrocNPC_00000013";
+    private const string DEFAULT_SHOP_TITLE = "KrocNPC_00000013";
 
     private List<GID> _inventory;
     private string _shopTitle;
@@ -123,7 +123,7 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
     private void SendShopOfferings(IActorRef playerActor) {
         var shopOffering = new WizShopOffering() {
             m_sellModifier = 0.05f,
-            m_shopTitle = string.IsNullOrWhiteSpace(_shopTitle) ? DefaultShopTitle : _shopTitle,
+            m_shopTitle = string.IsNullOrWhiteSpace(_shopTitle) ? DEFAULT_SHOP_TITLE : _shopTitle,
             m_shopList = _inventory,
             // Changes the type of currency that is used
             // 0 - Gold

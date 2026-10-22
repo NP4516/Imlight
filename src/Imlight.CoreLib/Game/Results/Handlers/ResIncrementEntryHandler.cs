@@ -40,53 +40,46 @@ using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Results.Handlers;
 
 internal sealed class ResIncrementEntryHandler : BaseResultHandler<ResIncrementEntry> {
 
-    private const float QueryWizardTimeoutSeconds = 5.0f;
+    private const float QUERY_WIZARD_TIMEOUT_SECONDS = 5.0f;
 
     public override bool Execute(IResultContext context) {
-        var playerObj = context.GetPlayerObj();
-        if (playerObj is null) {
-            return false;
-        }
-
-        if (Result is null) {
-            return false;
-        }
-
-        var entryName = Result.m_entryName;
-        if (string.IsNullOrEmpty(entryName)) {
+        if (context.GetPlayerObj() is null || Result is null || string.IsNullOrEmpty(Result.m_entryName)) {
             return false;
         }
 
         // Context does not ship with a wizard reference, so we need to query for it.
-        var queryWizardMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-        var queryTimeout = TimeSpan.FromSeconds(QueryWizardTimeoutSeconds);
-        var queryResponse = context
-            .GetPlayerRef()
-            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryWizardMsg, queryTimeout).Result;
-        if (queryResponse == null) {
+        var wizard = QueryWizard(context);
+        if (wizard is null) {
             Logger.Error("ResIncrementEntry handler failed to retrieve character data within {TimeoutSeconds} seconds.",
-                Logger.Args(QueryWizardTimeoutSeconds));
+                Logger.Args(QUERY_WIZARD_TIMEOUT_SECONDS));
 
             return false;
         }
 
-        var wizard = queryResponse.Wizard;
-
-        if (Result.m_isQuestRegistry) {
-            var questName = Result.m_questName;
-            if (string.IsNullOrEmpty(questName)) {
-                return false;
-            }
-
-            return wizard.IncrementQuestRegistryValue(questName, entryName);
+        if (!Result.m_isQuestRegistry) {
+            return wizard.IncrementRegistryValue(Result.m_entryName);
         }
 
-        return wizard.IncrementRegistryValue(entryName);
+        if (string.IsNullOrEmpty(Result.m_questName)) {
+            return false;
+        }
+
+        return wizard.IncrementQuestRegistryValue(Result.m_questName, Result.m_entryName);
+    }
+
+    private static Wizard QueryWizard(IResultContext context) {
+        var queryTimeout = TimeSpan.FromSeconds(QUERY_WIZARD_TIMEOUT_SECONDS);
+        var queryResponse = context
+            .GetPlayerRef()
+            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD(), queryTimeout).Result;
+
+        return queryResponse?.Wizard;
     }
 
 }

@@ -66,8 +66,8 @@ namespace Imlight.CoreLib.Game.Zone.Core;
 public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger) 
     : ZoneEntity(null, null, null, zoneRef, zone) {
 
-    private const double MinPacedWaitSeconds = 1;
-    private const float QueryWizardTimeoutSeconds = 5.0f;
+    private const double MIN_PACED_WAIT_SECONDS = 1;
+    private const float QUERY_WIZARD_TIMEOUT_SECONDS = 5.0f;
 
     public Trigger TriggerData { get; init; } = trigger;
     private readonly Dictionary<IActorRef, DateTime> _cooldowns = [];
@@ -144,18 +144,12 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
             return results;
         }
 
-        // A self-post spins unless a wait comes first (a wait with requirements can be skipped), and it only echoes an
-        // event every listener already got unless the trigger changes something or can stop.
-        var canStop = trigger.m_triggerMax != uint.MaxValue
-            || HasRequirements(trigger.m_requirements)
-            || results.m_results.Any(result => HasRequirements(result?.m_requirements));
-        var changesSomething = results.m_results.Any(result => result is not (null or ResWait or ResPostEvent or ResPostQuestEvent));
-        var isLoop = canStop || changesSomething;
-
+        // A self-post spins unless a wait comes first (a wait with requirements can be skipped).
+        var isLoop = IsLoop(trigger, results);
         var paced = false;
         var kept = new List<Result>(results.m_results.Count);
         foreach (var result in results.m_results) {
-            if (result is ResWait wait && wait.m_secondsToWait >= MinPacedWaitSeconds && !HasRequirements(wait.m_requirements)) {
+            if (result is ResWait wait && wait.m_secondsToWait >= MIN_PACED_WAIT_SECONDS && !HasRequirements(wait.m_requirements)) {
                 paced = true;
             }
 
@@ -169,6 +163,16 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
         return kept.Count == results.m_results.Count ? results : new ResultList { m_results = kept };
     }
 
+    private static bool IsLoop(Trigger trigger, ResultList results) {
+        // A self-post only echoes an event every listener already got unless the trigger changes something or can stop.
+        var canStop = trigger.m_triggerMax != uint.MaxValue
+            || HasRequirements(trigger.m_requirements)
+            || results.m_results.Any(result => HasRequirements(result?.m_requirements));
+        var changesSomething = results.m_results.Any(result => result is not (null or ResWait or ResPostEvent or ResPostQuestEvent));
+
+        return canStop || changesSomething;
+    }
+
     internal static Wizard QueryWizard(IActorRef playerActor) {
         // A loop outlives its player, and an Ask with no timeout never returns for a stopped actor.
         if (playerActor is null || playerActor is IInternalActorRef { IsTerminated: true }) {
@@ -178,8 +182,9 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
         try {
             return playerActor
                 .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD(),
-                    TimeSpan.FromSeconds(QueryWizardTimeoutSeconds)).Result?.Wizard;
-        } catch (Exception ex) {
+                    TimeSpan.FromSeconds(QUERY_WIZARD_TIMEOUT_SECONDS)).Result?.Wizard;
+        }
+        catch (Exception ex) {
             Logger.Warning("Could not query the wizard of a trigger event's player: {Error}", Logger.Args(ex.Message));
 
             return null;
