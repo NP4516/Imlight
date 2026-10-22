@@ -16,7 +16,14 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics
+using System.Text.Json.Serialization;
 using Imcodec.IO;
+using Imcodec.Cryptography;
+using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
@@ -28,11 +35,6 @@ using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Numerics;
-using System.Text.Json.Serialization;
 
 namespace Imlight.CoreLib.WizardData.Models.Player;
 
@@ -146,7 +148,6 @@ public class Wizard {
     public ByteString RadialMenu3Data { get; set; } = new ByteString();
 
     public ByteString CrownShopWishlist { get; set; }
-
     /// <summary>
     /// Tracks hatched pets for MSG_PETTOMEPETADDED. Key: pet global ID, Value: pet template ID.
     /// Runtime-only; not persisted (the pet tome behavior blob handles persistence).
@@ -407,7 +408,15 @@ public class Wizard {
     }
 
     public bool AddItemToInventory(ulong itemId, out WizClientObjectItem item) {
-        item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemId);
+        // The template may be a spell, a missing template or anything else that is not an item.
+        item = CoreObjectFactory.FinalizeCoreObject(itemId) as WizClientObjectItem;
+        if (item is null) {
+            Logger.Warning("Cannot add template {0} to inventory because it is not an item.",
+                Logger.Args(itemId));
+
+            return false;
+        }
+
         item.m_characterId = (GID) CharId;
 
         return AddItemToInventory(item);
@@ -1247,6 +1256,36 @@ public class Wizard {
         return true;
     }
 
+    public bool RemoveRegistryValue(string key) {
+        if (!QuestBehavior.HasRegistryValue(key)) {
+            return true;
+        }
+
+        if (!QuestBehavior.RemoveRegistryValue(key)) {
+            return false;
+        }
+
+        // Persistent save.
+        WizardCollection.UpdateCharacterQuestBehavior(this);
+
+        return true;
+    }
+
+    public bool RemoveQuestRegistryValue(string questName, string key) {
+        if (!QuestBehavior.HasQuestRegistryValue(questName, key)) {
+            return true;
+        }
+
+        if (!QuestBehavior.RemoveQuestRegistryValue(questName, key)) {
+            return false;
+        }
+
+        // Persistent save.
+        WizardCollection.UpdateCharacterQuestBehavior(this);
+
+        return true;
+    }
+
     public bool HasRegistryValue(string key)
         => QuestBehavior.HasRegistryValue(key);
 
@@ -1671,12 +1710,16 @@ public class Wizard {
         var energyRegained = timeDifference / energyTickIntervalInSeconds;
 
         // If the player has regained more energy than their max, set it to the max.
-        if (PetOwnerBehavior.Energy + energyRegained > maxEnergy) {
-            UpdateEnergy(maxEnergy);
+        var newEnergy = PetOwnerBehavior.Energy + energyRegained > normMaxEnergy
+            ? normMaxEnergy
+            : (int) (PetOwnerBehavior.Energy + energyRegained);
+        if (newEnergy == PetOwnerBehavior.Energy) {
+            PetOwnerBehavior.SetEnergy(newEnergy);
+
+            return;
         }
-        else {
-            UpdateEnergy((int) (PetOwnerBehavior.Energy + energyRegained));
-        }
+
+        UpdateEnergy(newEnergy);
     }
 
     private void AfterDatabaseLoadWizardGameStats() {
@@ -1711,7 +1754,7 @@ public class Wizard {
                     Logger.Args(quest.QuestName, PlayerNameBehavior.GetWizardName()));
 
                 QuestBehavior.CurrentQuestInstances.Remove(quest);
-                QuestInstanceCollection.RemoveQuestInstance(CharId, quest.QuestName);
+                QuestInstanceCollection.RemoveQuestInstance(quest.ID);
 
                 continue;
             }
@@ -1730,8 +1773,13 @@ public class Wizard {
         QuestBehavior.CurrentQuestInstances = uniqueQuests;
 
         // Prune stale quest IDs whose instance docs were removed above, and persist.
+        var questIdsBefore = QuestBehavior.CurrentQuestIDs.ToList();
         QuestBehavior.CurrentQuestIDs.Clear();
         QuestBehavior.CurrentQuestIDs.AddRange(uniqueQuests.Select(q => q.ID));
+        if (questIdsBefore.SequenceEqual(QuestBehavior.CurrentQuestIDs)) {
+            return;
+        }
+
         WizardCollection.UpdateCharacterQuestBehavior(this);
     }
 

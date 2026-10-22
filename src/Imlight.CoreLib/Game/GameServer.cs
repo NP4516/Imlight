@@ -32,7 +32,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -69,7 +69,7 @@ public class GameServer : Server {
 
     public GameServer(string serverName, ushort serverPort, string realmName = null)
         : base(serverName, serverPort, GameServiceFactory.Props(),
-              ConfigurationManager.Settings["Game Server.GameServerIP"].AsString()) {
+              ConfigurationManager.Settings["Game Server.GameServerIP"].AsString(), deferListening: true) {
         RealmName = realmName ?? serverName;
         this._playerQueue = new ListQueue<SessionActor>();
         this._sessionKeys = new Cache<ByteString, ulong>();
@@ -217,6 +217,18 @@ public class GameServer : Server {
         session.Dispose();
     }
 
+    [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_KICKSESSION))]
+    private void ReceiveKickSession(SERVER_100_PROTOCOL.MSG_KICKSESSION message) {
+        var session = ActiveSessions.FirstOrDefault(s => s.SessionID == message.SessionID);
+        if (session is null) {
+            return;
+        }
+
+        Logger.Information("Closing session {SessionId}: its character attached on a newer session.",
+            Logger.Args(message.SessionID));
+        session.ActorRef.Tell("Close");
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
     private void ReceiveZoneTransferRequest(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
         _gameWorldRef.Forward(message);
@@ -246,8 +258,14 @@ public class GameServer : Server {
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_QUERY_FALLBACK))]
     private void ReceiveQueryFallback(SERVICE_101_PROTOCOL.MSG_QUERY_FALLBACK message) {
         if (_fallbackEntries.TryGetValue(message.RemoteIp, out var entry)) {
+            var priorTimeouts = entry.TimeoutCount;
+            if (message.CountTimeout) {
+                entry.TimeoutCount++;
+            }
+
             Sender.Tell(new SERVICE_101_PROTOCOL.MSG_QUERY_FALLBACK_RSP {
                 Found = true,
+                PriorTimeouts = priorTimeouts,
                 UserId = entry.UserId,
                 CharId = entry.CharId,
                 FallbackZone = entry.FallbackZone,
@@ -337,6 +355,7 @@ public class GameServer : Server {
         public string GameServerIp;
         public ushort GameServerPort;
         public DateTime RegisteredAt;
+        public int TimeoutCount;
 
     }
 

@@ -20,8 +20,8 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Manages socket-level packet receiving, decoding, and rate-limiting 
- * for network sessions using a token bucket algorithm.
+ * Manages socket-level packet receiving, frame reassembly and decoding, and
+ * rate-limiting for network sessions using a token bucket algorithm.
  * 
  * USAGE EXAMPLE:
  * // Socket listener is typically created by SessionActor
@@ -29,13 +29,14 @@
  * 
  * NOTE:
  * - Implements token bucket rate limiting
+ * - One socket read can hold several frames or part of one; MessageStreamDecoder keeps the tail
  * 
  * TODO:
  * - Hardcoded suppressed packets list, consider making it configurable
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 06/28/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -52,15 +53,25 @@ namespace Imlight.CoreLib.Shared.Networking;
 
 internal sealed class SocketListener : ReceiveActor, IDisposable {
 
+    private const int MaxPendingBytes = 64 * 1024;
+    private const int MaxFramesPerRead = 1024;
+    private const int HexPreviewBytes = 8;
+
+    // Live clients send up to ~220 messages in 10 s on zone entry.
+    private const int DefaultTokenBucketMax = 1000;
+    private const int DefaultTokenBucketPerSecond = 200;
+    private const byte DefaultTokenBucketFailedAcquisitionLimit = 5;
+
     private readonly int _bufferSize = ConfigurationManager.Settings["Advanced.SessionActorBufferSize"].AsInt();
     private readonly bool _closeOnSocketException = ConfigurationManager.Settings["Advanced.SessionActorCloseOnException"].AsBool();
-    private readonly int _tokenBucketMax = ConfigurationManager.Settings["Advanced.SessionTokenBucketMax"].AsInt();
-    private readonly int _tokenBucketPerSecond = ConfigurationManager.Settings["Advanced.SessionTokenBucketPerSecond"].AsInt();
-    private readonly byte _tokenBucketFailedAcquisitionLimit = ConfigurationManager.Settings["Advanced.SessionTokenBucketFailedAcquisitionLimit"].AsByte();
+    private readonly int _tokenBucketMax = ConfigurationManager.GetValue("Advanced.SessionTokenBucketMax", DefaultTokenBucketMax);
+    private readonly int _tokenBucketPerSecond = ConfigurationManager.GetValue("Advanced.SessionTokenBucketPerSecond", DefaultTokenBucketPerSecond);
+    private readonly byte _tokenBucketFailedAcquisitionLimit = ConfigurationManager.GetValue("Advanced.SessionTokenBucketFailedAcquisitionLimit", DefaultTokenBucketFailedAcquisitionLimit);
     private readonly IActorRef _sessionActorRef;
     private readonly Socket _socket;
     private readonly ushort _sessionid;
     private readonly TokenBucket _tokenBucket;
+    private readonly MessageStreamDecoder _decoder;
     private readonly List<Type> _suppressedPackets = [
             typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVE),
             typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVESTATE),
@@ -89,6 +100,7 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
         this._socket = socket;
         this._sessionid = sessionid;
         this._tokenBucket = new TokenBucket(_tokenBucketMax, _tokenBucketPerSecond);
+        this._decoder = new MessageStreamDecoder(OnDecodeFailure);
 
         Receive<string>(x => x == "Close", x => Dispose());
         Receive<SocketReadCompleted>(OnSocketReadCompleted);
@@ -119,20 +131,32 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
             return;
         }
 
+        // The sender shares this socket and may have closed it already.
+        if (_socket.SafeHandle.IsClosed) {
+            Dispose();
+
+            return;
+        }
+
         var buffer = new byte[_bufferSize];
-        _socket.ReceiveAsync(new ArraySegment<byte>(buffer), SocketFlags.None)
-            .ContinueWith(t => {
-                if (t.IsFaulted) {
-                    return (object) new SocketReadFailed {
-                        Error = t.Exception?.InnerException ?? t.Exception!
+        try {
+            _socket.ReceiveAsync(new ArraySegment<byte>(buffer), SocketFlags.None)
+                .ContinueWith(t => {
+                    if (t.IsFaulted) {
+                        return (object) new SocketReadFailed {
+                            Error = t.Exception?.InnerException ?? t.Exception!
+                        };
+                    }
+                    return new SocketReadCompleted {
+                        Buffer = buffer,
+                        ByteCount = t.Result
                     };
-                }
-                return new SocketReadCompleted {
-                    Buffer = buffer,
-                    ByteCount = t.Result
-                };
-            })
-            .PipeTo(Self);
+                })
+                .PipeTo(Self);
+        }
+        catch (ObjectDisposedException) {
+            Dispose();
+        }
     }
 
     private void OnSocketReadCompleted(SocketReadCompleted result) {
@@ -162,33 +186,39 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
                 
                 return;
             }
-            if (!_tokenBucket.TryAcquire()) {
-                Logger.Warning("SessionActor {SessionId} failed to acquire token.", Logger.Args(_sessionid));
-
-                // The rate limit was reached.
-                var failedAcquisitionCount = _tokenBucket.GetFailedAcquisitionCount();
-                if (failedAcquisitionCount >= _tokenBucketFailedAcquisitionLimit) {
-                    // Log warning.
-                    Logger.Warning("SessionActor {SessionId} failed to acquire token {FailedAcquisitionCount} times.",
-                        Logger.Args(_sessionid, failedAcquisitionCount));
-
-                    // The session has exceeded the failed acquisition limit. We'll dispose of the session.
-                    this.Dispose();
-
-                    return;
-                }
-
-                return;
-            }
 
             var packets = GetPacketsFromBuffer(buffer, bytesReceived);
-            if (packets is null) {
-                Logger.Verbose("SessionActor {Id} received invalid packet.", Logger.Args(_sessionid));
-                
+            if (packets.Count > MaxFramesPerRead || _decoder.PendingBytes > MaxPendingBytes) {
+                Logger.Warning("SessionActor {SessionId} exceeded the receive limits: {FrameCount} frames, {PendingBytes} pending bytes.",
+                    Logger.Args(_sessionid, packets.Count, _decoder.PendingBytes));
+                this.Dispose();
+
                 return;
             }
 
             foreach (var packet in packets) {
+                if (IsCriticalPacket(packet)) {
+                    _tokenBucket.Spend();
+                } else if (!_tokenBucket.TryAcquire()) {
+                    Logger.Warning("SessionActor {SessionId} failed to acquire token.", Logger.Args(_sessionid));
+
+                    // The rate limit was reached.
+                    var failedAcquisitionCount = _tokenBucket.GetFailedAcquisitionCount();
+                    if (failedAcquisitionCount >= _tokenBucketFailedAcquisitionLimit) {
+                        // Log warning.
+                        Logger.Warning("SessionActor {SessionId} failed to acquire token {FailedAcquisitionCount} times.",
+                            Logger.Args(_sessionid, failedAcquisitionCount));
+
+                        // The session has exceeded the failed acquisition limit. We'll dispose of the session.
+                        this.Dispose();
+
+                        return;
+                    }
+
+                    // Whole messages are dropped, never raw bytes, so the framing stays intact.
+                    continue;
+                }
+
                 LogReceivedPacket(packet);
 
                 var msgPacket = new SERVER_100_PROTOCOL.MSG_RECEIVEDPACKET { Packet = packet };
@@ -204,61 +234,59 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
         }
     }
 
-    private IMessage[] GetPacketsFromBuffer(byte[] buffer, int bytesReceived) {
-        var bufferSpan = new ReadOnlySpan<byte>(buffer, 0, bytesReceived).ToArray();
-        if (!IsKIPacket(bufferSpan)) {
-            Logger.Debug("SessionActor {SessionId} received non-KINP packet", 
-                Logger.Args(_sessionid));
+    private IReadOnlyList<IMessage> GetPacketsFromBuffer(byte[] buffer, int bytesReceived) {
+        var pendingBefore = _decoder.PendingBytes;
+        var packets = _decoder.Feed(new ReadOnlySpan<byte>(buffer, 0, bytesReceived));
 
-            return null;
+        if (_decoder.SkippedBytes > 0) {
+            var firstBytes = Convert.ToHexString(buffer, 0, int.Min(HexPreviewBytes, bytesReceived));
+            Logger.Warning("SessionActor {SessionId} skipped {SkippedBytes}B of unframed data ({ByteCount}B read, first bytes {FirstBytes}, pending before {PendingBytes}).",
+                Logger.Args(_sessionid, _decoder.SkippedBytes, bytesReceived, firstBytes, pendingBefore));
         }
 
-        if (TryDeserializePacket(bufferSpan, out var records)) {
-            return [.. records];
-        }
-        else {
-            Logger.Error("SessionActor {SessionID} packet deserialize failed.", 
-                Logger.Args(_sessionid));
-        }
+        LogRead(bytesReceived, pendingBefore, packets);
 
-        // The packet failed to deserialize.
-        return null;
-
+        return packets;
     }
 
-    private bool TryDeserializePacket(byte[] buffer, out IReadOnlyCollection<IMessage> messages) {
-        try {
-            messages = MessageEncoder.Decode(buffer);
-            
-            return true;
-        }
-        catch (Exception ex) {
-            Logger.Error("SessionActor {SessionID} packet deserialize failed: {ExMessage}",
-                Logger.Args(_sessionid, ex.InnerException?.Message ?? ex.Message));
+    private void OnDecodeFailure(byte serviceId, byte messageId, Exception error) {
+        Logger.Debug("SessionActor {SessionId} could not decode service {ServiceId} message {MessageId}: {ErrorType} {ErrorMessage}",
+            Logger.Args(_sessionid, serviceId, messageId, error.GetType().Name, error.InnerException?.Message ?? error.Message));
+    }
 
-            messages = null;
+    private void LogRead(int bytesReceived, int pendingBefore, IReadOnlyList<IMessage> packets) {
+        var firstName = packets.Count > 0 ? packets[0].GetType().Name : "none";
+        Logger.Verbose("SessionActor {SessionId} read {ByteCount}B, frames {FrameCount}, pending {PendingBytes}, first {FirstName}",
+            Logger.Args(_sessionid, bytesReceived, packets.Count, _decoder.PendingBytes, firstName));
 
-            return false;
+        if ((packets.Count > 1 || pendingBefore > 0) && packets.Any(IsCriticalPacket)) {
+            var names = string.Join(", ", packets.Select(GetScopedMessageName));
+            Logger.Information("SessionActor {SessionId} coalesced critical read: {Names}", Logger.Args(_sessionid, names));
         }
     }
 
-    private bool IsKIPacket(byte[] buffer) {
-        if (buffer.Length < 2) {
-            return false;
-        }
+    private static bool IsCriticalPacket(IMessage packet)
+        => packet is ControlMessageProtocol.SessionAccept
+            or GAME_5_PROTOCOL.MSG_ATTACH
+            or GAME_5_PROTOCOL.MSG_QUERY_LOGOUT
+            or GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT
+            or GAME_5_PROTOCOL.MSG_ZONETRANSFERACK
+            or GAME_5_PROTOCOL.MSG_ZONETRANSFERNACK
+            or GAME_5_PROTOCOL.MSG_RETRYTELEPORT
+            or LOGIN_7_PROTOCOL.MSG_USER_VALIDATE
+            or LOGIN_7_PROTOCOL.MSG_USER_AUTHEN_V3;
 
-        return buffer.AsSpan()[..2].SequenceEqual(stackalloc byte[2] { 0x0D, 0xF0 });
-    }
-
-    private void LogReceivedPacket(IMessage packet) {
-        var scopedMessageName = packet
+    private static string GetScopedMessageName(IMessage packet)
+        => packet
             .GetType()
             .ToString()
             .Split('.')[^1]
             .Replace('+', '.');
+
+    private void LogReceivedPacket(IMessage packet) {
         if (!_suppressedPackets.Contains(packet.GetType())) {
             Logger.Verbose("SessionActor {SessionId} received KiNP packet {ScopedMessageName}",
-                Logger.Args(_sessionid, scopedMessageName));
+                Logger.Args(_sessionid, GetScopedMessageName(packet)));
         }
     }
 

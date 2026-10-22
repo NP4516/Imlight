@@ -35,7 +35,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -61,6 +61,7 @@ internal class GameServerPool : ReceiveProtocolDispatcher {
 
     private readonly Dictionary<ushort, IActorRef> _gameServers;
     private readonly Dictionary<string, ushort> _realmToPort = [];
+    private bool _isListening;
 
     public GameServerPool() {
         this._gameServers = [];
@@ -95,12 +96,28 @@ internal class GameServerPool : ReceiveProtocolDispatcher {
 
         _gameServers.Add(message.Port, gameServerRef);
 
+        if (_isListening) {
+            gameServerRef.Tell(new SERVER_100_PROTOCOL.MSG_STARTLISTENING());
+        }
+
         if (!string.IsNullOrEmpty(message.RealmName)) {
             _realmToPort[message.RealmName] = message.Port;
         }
 
         Logger.Debug("Game server pool registered new game server {Name} (realm: {Realm}) on port {Port}.",
             Logger.Args(message.Name, message.RealmName, message.Port));
+    }
+
+    [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_STARTLISTENING))]
+    private void ReceiveStartListening(SERVER_100_PROTOCOL.MSG_STARTLISTENING message) {
+        _isListening = true;
+
+        var startTasks = _gameServers.Values.Select(gameServer =>
+            gameServer.Ask<SERVER_100_PROTOCOL.MSG_STARTLISTENING_COMPLETE>(message, Server.StartListeningTimeout));
+
+        Task.WhenAll(startTasks)
+            .ContinueWith(_ => new SERVER_100_PROTOCOL.MSG_STARTLISTENING_COMPLETE())
+            .PipeTo(Sender);
     }
 
     [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_GETBESTSERVER))]
@@ -136,6 +153,8 @@ internal class GameServerPool : ReceiveProtocolDispatcher {
 
         if (gameServerInfos.Length <= 0) {
             Logger.Error("No game servers were available to query.");
+            result.OriginalSender.Tell(new SERVER_100_PROTOCOL.MSG_SERVERINFO());
+
             return;
         }
 

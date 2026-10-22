@@ -97,6 +97,11 @@ internal static class CombatWards {
                 continue;
             }
 
+            // Type conversion wards change the school only, never the amount.
+            if (ward.m_effectType == kSpellEffects.kModifyIncomingDamageType) {
+                continue;
+            }
+
             var damageChange = ward.m_effectParam / 100.0f;
             initialDamage = (int) Math.Floor(initialDamage * (1 + damageChange));
         }

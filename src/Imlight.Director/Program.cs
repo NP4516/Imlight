@@ -37,7 +37,7 @@
  *
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 10/10/2026
 */
 
 using System;
@@ -47,8 +47,10 @@ using System.Globalization;
 using System.IO;
 using Akka.Actor;
 using Imlight.Common;
+using Imlight.CoreLib.Auth;
 using Imlight.CoreLib.Login;
 using Imlight.CoreLib.Patch;
+using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData;
 using Imlight.CoreLib.WizardData.Databases;
@@ -99,6 +101,13 @@ internal static class Program {
         ConfigurationManager.Settings["Database.AdminAccountPassword"].AsString();
 
     private static void Main() {
+        // =============================================================
+        // THREAD POOL
+        // =============================================================
+        // Sessions block threads on actor asks while connecting and disconnecting, so a burst of
+        // zone changes must not wait on the pool's slow ramp-up.
+        _ = ThreadPool.SetMinThreads(workerThreads: 200, completionPortThreads: 200);
+
         // =============================================================
         // TIDBITS
         // =============================================================
@@ -154,6 +163,14 @@ internal static class Program {
         CreateEmbeddedDatabaseAccounts();
 
         OnlinePlayerCollection.Clear();
+        LoginWarmup.Run();
+
+        // The login and game servers accept no connection until everything above is done.
+        if (!StartListening(loginServer)) {
+            Environment.ExitCode = 1;
+
+            return;
+        }
 
         // Keep program busy with a while loop.
         Logger.Information("Imlight may now be connected to.");
@@ -162,6 +179,22 @@ internal static class Program {
             Thread.Sleep(300000);
 
             Logger.Information("Still alive..");
+        }
+    }
+
+    private static bool StartListening(IActorRef loginServer) {
+        try {
+            var message = new SERVER_100_PROTOCOL.MSG_STARTLISTENING();
+            _ = loginServer
+                .Ask<SERVER_100_PROTOCOL.MSG_STARTLISTENING_COMPLETE>(message, Server.StartListeningTimeout)
+                .GetAwaiter()
+                .GetResult();
+
+            return true;
+        } catch (Exception ex) {
+            Logger.Fatal("The login and game servers did not start listening. {Exception}", Logger.Args(ex));
+
+            return false;
         }
     }
 

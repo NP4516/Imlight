@@ -17,6 +17,9 @@
 */
 
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
@@ -27,6 +30,7 @@ using Imlight.CoreLib.WizardData.Models.Player;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Linq;
 using Raven.Client.Documents.Session;
+using Raven.Client.Exceptions;
 
 namespace Imlight.CoreLib.WizardData.Collections;
 
@@ -50,6 +54,11 @@ public static class WizardCollection {
 
     private static readonly TimeSpan s_nonStaleWaitTimeout
         = TimeSpan.FromSeconds(ConfigurationManager.Settings["Database.DatabaseWaitForNonStaleResultsTimeout"].AsByte(5));
+
+    private static readonly TimeSpan s_loginNonStaleWaitTimeout
+        = s_nonStaleWaitTimeout < TimeSpan.FromSeconds(1) ? s_nonStaleWaitTimeout : TimeSpan.FromSeconds(1);
+
+    private static readonly ConcurrentDictionary<ulong, string> s_documentIdByCharId = new();
 
     static WizardCollection()
         => s_store = PlayerDatabase.Instance.Store;
@@ -77,7 +86,8 @@ public static class WizardCollection {
     private static bool UpdateCharacter(ulong charId, Action<Wizard> update) {
         return WithWriteLane(charId, () => {
             using var session = s_store.OpenSession();
-            var existingCharacter = GetCharacterByCharId(session, charId);
+            var existingCharacter = LoadCharacterByDocumentId(session, charId)
+                ?? GetCharacterByCharId(session, charId);
             if (existingCharacter is null) {
                 return false;
             }
@@ -107,6 +117,7 @@ public static class WizardCollection {
             metadata[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
 
             session.SaveChanges();
+            s_documentIdByCharId[character.CharId] = session.Advanced.GetDocumentId(character);
 
             return true;
         });
@@ -133,6 +144,7 @@ public static class WizardCollection {
 
             session.Delete(character);
             session.SaveChanges();
+            s_documentIdByCharId.TryRemove(id, out _);
 
             return true;
         });
@@ -176,16 +188,15 @@ public static class WizardCollection {
     /// to the account.</param>
     /// <returns>The character with the specified account ID, or null if not found.</returns>
     public static Wizard[] LoadWizardsOntoAccount(ulong accountId, ref Account account) {
+        var stopwatch = Stopwatch.StartNew();
         using var session = s_store.OpenSession();
 
-        var characters = session.Query<Wizard>(collectionName: CollectionName)
-            .Customize(query => query.WaitForNonStaleResults(s_nonStaleWaitTimeout))
-            .Where(x => x.AccountId == accountId)
-            .ToList();
+        var characters = QueryWizardsOfAccount(session, accountId);
 
         for (var i = 0; i < characters.Count; i++) {
             characters[i].Account = account;
             account.Characters.Add(characters[i]);
+            s_documentIdByCharId[characters[i].CharId] = session.Advanced.GetDocumentId(characters[i]);
         }
 
         // Load all of the characters. We must do this here because
@@ -194,6 +205,36 @@ public static class WizardCollection {
         for (var i = 0; i < characters.Count; i++) {
             characters[i] = LoadWizard(characters[i]);
         }
+
+        Logger.Debug("Loaded {Count} characters of account {AccountId} in {Elapsed} ms.",
+            Logger.Args(characters.Count, accountId, stopwatch.ElapsedMilliseconds));
+
+        return [.. characters];
+    }
+
+    /// <summary>
+    /// Loads all characters of an account with only what the character list shows: the character document
+    /// and its equipped items. Reagents, relationships, dynamods and quests stay unloaded, and
+    /// <c>AfterDatabaseLoad</c> does not run.
+    /// </summary>
+    /// <param name="accountId">The account ID of the characters to retrieve.</param>
+    /// <param name="account">The account the characters are added to.</param>
+    /// <returns>The characters that were added to the account.</returns>
+    public static Wizard[] LoadWizardsForCharacterList(ulong accountId, ref Account account) {
+        var stopwatch = Stopwatch.StartNew();
+        using var session = s_store.OpenSession();
+
+        var characters = QueryWizardsOfAccount(session, accountId);
+
+        for (var i = 0; i < characters.Count; i++) {
+            characters[i].Account = account;
+            account.Characters.Add(characters[i]);
+            s_documentIdByCharId[characters[i].CharId] = session.Advanced.GetDocumentId(characters[i]);
+            LoadEquippedItems(session, characters[i]);
+        }
+
+        Logger.Debug("Loaded {Count} characters of account {AccountId} for the character list in {Elapsed} ms.",
+            Logger.Args(characters.Count, accountId, stopwatch.ElapsedMilliseconds));
 
         return [.. characters];
     }
@@ -498,21 +539,51 @@ public static class WizardCollection {
             dbWizard.QuestBehavior = wizard.QuestBehavior);
     }
 
-    private static Wizard LoadWizard(Wizard wizard) {
-        using var session = s_store.OpenSession();
+    private static List<Wizard> QueryWizardsOfAccount(IDocumentSession session, ulong accountId) {
+        try {
+            return session.Query<Wizard>(collectionName: CollectionName)
+                .Customize(query => query.WaitForNonStaleResults(s_loginNonStaleWaitTimeout))
+                .Where(x => x.AccountId == accountId)
+                .ToList();
+        } catch (Exception ex) when (ex is TimeoutException or RavenTimeoutException) {
+            Logger.Warning("The Wizards index was still stale after {Seconds} s, listing the characters of account {AccountId} as it is.",
+                Logger.Args(s_loginNonStaleWaitTimeout.TotalSeconds, accountId));
 
+            return session.Query<Wizard>(collectionName: CollectionName)
+                .Where(x => x.AccountId == accountId)
+                .ToList();
+        }
+    }
+
+    private static void LoadEquippedItems(IDocumentSession session, Wizard wizard) {
+        if (wizard.EquipmentBehavior.EquippedItemIds is not { Count: > 0 }) {
+            wizard.EquipmentBehavior.EquippedItems = [];
+
+            return;
+        }
+
+        var items = session.Query<WizClientObjectItem>(collectionName: WizardItemCollection.CollectionName)
+            .Where(x => x.m_characterId == wizard.CharId)
+            .ToList();
+        wizard.EquipmentBehavior.EquippedItems = [.. items
+            .Where(i => wizard.EquipmentBehavior.EquippedItemIds
+            .Any(e => i.m_globalID == e))
+        ];
+    }
+
+private static Wizard LoadWizard(Wizard wizard) {
+        using var session = s_store.OpenSession();
         // `Wizard` only keeps track of the IDs of the items in the inventory.
         // The actual items are stored in the `WizClientObjectItem` collection.
         // Load the items in the inventory.
         var items = session.Query<WizClientObjectItem>(collectionName: WizardItemCollection.CollectionName)
             .Where(x => x.m_characterId == wizard.CharId)
             .ToList();
-
         wizard.InventoryBehavior.Items = [.. items
             .Where(i => wizard.InventoryBehavior.InventoryItemIds
             .Contains(i.m_globalID))
         ];
-
+  
         // Load the character's equipment.
         // The equipped items are stored as global IDs in the character's EquipmentBehavior.
         // Find any items in the inventory that match the equipped item IDs.
@@ -520,11 +591,12 @@ public static class WizardCollection {
             .Where(i => wizard.EquipmentBehavior.EquippedItemIds
             .Any(e => i.m_globalID == e))
         ];
-
+  
         // Synchronize active elixir behaviors with their remaining playtime seconds from SlotList.
-        wizard.EquipmentBehavior.SyncActiveElixirTimes();
-
+        wizard.EquipmentBehavior?.SyncActiveElixirTimes();
+  
         // Load the character's snacks.
+        wizard.PetSnackBehavior ??= new();
         if (WizardPetSnackCollection.TryGetWizardSnackBag(wizard.CharId, out var snacks)) {
             wizard.PetSnackBehavior.Snacks = snacks;
         }
@@ -532,19 +604,21 @@ public static class WizardCollection {
             wizard.PetSnackBehavior.Snacks = [];
         }
         wizard.PetSnackBehavior.SnackItemIds = wizard.PetSnackBehavior.Snacks.Select(s => (ulong) s.m_globalID).ToList();
-
+  
         // Load the character's reagents.
+        wizard.AlchemyBehavior ??= new();
         if (WizardReagentCollection.TryGetWizardReagentBag(wizard.CharId, out var reagents)) {
             wizard.AlchemyBehavior.Reagents = reagents;
         }
         else {
             wizard.AlchemyBehavior.Reagents = [];
         }
+  
         wizard.AlchemyBehavior.ReagentItemIds = wizard.AlchemyBehavior.Reagents.Select(r => (ulong) r.m_globalID).ToList();
-
+  
         // Migrate any snacks or reagents mistakenly placed in InventoryBehavior / WizardItemCollection.
         MigrateMisplacedInventoryItems(wizard);
-
+  
         // The friends list is expanded to include a 'relationship' model
         // which helps keep track of the relationship between two players for moderation purposes.
         // `Wizard` only keeps track of the IDs of the relationships.
@@ -555,14 +629,14 @@ public static class WizardCollection {
             .ToList();
         wizard.FriendsBehavior ??= new();
         wizard.FriendsBehavior.Relationships = relationships;
-
+  
         // Load character dynamic modifications.
         var dynamods = session
             .Query<DynamodSet>(collectionName: DynamodCollection.CollectionName)
             .Where(d => d.CharId == wizard.CharId)
             .ToList();
         wizard.DynamodSet = dynamods.FirstOrDefault() ?? new DynamodSet(wizard.CharId);
-
+  
         // Load the actual quests the character has.
         if (wizard.QuestBehavior != null) {
             var currentQuestIDs = wizard.QuestBehavior.CurrentQuestIDs;
@@ -570,14 +644,12 @@ public static class WizardCollection {
                 .Query<QuestInstance>(collectionName: QuestInstanceCollection.CollectionName)
                 .Where(q => q.OwnerCharId == wizard.CharId)
                 .ToList();
-
             wizard.QuestBehavior.CurrentQuestInstances = myQuests;
         }
-
+  
         // The wizard may still have some initialization to do. Inform the wizard
         // that their data has been loaded from the database.
         wizard.AfterDatabaseLoad();
-
         return wizard;
     }
 
@@ -612,6 +684,25 @@ public static class WizardCollection {
     private static Wizard GetCharacterByCharId(IDocumentSession session, ulong charId)
         => session.Query<Wizard>(collectionName: CollectionName)
             .Customize(query => query.WaitForNonStaleResults(s_nonStaleWaitTimeout))
-            .FirstOrDefault(character => character.CharId == charId);
+            .FirstOrDefault(c => c.CharId == charId);
+        if (character is not null) {
+            s_documentIdByCharId[charId] = session.Advanced.GetDocumentId(character);
+        }
+
+        return character;
+    }
+
+    private static Wizard LoadCharacterByDocumentId(IDocumentSession session, ulong charId) {
+        if (!s_documentIdByCharId.TryGetValue(charId, out var documentId)) {
+            return null;
+        }
+
+        var character = session.Load<Wizard>(documentId);
+        if (character is null) {
+            s_documentIdByCharId.TryRemove(charId, out _);
+        }
+
+        return character;
+    }
 
 }

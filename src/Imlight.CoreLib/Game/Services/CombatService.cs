@@ -37,7 +37,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 08/19/2026
+ * Last Updated: 10/09/2026
  */
 
 using System;
@@ -119,6 +119,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]
     private void ReceiveCombatDefeat(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) {
         GetActiveWizard().IsInDuel = false;
+        _currentDuelActor = null;
         EquipMountSubtle();
 
         // We've fled or have been defeated in this duel. Send us back to the world hub.
@@ -129,6 +130,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
     private void ReceiveCombatVictory(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) {
         GetActiveWizard().IsInDuel = false;
+        _currentDuelActor = null;
         EquipMount();
         SetNoAggroGrace();
 
@@ -224,7 +226,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE))]
     private void ReceiveCombatMove(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE message) {
         if (_currentDuelActor == null) {
-            throw new Exception("Combat move received without a duel actor.");
+            // A move can arrive after the duel has ended (e.g. COMBATWIN or COMBATDEFEAT already cleared it).
+            Logger.Debug("Session {SessionId} sent a combat move with no active duel; dropping it.",
+                Logger.Args(SessionActor.SessionID));
+
+            return;
         }
 
         // The spell target given by the client is logarithmic. We need to convert it to a linear scale.
@@ -318,9 +324,10 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
         var item = wizEquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount);
 
-        SendEquipItem(item, "Mount");
         SendAddEffects(addedEffects);
+        BroadcastEquipItem(item);
         _cachedMountId = 0;
+        SyncPetForMount();
     }
 
     private void EquipMountSubtle() {
@@ -331,12 +338,26 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
 
         var wizard = GetActiveWizard();
-        if (!wizard.InventoryToEquipmentTransfer(_cachedMountId, out var _, out var _)) {
+        if (!wizard.InventoryToEquipmentTransfer(_cachedMountId, out var addedEffects, out var _)) {
             Logger.Warning("Equip failed on item {0}", Logger.Args(_cachedMountId));
             return;
         }
 
+        var item = wizard.EquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount);
+
+        SendAddEffects(addedEffects);
+        if (item != null) {
+            BroadcastEquipItem(item);
+        }
+
         _cachedMountId = 0;
+        SyncPetForMount();
+    }
+
+    private void SyncPetForMount() {
+        if (EquipmentService.HidePetWhileMounted) {
+            SessionActor.ActorRef.Tell(new SERVICE_101_PROTOCOL.MSG_SYNC_PET_FOR_MOUNT());
+        }
     }
 
     private void UnEquipMount() {
@@ -361,18 +382,12 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             return;
         }
 
-        SendUnequipItem("Mount", slot, _cachedMountId);
         SendRemoveEffects(removedEffects);
+        BroadcastUnequipItem(slot);
+        SyncPetForMount();
     }
 
-    private void SendEquipItem(WizClientObjectItem item, string slotName) {
-        // Confirm to the player that we've equipped their item server side.
-        SendToSocket(new GAME_5_PROTOCOL.MSG_EQUIPITEM() {
-            ItemID = item.m_globalID,
-            SlotName = slotName,
-            IsEquip = 1
-        });
-
+    private void BroadcastEquipItem(WizClientObjectItem item) {
         // Serialize item and broadcast equip action to other players.
         var pubItem = ItemHelper.GetPublicItem(item);
 
@@ -388,14 +403,16 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     }
 
     private void SendUnequipItem(ByteString slotName, byte slot, ulong itemId) {
-        // This one goes to the client.
         SendToSocket(new GAME_5_PROTOCOL.MSG_EQUIPITEM() {
             ItemID = itemId,
             SlotName = slotName,
             IsEquip = 0
         });
 
-        // This one goes to the zone.
+        BroadcastUnequipItem(slot);
+    }
+
+    private void BroadcastUnequipItem(byte slot) {
         ZoneBroadcast(new GAME_5_PROTOCOL.MSG_EQUIPMENTBEHAVIOR_PUBLICUNEQUIPITEM() {
             GlobalID = GetActiveGameObject().m_globalID,
             IndexToRemove = slot

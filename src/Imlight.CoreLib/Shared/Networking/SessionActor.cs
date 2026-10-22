@@ -37,13 +37,15 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 06/27/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Sockets;
+using System.Threading;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Imcodec.MessageLayer;
 using Imlight.Common;
@@ -61,6 +63,10 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
 
     private readonly byte _serviceRetryCount                 = ConfigurationManager.Settings["Advanced.SessionActorServiceRetryCount"].AsByte();
     private readonly byte _serviceTimeRangeRetryInSeconds    = ConfigurationManager.Settings["Advanced.SessionActorServiceRangeRetry"].AsByte();
+
+    private static readonly TimeSpan s_clientCloseTimeout    = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan s_askTimeout            = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan s_serverAskTimeout      = TimeSpan.FromSeconds(60);
 
     public ushort SessionID                                  { get; }
     public uint OfferTime                                    { get; set; }
@@ -84,6 +90,9 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     private IActorRef _socketListenerRef;
     private IActorRef _socketSenderRef;
     private bool _isDisposed;
+    private bool _stoppedByStrategy;
+    private bool _isDeallocated;
+    private ICancelable _clientCloseTimer;
 
     // ctor
     public SessionActor(Socket socket, ushort sessionId, IActorRef server, IActorRef actorFactoryRef = null) {
@@ -100,7 +109,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
         else {
             // Fallback for callers that don't provide the ref.
             var query = new SERVER_100_PROTOCOL.MSG_QUERYACTORFACTORY();
-            this._actorFactoryRef = server.Ask<SERVER_100_PROTOCOL.MSG_ACTORFACTORYINFO>(query)
+            this._actorFactoryRef = server.Ask<SERVER_100_PROTOCOL.MSG_ACTORFACTORYINFO>(query, s_askTimeout)
                 .Result
                 .Reference;
         }
@@ -129,7 +138,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     /// </summary>
     public void Dequeue() {
         // Send the dequeue message to the socket.
-        _socketListenerRef.Tell(CachedDequeueMessage);
+        ActorRef.Tell(CachedDequeueMessage);
     }
 
     /// <summary>
@@ -141,7 +150,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
             SessionActor = this
         };
 
-        var rsp = ServerRef.Ask<SERVER_100_PROTOCOL.MSG_PLAYERENQUEUEDRSP>(msg)
+        var rsp = ServerRef.Ask<SERVER_100_PROTOCOL.MSG_PLAYERENQUEUEDRSP>(msg, s_askTimeout)
             .Result;
 
         return rsp;
@@ -157,7 +166,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
             SessionActor = this
         };
 
-        var rsp = serverRef.Ask<IMessage>(msg)
+        var rsp = serverRef.Ask<IMessage>(msg, s_askTimeout)
             .Result;
 
         return rsp;
@@ -203,7 +212,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
                 }
 
                 try {
-                    return handler.Ask<T>(msg, timeout: TimeSpan.FromSeconds(20)).Result;
+                    return handler.Ask<T>(msg, timeout: s_askTimeout).Result;
                 }
                 catch (Exception ex) {
                     Logger.Error("SessionActor service attempted to ask another service with {0}, but the timeout " +
@@ -227,7 +236,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     public T AskServer<T>(IServerMessage msg)
         where T : IServerMessage {
         if (ServerRef is not null) {
-            return ServerRef.Ask<T>(msg).Result;
+            return ServerRef.Ask<T>(msg, s_serverAskTimeout).Result;
         }
 
         throw new SessionFatalException($"SessionActor [{SessionID}] contained a null server reference!");
@@ -264,22 +273,20 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     /// <summary>
     /// Disposes of the SessionActor.
     /// </summary>
-    public void Dispose() {
+    public void Dispose() => Dispose("shutdown");
+
+    private void Dispose(string reason, bool waitForClientClose = false) {
         // Avoid duplicate Dispose calls.
         if (_isDisposed) {
+            // A close that arrives while a logout waits for the client (a kick, a shutdown, the socket closing)
+            // ends the session right away.
+            StopWaitingForClientClose(reason);
+
             return;
         }
 
-        Logger.Debug("SessionActor {Id} disposing.", Logger.Args(SessionID));
+        Logger.Debug("SessionActor {Id} disposing, reason={Reason}.", Logger.Args(SessionID, reason));
         _isDisposed = true;
-
-        // Send a message to the server to deallocate this SessionActor.
-        var msg = new SERVER_100_PROTOCOL.MSG_DEALLOCATESOCKET() {
-            Id = SessionID,
-            Socket = this._socket,
-            Ip = this.RemoteIp
-        };
-        ServerRef.Tell(msg);
 
         // Don't preemptively close the socket; the client disconnects itself
         // after receiving the final message (e.g. MSG_CHARACTERSELECTED).
@@ -291,7 +298,29 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
 
         Sender.Tell("DoneDisposing");
 
+        if (waitForClientClose) {
+            // The client closes its end after the logout echo. The timer only covers a client that never does.
+            Logger.Debug("SessionActor {Id} waiting up to {Seconds}s for the client to close.",
+                Logger.Args(SessionID, s_clientCloseTimeout.TotalSeconds));
+            _clientCloseTimer = Context.System.Scheduler.ScheduleTellOnceCancelable(s_clientCloseTimeout, Self, "ClientCloseTimeout", Self);
+
+            return;
+        }
+
         // Dispose self.
+        ActorRef.Tell(PoisonPill.Instance);
+    }
+
+    private void StopWaitingForClientClose(string reason) {
+        // Also reached from other threads through the public Dispose, so only the actor reference is used.
+        var timer = Interlocked.Exchange(ref _clientCloseTimer, null);
+        if (timer is null) {
+            return;
+        }
+
+        timer.Cancel();
+
+        Logger.Debug("SessionActor {Id} closing after logout, reason={Reason}.", Logger.Args(SessionID, reason));
         ActorRef.Tell(PoisonPill.Instance);
     }
 
@@ -310,22 +339,38 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
                     case SessionFatalException tex: {
                             Logger.Error("SessionActor {Sid} service {Class} L:{LineNumber} threw fatal exception: " +
                                       "{Message}", Logger.Args(SessionID, tex.CallingClass, tex.LineNumber, tex.Message));
+                            _stoppedByStrategy = true;
                             return Directive.Stop;
                         }
                     default:
                         Logger.Error("SessionActor {Sid} service {Class} L:{LineNumber} threw unknown exception: " +
                                      "{Message}. Exception details: {Exception}. Inner exception: {InnerException}",
-                                     Logger.Args(SessionID, ex.TargetSite.DeclaringType, ex.TargetSite.Name, ex.Message, ex, ex.InnerException));
-                        return Directive.Stop;
+                                     Logger.Args(SessionID, ex.TargetSite?.DeclaringType, ex.TargetSite?.Name, ex.Message, ex, ex.InnerException));
+                        return Directive.Resume;
                 }
             }
         );
+
+    protected override void PostStop() {
+        // The server frees the session id on this message, so it goes out only once the actor is gone.
+        if (!_isDeallocated) {
+            _isDeallocated = true;
+
+            ServerRef.Tell(new SERVER_100_PROTOCOL.MSG_DEALLOCATESOCKET() {
+                Id = SessionID,
+                Socket = this._socket,
+                Ip = this.RemoteIp
+            });
+        }
+
+        base.PostStop();
+    }
 
     protected override void PreStart() {
         // Ask the ActorFactory for this actor's message services.
         var msg = new SERVICE_101_PROTOCOL.MSG_QUERYUNLOADEDSERVICES();
         var services = _actorFactoryRef
-            .Ask<SERVICE_101_PROTOCOL.MSG_SERVICESLIST>(msg)
+            .Ask<SERVICE_101_PROTOCOL.MSG_SERVICESLIST>(msg, s_askTimeout)
             .Result
             .Services;
 
@@ -342,7 +387,9 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
 
     private void ConfigureReceivers() {
         // Specific message handlers.
-        Receive<string>(x => x == "Close", x => Dispose());
+        Receive<string>(x => x == "Close", x => Dispose(GetCloseReason()));
+        Receive<string>(x => x == "CloseAfterClient", x => Dispose("client logout", waitForClientClose: true));
+        Receive<string>(x => x == "ClientCloseTimeout", x => StopWaitingForClientClose("client did not close"));
         Receive<string>(x => x == "Identify", x => Sender.Tell(this));
         Receive<SERVICE_101_PROTOCOL.MSG_GETALLSERVICES>(InitializeActiveSession);
         Receive<SERVER_100_PROTOCOL.MSG_PING>(x => this.Ping = x.Ping);
@@ -370,6 +417,12 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     }
 
     private void InitializeActiveSession(SERVICE_101_PROTOCOL.MSG_GETALLSERVICES message) {
+        if (SessionValid) {
+            Logger.Debug("SessionActor {Id} ignored a repeated session initialization.", Logger.Args(SessionID));
+
+            return;
+        }
+
         SessionValid = true;
 
         Logger.Debug("SessionActor {Id} initialized with all services.", Logger.Args(SessionID));
@@ -377,6 +430,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
         foreach (var preInitMessage in _preInitMessages) {
             HandlePacket(preInitMessage);
         }
+        _preInitMessages.Clear();
     }
 
     private void SetServices(List<Type> services) {
@@ -394,7 +448,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
             // We've created the service as a child actor. Problem is, we need to know the actual class
             // identity to use it later. To do that, we'll ask the actor to identify itself.
             var msg = new SERVICE_101_PROTOCOL.MSG_QUERYMESSAGESERVICEIDENTITY();
-            var identity = childRef.Ask<SERVICE_101_PROTOCOL.MSG_MESSAGESERVICEIDENTITY>(msg)
+            var identity = childRef.Ask<SERVICE_101_PROTOCOL.MSG_MESSAGESERVICEIDENTITY>(msg, s_askTimeout)
                 .Result
                 .Service;
             _services.Add(childRef, identity);
@@ -411,10 +465,28 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     }
 
     private void ReceiveException(Exception ex) {
-        Dispose();
+        Dispose("exception");
+    }
+
+    private string GetCloseReason() {
+        if (_stoppedByStrategy) {
+            return "AllForOne";
+        }
+
+        // A close sent by a service names it (ClientService is a client logout); any other sender is a socket actor.
+        return _services.TryGetValue(Sender, out var service)
+            ? $"{service.GetType().Name} requested close"
+            : "socket closed";
     }
 
     private void HandlePacket(IMessage packet) {
+        if (_isDisposed) {
+            Logger.Verbose("SessionActor {Id} dropped {MessageName}: the session is closing.",
+                Logger.Args(SessionID, packet.GetType().Name));
+
+            return;
+        }
+
         // If the session still is not valid (the client hasn't completed the session handshake)
         // we'll cache all non-control messages for later processing.
         if (!SessionValid && packet.ServiceId != 0) {
@@ -439,19 +511,22 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     private void SendPreDisposeToServices() {
         // Iterate through each service and send them a pre-dispose message. This lets a service gracefully handle
         // the dispose in the case that it requires another service to still be active.
+        var pendingReplies = new List<Task>();
         foreach (var (actorRef, type) in _services) {
             // If the service doesn't have a pre-dispose message handler, we'll just skip it.
             if (!type.MessageHandlers.ContainsKey(typeof(SERVICE_101_PROTOCOL.MSG_PREDISPOSE))) {
                 continue;
             }
 
-            // Await a reply. This is a blocking call to ensure that the service gracefully disposes.
-            try {
-                actorRef.Ask(new SERVICE_101_PROTOCOL.MSG_PREDISPOSE(), timeout: TimeSpan.FromSeconds(2)).Wait();
-            }
-            catch {
-                continue;
-            }
+            pendingReplies.Add(actorRef.Ask(new SERVICE_101_PROTOCOL.MSG_PREDISPOSE(), timeout: TimeSpan.FromSeconds(2)));
+        }
+
+        // Await the replies under one shared deadline. This is a blocking call so the services dispose gracefully.
+        try {
+            Task.WaitAll(pendingReplies.ToArray(), 2000);
+        }
+        catch (AggregateException) {
+            // A service that failed or timed out must not keep the others from being disposed.
         }
     }
 

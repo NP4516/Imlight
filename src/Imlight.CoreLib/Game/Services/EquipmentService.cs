@@ -82,9 +82,13 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         versionable: false,
         behaviors: SerializerFlags.None
     );
+    private static readonly bool s_hidePetWhileMounted
+        = ConfigurationManager.Settings["Character.HidePetWhileMounted"].AsBool();
     private ulong _summonedPetId;
     private int _secondsSinceLastElixirSave;
     private bool _isElixirTickerStarted;
+
+    internal static bool HidePetWhileMounted => s_hidePetWhileMounted;
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new EquipmentService(parentActor));
@@ -192,7 +196,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         // A mount equipped indoors is dismounted right away; the reconcile no-ops in the open world.
         if (Enum.TryParse<EquipmentSlotType>(message.SlotName, true, out var equippedSlot)) {
             if (equippedSlot == EquipmentSlotType.Mount) {
-                SessionActor.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ENFORCEINTERIORMOUNT());
+              SessionActor.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ENFORCEINTERIORMOUNT());
+              if (s_hidePetWhileMounted) {
+                  DismissPetEntity();
+              }
             }
             else if (equippedSlot == EquipmentSlotType.PIITeleportEffect) {
                 ZoneBroadcast(new WIZARD2_53_PROTOCOL.MSG_UPDATETELEPORTEFFECT {
@@ -274,6 +281,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             WizardCollection.UpdateCharacterInteriorStowedMount(wizard);
         }
 
+        if (s_hidePetWhileMounted && (EquipmentSlotType) slot == EquipmentSlotType.Mount) {
+            SpawnPetEntity();
+        }
+
         if (isPet) {
             DismissPetEntity();
         }
@@ -298,6 +309,12 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
     private void SpawnPetEntity(WizClientObjectItem petItem = null) {
         var zoneActor = SessionActor.GetZoneActor();
         if (zoneActor is null) {
+            return;
+        }
+
+        if (s_hidePetWhileMounted && GetActiveWizard()?.EquipmentBehavior?.GetItemInSlot(EquipmentSlotType.Mount) is not null) {
+            DismissPetEntity();
+
             return;
         }
 
@@ -365,6 +382,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         SpawnPetEntity(equipment.GetItem(message.PetItemId));
     }
 
+    [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_SYNC_PET_FOR_MOUNT))]
+    private void ReceiveSyncPetForMount()
+        => SpawnPetEntity();
+
     private void DismissPetEntity() {
         if (_summonedPetId == 0) {
             return;
@@ -405,6 +426,9 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
                 WizardCollection.UpdateCharacterInteriorStowedMount(wizard);
                 SendUnequipItem("Mount", slot, mount.m_globalID); // drops the model client-side
                 SendRemoveEffects(removedEffects);                // drops the mount speed effect
+                if (s_hidePetWhileMounted) {
+                    SpawnPetEntity();
+                }
             }
             else if (wizard.InteriorStowedMountId != 0) {
                 var gid = wizard.InteriorStowedMountId;
@@ -422,6 +446,9 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
                     SendEquipItem(item, "Mount");
                 }
                 SendAddEffects(addedEffects); // restores the mount speed
+                if (s_hidePetWhileMounted) {
+                    DismissPetEntity();
+                }
             }
         }
         catch (Exception ex) {
