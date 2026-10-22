@@ -362,10 +362,11 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
         public uint SpellTemplateId;
         public string SpellName;
         public bool AtStart;
+        // me (the sender), p1-p4 (circles of the sender's side, in the game's order), e1-e4 (the other side's), all, or null.
         public string Target;
-        // .c1s/.c2s: the game skips the casting animation (CombatAction.m_showCast off).
+        // .c1s/.c2s/.cfs/.cls: the game skips the casting animation (CombatAction.m_showCast off).
         public bool SkipCast;
-        // .c1 f / .c1 l: 'f' casts before anyone's turn this round, 'l' after everyone's; 'n' around the sender's card.
+        // .cf / .cl: 'f' casts before anyone's turn this round, 'l' after everyone's; 'n' (.c1/.c2) around the sender's card.
         public char When = 'n';
         // .c1 e: the spell gets the best enchantment that fits it ([Battle] AutoEnchants).
         public bool Enchant;

@@ -2497,7 +2497,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         }
 
         void Inform(string text) => message.Actor.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE { Message = text });
-        var name = (message.AtStart ? "c1" : "c2") + (message.SkipCast ? "s" : "") + (message.When is 'f' or 'l' ? $" {message.When}" : "");
+        // .cf / .cl (Niduus, 2026-10-22) are the f and l queues; .c1 / .c2 the ones around the caster's card.
+        var name = (message.When switch { 'f' => "cf", 'l' => "cl", _ => message.AtStart ? "c1" : "c2" }) + (message.SkipCast ? "s" : "");
         if (Duel.m_duelPhase != kDuelPhase.kPhase_Planning) {
             Inform($"Wait until it is your turn to pick a card, then try .{name} again.");
 
@@ -2507,6 +2508,17 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         if (message.Announcement is not null) {
             CombatResolver.AddDelayedAnnouncement(subCircle, message.Announcement, message.AtStart, message.When);
             Inform($".{name} ca: \"{message.AnnouncementShown ?? message.Announcement}\" shows before the next spell in that queue.");
+
+            return;
+        }
+
+        // pN / eN on an empty circle or a defeated participant (Niduus, 2026-10-22): say who stands where instead of
+        // casting it on someone else. A repeated spell sends one message per copy, so it is said once.
+        if (TargetProblem(subCircle, message) is { } problem) {
+            if (_lastTargetProblem != (message.Actor, (long) Duel.m_roundNum, problem)) {
+                _lastTargetProblem = (message.Actor, (long) Duel.m_roundNum, problem);
+                Inform(problem);
+            }
 
             return;
         }
@@ -2532,6 +2544,39 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             Logger.Error("Duel {0} | .{1} failed: {2}", Logger.Args(SigilId, name, ex));
         }
     }
+
+    // The last target problem told to a caster, so a repeated spell (.c1 e4 Fire Cat 3) says it once.
+    private (IActorRef Actor, long Round, string Problem) _lastTargetProblem;
+
+    /// <summary>
+    /// Why a .c1/.c2/.cf/.cl pN or eN target can't be hit (an empty circle, or someone defeated that the spell does
+    /// not revive), with who stands on each circle of that side; null when it can.
+    /// </summary>
+    private string TargetProblem(CombatDuelSubCircle caster, COMBAT_106_PROTOCOL.MSG_CHEATDELAYCAST message) {
+        if (Game.Combat.CombatResolver.FreeTargetCircle(caster, message.Target) is not { } circle) {
+            return null;
+        }
+
+        var revive = circle.SlotType == caster.SlotType
+                     && CoreObjectFactory.GetCoreTemplate(message.SpellTemplateId) is SpellTemplate template
+                     && Game.Combat.CombatResolver.IsRevive(template);
+        if (circle.Occupied && circle.AddedToDuel && (circle.IsAlive || revive)) {
+            return null;
+        }
+
+        var letter = message.Target[0];
+        var side = SubCircles.Where(c => c is not null && (c.SlotType == caster.SlotType) == (letter == 'p'))
+            .OrderBy(c => c.SlotIndex).Take(4).ToList();
+        var roster = string.Join(", ", side.Select((c, i) => $"{letter}{i + 1} is " + (!c.Occupied ? "empty"
+            : (c == caster ? "you" : CircleName(c)) + (c.IsAlive ? "" : " (defeated)"))));
+
+        return $"{message.Target} is {(circle.Occupied ? "defeated" : "an empty circle")}, so {message.SpellName} was not queued. {roster}. Use me for yourself.";
+    }
+
+    // Who stands on a circle, for messages.
+    private static string CircleName(CombatDuelSubCircle circle)
+        => circle._wizard?.PlayerNameBehavior?.GetWizardName() is { Length: > 0 } wizard ? wizard
+            : circle.ParticipantObject?.m_debugName is { Length: > 0 } debugName ? debugName : "someone";
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATANNOUNCE))]
     private void ReceiveCheatAnnounce(COMBAT_106_PROTOCOL.MSG_CHEATANNOUNCE message) {
