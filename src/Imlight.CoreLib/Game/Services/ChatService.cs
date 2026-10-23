@@ -100,7 +100,7 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        var player = new PluginPlayer(wizard, SessionActor.ActorRef);
+        var player = PluginPlayer.For(wizard, SessionActor.ActorRef, SessionActor.GetZoneActor());
         if (PluginManager.Events.Fire(new PlayerChatEvent(player, cleanedMessage)).IsCancelled) {
             return;
         }

@@ -51,6 +51,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Zone.Supervisors;
+using Imlight.CoreLib.Plugins;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -123,6 +124,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     private readonly HashSet<GID> _criticalObjectIds = [];
     private bool _isLoading;
     private readonly HashSet<IActorRef> _players = [];
+    private readonly PluginZone _pluginZone;
     private const string IDLE_EXPIRE_TIMER = "instance-idle-expire";
     private const int DEFAULT_INSTANCE_IDLE_MINUTES = 10;
     private readonly List<ZONE_102_PROTOCOL.MSG_PLAYERMOVE> _pendingPlayerMoves = [];
@@ -140,6 +142,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         this.ZonePath = zonePath;
         this._dynamicZoneId = dynamicZoneId;
         this.IsInstance = isInstance;
+        this._pluginZone = new PluginZone(zonePath, isInstance, Self);
         this._isLoading = true;
         this._zoneLoadTimer = new Stopwatch();
 
@@ -169,6 +172,16 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     public static Props Props(string zonePath, uint dynamicZoneId, bool isInstance, InstanceQuestProgress questProgress = null)
         => Akka.Actor.Props.Create(() => new Zone(zonePath, dynamicZoneId, isInstance, questProgress))
             .WithMailbox("akka.actor.mailbox.zone-priority");
+
+    protected override void PreStart() {
+        _pluginZone.Open();
+        base.PreStart();
+    }
+
+    protected override void PostStop() {
+        _pluginZone.Close();
+        base.PostStop();
+    }
 
     protected override void PreRestart(Exception reason, object message) {
         Logger.Error("Zone {ZoneName} restarts for: {Exception}", Logger.Args(ZoneName, reason));
@@ -227,6 +240,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         _players.Add(message.PlayerActor);
+        _pluginZone.AddPlayer(message.Wizard, message.PlayerActor);
         Timers.Cancel(IDLE_EXPIRE_TIMER);
         InformZoneSupervisors(message.PlayerActor, message);
         RestoreRememberedSpawns(message.Wizard);
@@ -256,6 +270,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         // The leaver is counted until the supervisors are told: the Players target is gated on a non-empty set.
         InformZoneSupervisors(message.PlayerActor, message);
         _players.Remove(message.PlayerActor);
+        _pluginZone.RemovePlayer(message.PlayerActor);
         ReleaseObjectIdentifier(message.MobileId);
         ScheduleIdleExpiryIfEmpty();
         Sender.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP());
@@ -570,6 +585,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             }
             else if (pendingEvent is ZONE_102_PROTOCOL.MSG_ADDPLAYER addPlayer) {
                 _players.Add(playerActor);
+                _pluginZone.AddPlayer(addPlayer.Wizard, playerActor);
                 Timers.Cancel(IDLE_EXPIRE_TIMER);
                 InformZoneSupervisors(playerActor, addPlayer);
                 RestoreRememberedSpawns(addPlayer.Wizard);

@@ -46,7 +46,7 @@ public sealed class PlayerChatEvent(IPlayer player, string message) : ImlightEve
 /// <summary>
 /// Fired when a player has been added to a zone: on first login to a wizard, and after every zone change.
 /// </summary>
-public sealed class PlayerZoneEnterEvent(IPlayer player, string zone) : ImlightEvent {
+public sealed class PlayerZoneEnterEvent(IPlayer player, IZone zone) : ImlightEvent {
 
     /// <summary>
     /// The player who entered the zone.
@@ -54,8 +54,8 @@ public sealed class PlayerZoneEnterEvent(IPlayer player, string zone) : ImlightE
     public IPlayer Player { get; } = player;
 
     /// <summary>
-    /// The internal name of the zone.
+    /// The zone the player entered. <see cref="IZone.Players"/> already includes them.
     /// </summary>
-    public string Zone { get; } = zone;
+    public IZone Zone { get; } = zone;
 
 }

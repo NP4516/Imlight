@@ -42,9 +42,9 @@ public interface IPlayer {
     string Name { get; }
 
     /// <summary>
-    /// The internal name of the zone the wizard is in, e.g. <c>WizardCity/WC_Hub</c>.
+    /// The zone the wizard is in, or null while the wizard is between zones.
     /// </summary>
-    string Zone { get; }
+    IZone? Zone { get; }
 
     /// <summary>
     /// Shows a server message to the player. Safe to call from any thread.

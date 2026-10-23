@@ -30,15 +30,24 @@ namespace Imlight.CoreLib.Plugins;
 /// <summary>
 /// Exposes a session's wizard to plugins as an <see cref="IPlayer"/>.
 /// </summary>
-internal sealed class PluginPlayer(Wizard wizard, IActorRef sessionActor) : IPlayer {
+internal sealed class PluginPlayer(Wizard wizard, IActorRef sessionActor, IZone zone) : IPlayer {
 
     public ulong CharacterId => wizard.CharId;
 
     public string Name => wizard.PlayerNameBehavior.GetWizardName();
 
-    public string Zone => wizard.Zone;
+    public IZone Zone => zone;
+
+    internal IActorRef SessionActor => sessionActor;
 
     public void SendMessage(string message)
         => sessionActor.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE { Message = message });
+
+    /// <summary>
+    /// The plugin view of a session, taken from its zone when it is in one.
+    /// </summary>
+    public static IPlayer For(Wizard wizard, IActorRef sessionActor, IActorRef zoneActor)
+        => PluginZone.Of(zoneActor)?.PlayerFor(wizard, sessionActor)
+           ?? new PluginPlayer(wizard, sessionActor, null);
 
 }

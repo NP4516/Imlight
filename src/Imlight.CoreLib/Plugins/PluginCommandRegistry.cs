@@ -80,7 +80,7 @@ internal sealed class PluginCommandRegistry {
             return false;
         }
 
-        var player = new PluginPlayer(context.Character, context.SessionActor);
+        var player = PluginPlayer.For(context.Character, context.SessionActor, context.ZoneActor);
         if (!AuthorityRequester.RequestAuthority(ToAuthLevel(registration.Permission), context.Account, $"Command {name}")) {
             player.SendMessage("You do not have permission to use this command.");
             return true;

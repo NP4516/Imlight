@@ -234,8 +234,10 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
         TellOtherServices(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE());
 
-        var player = new PluginPlayer(_wizard, SessionActor.ActorRef);
-        _ = PluginManager.Events.Fire(new PlayerZoneEnterEvent(player, _wizard.Zone));
+        var player = PluginPlayer.For(_wizard, SessionActor.ActorRef, SessionActor.GetZoneActor());
+        if (player.Zone is not null) {
+            _ = PluginManager.Events.Fire(new PlayerZoneEnterEvent(player, player.Zone));
+        }
 
         // Attach succeeded — remove the fallback registration so stale entries
         // don't accumulate on the GameServer.
