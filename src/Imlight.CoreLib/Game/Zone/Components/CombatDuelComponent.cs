@@ -288,12 +288,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Logger.Args(name, creature.m_templateID.Full, Duel?.m_duelID.Full ?? SigilId, why));
 
         // Battles whose enemies are set (tutorial and scripted fights, a ZoneObjects encounter that gathers its own
-        // minions, a boss fight) take nobody who wanders by, and a wandering boss does not join someone else's fight.
-        if (_tutorialDirector.IsActive || _encounter is not null || _encounterBattleCounted || npc.IsBossMonster
-            || SubCircles.Any(c => c is { Occupied: true, OccupiedTeam: CombatTeam.Monster }
-                                   && IsBossCreature(c.ParticipantObject))) {
+        // minions) take nobody who wanders by, and a wandering boss does not join someone else's fight. A plain boss
+        // fight does take a monster that walks in, as in the game (Niduus, 2026-10-23: a Rotted Fodder walked into the
+        // Harvest Lord's battle and stood there).
+        if (_tutorialDirector.IsActive || _encounter is not null || _encounterBattleCounted || npc.IsBossMonster) {
             Refused(_tutorialDirector.IsActive ? "tutorial battle" : npc.IsBossMonster ? "it is a boss"
-                : _encounter is not null || _encounterBattleCounted ? "the battle has its own minions" : "a boss is in the battle");
+                : "the battle has its own minions");
 
             return;
         }
@@ -372,11 +372,6 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
     }
 
-    private static bool IsBossCreature(CoreObject creature)
-        => creature is not null
-        && CoreObjectFactory.GetCoreTemplate((uint) creature.m_templateID.Full) is GameObjectTemplate template
-        && template.m_behaviors.OfType<NPCBehaviorTemplate>().Any(b => b is not null && b.m_bossMob);
-
     private const string MONSTER_KILLED_EVENT = "Monster_Killed";
 
     internal void ZoneBroadcast(IMessage message) => Entity.ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
@@ -422,6 +417,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // Get the sigil template.
         _sigilTemplate = (CombatSigilTemplate) SigilFactory.GetSigilTemplate(_combatSigilObjectInfo.m_sigilType);
+
+        // A duel circle is always on the floor, not only during a duel (Niduus, 2026-10-23).
+        ShowDuelCircle();
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL))]
@@ -508,7 +506,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void ActivateSigil() {
-        _renderComponent.Enable();
+        // A duel circle is on the floor already.
+        if (!_renderComponent.IsEnabled) {
+            _renderComponent.Enable();
+        }
 
         // Broadcast MSG_DUEL to inform all clients a duel is now active.
         // The live server sends this to enable 3D combat targeting.
@@ -979,6 +980,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         _renderComponent?.Disable();
         Entity.DespawnObject();
+        if (IsDuelCircle) {
+            // Back on the floor once the game has let the battle's circle go.
+            Timers.StartSingleTimer(DUEL_CIRCLE_SHOW_KEY, new ZONE_102_PROTOCOL.MSG_DUELCIRCLETICK { Show = true }, s_showAgainDelay);
+        }
+
         _entitiesInRange.Clear();
         _groupReservations.Clear();
         EndEncounterBattle();
