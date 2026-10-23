@@ -45,7 +45,7 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 10/15/2026
+ * Last Updated: 10/23/2026
  */
 
 using System;
@@ -125,6 +125,8 @@ internal sealed class HouseState {
     internal ulong OwnerCharId => _house.OwnerCharId;
 
     internal string ZoneName => _template.LotZone;
+
+    internal HouseTemplateInfo Template => _template;
 
     internal uint GidBase {
         get {
@@ -394,11 +396,12 @@ internal sealed class HouseState {
     /// </summary>
     /// <param name="itemId">The id of the item to update.</param>
     /// <param name="update">Returns the replacement for the stored item; it must keep the id and the template.</param>
+    /// <param name="save">Writes the house; <c>null</c> writes the house alone.</param>
     /// <returns>
     /// <see cref="HouseEdit.NotFound"/> when the house has no such item or <paramref name="update"/> returns <c>null</c>
     /// or an item of another id or template, <see cref="HouseEdit.SaveFailed"/> when the write failed.
     /// </returns>
-    internal HouseChange TryUpdate(uint itemId, Func<PlacedItem, PlacedItem> update) {
+    internal HouseChange TryUpdate(uint itemId, Func<PlacedItem, PlacedItem> update, Func<House, bool> save = null) {
         lock (_lock) {
             var slot = _slots.FindIndex(candidate => candidate?.Id == itemId);
             if (slot < 0) {
@@ -416,7 +419,7 @@ internal sealed class HouseState {
             var revision = _house.Revision;
             _house.Items[index] = replacement;
             _house.Revision = revision + 1;
-            if (!HouseCollection.Save(_house)) {
+            if (!Persist(save)) {
                 _house.Items[index] = previous;
                 _house.Revision = revision;
 
