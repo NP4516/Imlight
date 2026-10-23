@@ -50,6 +50,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Auth;
 using Imlight.CoreLib.Login;
 using Imlight.CoreLib.Patch;
+using Imlight.CoreLib.Plugins;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData;
@@ -163,6 +164,10 @@ internal static class Program {
 
         OnlinePlayerCollection.Clear();
         LoginWarmup.Run();
+
+        // Plugins subscribe to events here, before any player can connect.
+        PluginManager.LoadAll(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "plugins"));
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => PluginManager.DisableAll();
 
         // The login and game servers accept no connection until everything above is done.
         if (!StartListening(loginServer)) {

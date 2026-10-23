@@ -51,6 +51,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Plugins;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -58,6 +59,7 @@ using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.PluginApi.Events;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -231,6 +233,9 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
                                                    SessionActor.ActorRef));
 
         TellOtherServices(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE());
+
+        var player = new PluginPlayer(_wizard, SessionActor.ActorRef);
+        _ = PluginManager.Events.Fire(new PlayerZoneEnterEvent(player, _wizard.Zone));
 
         // Attach succeeded — remove the fallback registration so stale entries
         // don't accumulate on the GameServer.

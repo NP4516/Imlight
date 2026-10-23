@@ -50,12 +50,14 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Commands;
 using Imlight.CoreLib.Game.Groups;
+using Imlight.CoreLib.Plugins;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.PluginApi.Events;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -95,6 +97,11 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         if (cleanedMessage.StartsWith(CommandPrefix) && account.AuthLevel > AuthLevel.None) {
             SendChatCommand(cleanedMessage, charObj, wizard);
 
+            return;
+        }
+
+        var player = new PluginPlayer(wizard, SessionActor.ActorRef);
+        if (PluginManager.Events.Fire(new PlayerChatEvent(player, cleanedMessage)).IsCancelled) {
             return;
         }
 
