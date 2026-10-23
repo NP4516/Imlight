@@ -36,6 +36,14 @@ internal abstract class CommandProtocol {
     private Dictionary<string, MethodInfo> _commandMethods;
     private bool _hasInitiated;
 
+    internal bool HasCommand(string commandName) {
+        if (!_hasInitiated) {
+            InitiateHandlers();
+        }
+
+        return _commandMethods.ContainsKey(commandName.ToLower());
+    }
+
     internal bool Execute(string commandName, CommandContext context, params object[] parameters) {
         // If we haven't initiated the commands, do so now.
         if (!_hasInitiated) {

@@ -38,6 +38,7 @@
  * Last Updated: 10/23/2026
  */
 
+using Imlight.PluginApi.Commands;
 using Imlight.PluginApi.Events;
 
 namespace Imlight.PluginApi;
@@ -61,6 +62,11 @@ public abstract class ImlightPlugin {
     /// The server's event bus. Subscribe to events here in <see cref="OnEnable"/>.
     /// </summary>
     public IEventBus Events { get; internal set; } = null!;
+
+    /// <summary>
+    /// Registers this plugin's chat commands. Register them here in <see cref="OnEnable"/>.
+    /// </summary>
+    public ICommandRegistry Commands { get; internal set; } = null!;
 
     /// <summary>
     /// Called at boot, before the servers accept connections.

@@ -56,6 +56,8 @@ public static class PluginManager {
 
     internal static PluginEventBus Events { get; } = new();
 
+    internal static PluginCommandRegistry Commands { get; } = new();
+
     /// <summary>
     /// Loads every plugin DLL in the directory, creating it if needed, and enables each plugin.
     /// A plugin that fails is logged and skipped.
@@ -97,12 +99,15 @@ public static class PluginManager {
     private static void Enable(ImlightPlugin plugin) {
         try {
             plugin.Events = Events;
+            plugin.Commands = Commands.For(plugin);
             plugin.OnEnable();
             s_plugins.Add(plugin);
 
             Logger.Information("Enabled plugin {Name} {Version}.", Logger.Args(plugin.Name, plugin.Version));
         }
         catch (Exception ex) {
+            // Don't leave a half-enabled plugin's commands reachable.
+            Commands.RemoveAll(plugin);
             Logger.Error("Plugin {Type} failed to enable: {Exception}", Logger.Args(plugin.GetType().Name, ex));
         }
     }

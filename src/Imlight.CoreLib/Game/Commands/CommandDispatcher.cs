@@ -51,6 +51,7 @@ using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
+using Imlight.CoreLib.Plugins;
 
 namespace Imlight.CoreLib.Game.Commands;
 
@@ -105,6 +106,14 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
         return protocols;
     }
 
+    /// <summary>
+    /// True if a server command group, or an ungrouped server command, is called <paramref name="name"/>.
+    /// </summary>
+    internal static bool IsBuiltInCommand(string name) {
+        name = name.ToLower();
+        return s_protocols.Values.Any(x => string.IsNullOrEmpty(x.Group) ? x.HasCommand(name) : x.Group.Equals(name, StringComparison.OrdinalIgnoreCase));
+    }
+
     private void ExecuteCommand(string commandName, CommandContext context) {
         commandName = commandName.Trim();
 
@@ -118,6 +127,11 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
 
         var protocolName = split[0].ToLower();
         var command = split.Length > 1 ? split[1].ToLower() : "";
+
+        // Plugin commands can't collide with server commands, so checking them first never shadows one.
+        if (PluginManager.Commands.TryExecute(protocolName, [.. split.Skip(1)], context)) {
+            return;
+        }
 
         if (s_protocols.TryGetValue(protocolName, out var protocol)) {
             // Create new parameters with the first two words removed.
