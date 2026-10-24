@@ -47,8 +47,161 @@ public interface IPlayer {
     IZone? Zone { get; }
 
     /// <summary>
+    /// The wizard's level.
+    /// </summary>
+    int Level { get; }
+
+    /// <summary>
+    /// The wizard's total experience points.
+    /// </summary>
+    int Experience { get; }
+
+    /// <summary>
+    /// The gold the wizard is carrying.
+    /// </summary>
+    int Gold { get; }
+
+    /// <summary>
+    /// The most gold the wizard can carry.
+    /// </summary>
+    int MaxGold { get; }
+
+    /// <summary>
+    /// The wizard's current health.
+    /// </summary>
+    int Health { get; }
+
+    /// <summary>
+    /// The wizard's maximum health.
+    /// </summary>
+    int MaxHealth { get; }
+
+    /// <summary>
+    /// The wizard's current mana.
+    /// </summary>
+    int Mana { get; }
+
+    /// <summary>
+    /// The wizard's maximum mana.
+    /// </summary>
+    int MaxMana { get; }
+
+    /// <summary>
+    /// The wizard's current pet energy.
+    /// </summary>
+    int Energy { get; }
+
+    /// <summary>
+    /// The wizard's maximum pet energy.
+    /// </summary>
+    int MaxEnergy { get; }
+
+    /// <summary>
+    /// The wizard's unspent training points.
+    /// </summary>
+    int TrainingPoints { get; }
+
+    /// <summary>
+    /// The wizard's cantrip level.
+    /// </summary>
+    int CantripLevel { get; }
+
+    /// <summary>
+    /// The potion charge the wizard has, in potions.
+    /// </summary>
+    float PotionCharge { get; }
+
+    /// <summary>
+    /// The most potion charge the wizard can hold.
+    /// </summary>
+    float PotionMax { get; }
+
+    /// <summary>
     /// Shows a server message to the player. Safe to call from any thread.
     /// </summary>
     void SendMessage(string message);
+
+    // Every setter below saves the change and updates the player's client.
+
+    /// <summary>
+    /// Sets the wizard's level, which resets their stats for that level and heals them to full.
+    /// </summary>
+    /// <remarks>
+    /// Applied by the player's session after this returns, so <see cref="Level"/> may not change right away.
+    /// </remarks>
+    /// <exception cref="System.ArgumentOutOfRangeException">The level is below 1 or above the server's max level.</exception>
+    void SetLevel(int level);
+
+    /// <summary>
+    /// Gives the wizard experience points, levelling them up if they reach the next level.
+    /// </summary>
+    /// <remarks>
+    /// Applied by the player's session after this returns, so <see cref="Experience"/> may not change right away.
+    /// </remarks>
+    /// <exception cref="System.ArgumentOutOfRangeException">The amount is not positive.</exception>
+    void AddExperience(int amount);
+
+    /// <summary>
+    /// Gives the wizard gold, up to <see cref="MaxGold"/>.
+    /// </summary>
+    /// <exception cref="System.ArgumentOutOfRangeException">The amount is negative.</exception>
+    void AddGold(int amount);
+
+    /// <summary>
+    /// Takes gold from the wizard. Takes nothing and returns false if they have less than <paramref name="amount"/>.
+    /// </summary>
+    /// <exception cref="System.ArgumentOutOfRangeException">The amount is negative.</exception>
+    bool RemoveGold(int amount);
+
+    /// <summary>
+    /// Sets the most gold the wizard can carry. Gold they already carry is kept even above the new max.
+    /// </summary>
+    /// <exception cref="System.ArgumentOutOfRangeException">The max is negative.</exception>
+    void SetMaxGold(int maxGold);
+
+    /// <summary>
+    /// Sets the wizard's health, clamped between 0 and <see cref="MaxHealth"/>.
+    /// </summary>
+    void SetHealth(int health);
+
+    /// <summary>
+    /// Sets the wizard's maximum health. It resets to the level's value when the wizard levels.
+    /// </summary>
+    /// <exception cref="System.ArgumentOutOfRangeException">The max is not positive.</exception>
+    void SetMaxHealth(int maxHealth);
+
+    /// <summary>
+    /// Sets the wizard's mana, clamped between 0 and <see cref="MaxMana"/>.
+    /// </summary>
+    void SetMana(int mana);
+
+    /// <summary>
+    /// Sets the wizard's maximum mana. It resets to the level's value when the wizard levels.
+    /// </summary>
+    /// <exception cref="System.ArgumentOutOfRangeException">The max is negative.</exception>
+    void SetMaxMana(int maxMana);
+
+    /// <summary>
+    /// Sets the wizard's pet energy, clamped between 0 and <see cref="MaxEnergy"/>.
+    /// </summary>
+    void SetEnergy(int energy);
+
+    /// <summary>
+    /// Sets the wizard's unspent training points.
+    /// </summary>
+    /// <exception cref="System.ArgumentOutOfRangeException">The amount is negative.</exception>
+    void SetTrainingPoints(int trainingPoints);
+
+    /// <summary>
+    /// Sets the wizard's cantrip level and resets their cantrip XP.
+    /// </summary>
+    /// <exception cref="System.ArgumentOutOfRangeException">The level is negative or above the max cantrip level.</exception>
+    void SetCantripLevel(int level);
+
+    /// <summary>
+    /// Sets the wizard's potion charge and the most they can hold. The charge is clamped between 0 and the max.
+    /// </summary>
+    /// <exception cref="System.ArgumentOutOfRangeException">The max is negative.</exception>
+    void SetPotions(float charge, float max);
 
 }

@@ -53,6 +53,35 @@ Events are delivered synchronously, on the thread of the actor that raised them.
 
 A handler that throws is logged and skipped. An `IPlayer` belongs to a single game session, and every zone change creates a new one, so store `CharacterId` rather than the `IPlayer`.
 
+## Players
+
+An `IPlayer` exposes the wizard's stats as read-only properties: `Level`, `Experience`, `Gold`, `MaxGold`, `Health`, `MaxHealth`, `Mana`, `MaxMana`, `Energy`, `MaxEnergy`, `TrainingPoints`, `CantripLevel`, `PotionCharge` and `PotionMax`. Change them through the matching methods, which save the change and update the player's client:
+
+```csharp
+Commands.Register("buyheal", c => {
+    if (!c.Player.RemoveGold(100)) {
+        c.Reply("Healing costs 100 gold.");
+        return;
+    }
+    c.Player.SetHealth(c.Player.MaxHealth);
+});
+```
+
+| Method | Behaviour |
+| --- | --- |
+| `SetLevel(level)` | Resets stats for the new level and heals to full. Throws outside 1 to the server's max level. |
+| `AddExperience(amount)` | Levels the wizard up if they reach the next level. Throws if `amount` is not positive. |
+| `AddGold(amount)` | Stops at `MaxGold`. |
+| `RemoveGold(amount)` | Returns false and takes nothing if the wizard has less than `amount`. |
+| `SetMaxGold(max)` | Gold already carried above the new max is kept. |
+| `SetHealth(health)`, `SetMana(mana)`, `SetEnergy(energy)` | Clamped between 0 and the max. |
+| `SetMaxHealth(max)`, `SetMaxMana(max)` | Reset to the level's values when the wizard levels. |
+| `SetTrainingPoints(points)` | Sets unspent training points. |
+| `SetCantripLevel(level)` | Resets cantrip XP. Throws above the max cantrip level. |
+| `SetPotions(charge, max)` | `charge` is clamped between 0 and `max`. |
+
+Setters that don't clamp throw `ArgumentOutOfRangeException` for negative values, and `SetMaxHealth` also throws for 0. `SetLevel` and `AddExperience` are applied by the player's session after they return, so `Level` and `Experience` may still show the old value straight afterwards. Every other setter takes effect immediately. Call them from an event or command handler, as the server's own commands do.
+
 ## Zones
 
 `IPlayer.Zone` is the `IZone` the player is in, or null while they are between zones. A zone has its `Name`, whether it `IsInstance`, and the `Players` in it:

@@ -20,8 +20,13 @@
  * Last Updated: 10/23/2026
  */
 
+using System;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Game.Cantrips;
+using Imlight.CoreLib.Shared.Character;
+using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.PluginApi;
 
@@ -30,6 +35,9 @@ namespace Imlight.CoreLib.Plugins;
 /// <summary>
 /// Exposes a session's wizard to plugins as an <see cref="IPlayer"/>.
 /// </summary>
+/// <remarks>
+/// Each setter changes the wizard the same way the matching admin command does, then sends the client the same update.
+/// </remarks>
 internal sealed class PluginPlayer(Wizard wizard, IActorRef sessionActor, IZone zone) : IPlayer {
 
     public ulong CharacterId => wizard.CharId;
@@ -38,10 +46,165 @@ internal sealed class PluginPlayer(Wizard wizard, IActorRef sessionActor, IZone 
 
     public IZone Zone => zone;
 
+    public int Level => wizard.MagicSchoolBehavior.Level;
+
+    public int Experience => wizard.MagicSchoolBehavior.ExperiencePoints;
+
+    public int Gold => wizard.GameStats.m_currentGold;
+
+    public int MaxGold => wizard.GameStats.m_baseGoldPouch;
+
+    public int Health => wizard.GameStats.m_currentHitpoints;
+
+    public int MaxHealth => wizard.GameStats.m_baseHitpoints;
+
+    public int Mana => wizard.GameStats.m_currentMana;
+
+    public int MaxMana => wizard.GameStats.m_baseMana;
+
+    public int Energy => wizard.PetOwnerBehavior.Energy;
+
+    public int MaxEnergy => wizard.GameStats.m_energyMax;
+
+    public int TrainingPoints => wizard.MagicSchoolBehavior.TrainingPoints;
+
+    public int CantripLevel => wizard.GameStats.m_cantripLevel;
+
+    public float PotionCharge => wizard.GameStats.m_potionCharge;
+
+    public float PotionMax => wizard.GameStats.m_potionMax;
+
     internal IActorRef SessionActor => sessionActor;
 
     public void SendMessage(string message)
         => sessionActor.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE { Message = message });
+
+    public void SetLevel(int level) {
+        ArgumentOutOfRangeException.ThrowIfLessThan(level, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(level, MagicLevelsConfig.MaxLevel);
+
+        // WizardService applies the level and sends the client every stat it resets.
+        sessionActor.Tell(new CHARACTER_103_PROTOCOL.MSG_LEVELUP { NewLevel = (byte) level }, null);
+    }
+
+    public void AddExperience(int amount) {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(amount);
+
+        // WizardService adds the XP and handles any level up it causes.
+        sessionActor.Tell(new CHARACTER_103_PROTOCOL.MSG_GAINXP { XP = amount }, null);
+    }
+
+    public void AddGold(int amount) {
+        ArgumentOutOfRangeException.ThrowIfNegative(amount);
+
+        wizard.AddGold(amount);
+        SendGold();
+    }
+
+    public bool RemoveGold(int amount) {
+        ArgumentOutOfRangeException.ThrowIfNegative(amount);
+        if (amount > Gold) {
+            return false;
+        }
+
+        wizard.RemoveGold(amount);
+        SendGold();
+
+        return true;
+    }
+
+    public void SetMaxGold(int maxGold) {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxGold);
+
+        wizard.SetMaxGold(maxGold);
+        SendGold();
+    }
+
+    public void SetHealth(int health) {
+        wizard.UpdateHealth(Math.Clamp(health, 0, MaxHealth));
+
+        // The client already applies its max health effect, so it gets the level's base max to avoid doubling it.
+        SendHealth(BaseStats().m_hitpoints);
+    }
+
+    public void SetMaxHealth(int maxHealth) {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxHealth);
+
+        wizard.UpdateMaxHealth(maxHealth);
+        SendHealth(maxHealth);
+    }
+
+    public void SetMana(int mana) {
+        wizard.UpdateMana(Math.Clamp(mana, 0, MaxMana));
+
+        // The client already applies its max mana effect, so it gets the level's base max to avoid doubling it.
+        SendMana(BaseStats().m_mana);
+    }
+
+    public void SetMaxMana(int maxMana) {
+        ArgumentOutOfRangeException.ThrowIfNegative(maxMana);
+
+        wizard.UpdateMaxMana(maxMana);
+        SendMana(maxMana);
+    }
+
+    public void SetEnergy(int energy) {
+        wizard.UpdateEnergy(Math.Clamp(energy, 0, MaxEnergy));
+
+        // The client already applies its max energy effect, so it gets the level's base max to avoid doubling it.
+        sessionActor.Tell(new PET_9_PROTOCOL.MSG_PETENERGYTICK {
+            GlobalID = wizard.GameObjectID,
+            Energy = Energy,
+            MaxEnergy = BaseStats().m_petEnergy,
+            TickTime = (int) wizard.PetOwnerBehavior.LastEnergyTickEpoch
+        }, null);
+    }
+
+    public void SetTrainingPoints(int trainingPoints) {
+        ArgumentOutOfRangeException.ThrowIfNegative(trainingPoints);
+
+        wizard.UpdateTrainingPoints(trainingPoints);
+        sessionActor.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATETRAINING { TrainingPoints = trainingPoints }, null);
+    }
+
+    public void SetCantripLevel(int level) {
+        ArgumentOutOfRangeException.ThrowIfNegative(level);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(level, CantripFactory.GetMaxCantripLevel());
+
+        wizard.UpdateCantripLevel((byte) level);
+        sessionActor.Tell(new CANTRIPSMESSAGES_57_PROTOCOL.MSG_UPDATECANTRIPXP { XP = 0, Level = (byte) level }, null);
+    }
+
+    public void SetPotions(float charge, float max) {
+        ArgumentOutOfRangeException.ThrowIfNegative(max);
+
+        wizard.UpdatePotions(Math.Clamp(charge, 0, max), max);
+        sessionActor.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEPOTIONS {
+            PotionCharge = PotionCharge,
+            PotionMax = PotionMax
+        }, null);
+    }
+
+    private void SendGold()
+        => sessionActor.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = Gold, MaxGold = MaxGold }, null);
+
+    private void SendHealth(int clientMaxHealth)
+        => sessionActor.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH {
+            CharacterID = wizard.GameObjectID,
+            NewHealth = Health,
+            NewHealthMax = clientMaxHealth,
+            DisplayDiff = 1,
+        }, null);
+
+    private void SendMana(int clientMaxMana)
+        => sessionActor.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEMANA {
+            Mana = Mana,
+            MaxMana = clientMaxMana,
+            DisplayDiff = 1,
+        }, null);
+
+    private MagicLevelInfo BaseStats()
+        => MagicLevelsConfig.GetPlayerLevelInfo(wizard.MagicSchoolBehavior.MagicSchool, wizard.MagicSchoolBehavior.Level);
 
     /// <summary>
     /// The plugin view of a session, taken from its zone when it is in one.
