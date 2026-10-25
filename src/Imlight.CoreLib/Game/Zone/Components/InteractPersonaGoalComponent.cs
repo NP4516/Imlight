@@ -112,14 +112,6 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
             return false;
         }
 
-        var diagMatch = quests
-            .Where(x => x is not null)
-            .SelectMany(quest => quest.m_goals?.OfType<PersonaGoalTemplate>() ?? [])
-            .Any(goal => PersonaGoalTargetsNpc(goal, npcName, npcTemplateId));
-        if (npcTemplateId is 38116 or 38133 or 38119 || npcName.ToString().Contains("Olivia") || npcName.ToString().Contains("Ryan")) {
-            Logger.Information("PERSONADIAG attach-check NPC '{0}' templateId={1} matched={2}", Logger.Args(npcName, npcTemplateId, diagMatch));
-        }
-
         // Check if this NPC is referenced as a persona goal target in any quest.
         return quests
             .Where(x => x is not null)
@@ -233,9 +225,6 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
                 value.Add(goal);
             }
         }
-
-        Logger.Information("PERSONADIAG OnStart NPC '{0}' templateId={1} quests=[{2}]",
-            Logger.Args(_npcName, _npcTemplateId, string.Join(",", _personaGoalsByQuest.Keys)));
     }
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {

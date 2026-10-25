@@ -1359,10 +1359,8 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
             }
         }
 
-        if (shouldIncrement) {
-            for (int i = 0; i < matchCount; i++) {
-                wizard.IncrementQuestGoal(qInstance.QuestName, goalTemplate.m_goalName);
-            }
+       if (shouldIncrement) {
+            wizard.IncrementQuestGoal(qInstance.QuestName, goalTemplate.m_goalName);
 
             var goalMax = goalTemplate.m_tallyCounter?.m_count ?? 0;
             var gInstance = qInstance.GoalProgress.FirstOrDefault(g => g.GoalName == goalTemplate.m_goalName);

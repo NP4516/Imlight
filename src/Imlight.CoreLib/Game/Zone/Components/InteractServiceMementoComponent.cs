@@ -141,7 +141,15 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             : _interactionRadius;
 
         // Handle interaction range (for service options).
+        // A player who comes back (zone transfer, relog) is a new session actor with the same object id:
+        // replace any stale actor reference rather than keeping the dead one.
         if (IsInHorizontalRadius(playerObj, interactionRadius)
+            && _playersInInteractionRange.TryGetValue(playerId, out var knownInteractionActor)
+            && !knownInteractionActor.Equals(playerActor)) {
+            _playersInInteractionRange[playerId] = playerActor;
+            SendActorServiceOptions(playerActor);
+        }
+        else if (IsInHorizontalRadius(playerObj, interactionRadius)
             && !_playersInInteractionRange.ContainsKey(playerId)) {
             _playersInInteractionRange.Add(playerId, playerActor);
             SendActorServiceOptions(playerActor);
@@ -154,9 +162,8 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
         // Handle render range (for wizbangs).
         if (IsInRadius(playerObj, _renderDistance)) {
-            if (!_playersInRenderRange.ContainsKey(playerId)) {
-                _playersInRenderRange.Add(playerId, playerActor);
-            }
+            // Always keep the newest actor: a stale one would send every wizbang to a closed session.
+            _playersInRenderRange[playerId] = playerActor;
         }
         else if (_playersInRenderRange.ContainsKey(playerId)) {
             _playersInRenderRange.Remove(playerId);
