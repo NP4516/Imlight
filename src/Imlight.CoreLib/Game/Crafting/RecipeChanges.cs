@@ -62,7 +62,7 @@ internal static class RecipeChanges {
     internal const string FILE = "RecipeChanges.json";
     private const string FOLDER = "Customs";
 
-    private static readonly float s_multiplier = Math.Clamp(ConfigurationManager.GetValue("Crafting.IngredientMultiplier", 1f), 0f, 100f);
+    private static float s_multiplier => Math.Clamp(ConfigurationManager.GetValue("Crafting.IngredientMultiplier", 1f), 0f, 100f);
 
     private static readonly JsonSerializerOptions s_options = new() {
         PropertyNameCaseInsensitive = true, AllowTrailingCommas = true, ReadCommentHandling = JsonCommentHandling.Skip,
