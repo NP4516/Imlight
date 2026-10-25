@@ -142,12 +142,13 @@ internal static class ManagerCommands {
 
     /// <summary>
     /// An announcement as the game's message box shows it (Modal 1), with the header the app's Announcement card puts
-    /// on. The cheats' "announce to the battle" uses the same wording, so both look alike.
+    /// on. The cheats' "announce to the battle" uses the same wording, so both look alike. The words come from the
+    /// Manager's Announcements tab (Announcements.cs); turned off there, just the text shows.
     /// </summary>
-    internal static string AnnouncementBox(string text) => $"<center>Announcement</center>\n{text}";
+    internal static string AnnouncementBox(string text) => Announcements.Text("manager.box", ("text", text)) ?? text;
 
     /// <summary>An announcement as a chat line (Modal 0).</summary>
-    internal static string AnnouncementChat(string text) => $"Announcement: {text}";
+    internal static string AnnouncementChat(string text) => Announcements.Text("manager.chat", ("text", text)) ?? text;
 
     private static (bool Box, bool Chat, string Text, bool FromCard) Split(string line) {
         var bar = line.IndexOf('|');
