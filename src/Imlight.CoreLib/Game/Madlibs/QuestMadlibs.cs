@@ -38,9 +38,12 @@
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace Imlight.CoreLib.Game.Madlibs;
 
@@ -255,6 +258,18 @@ internal static class QuestMadlibs {
 
             foreach (var entry in dialog.m_dialogEntries.OfType<NPCDialogEntry>().Where(e => e.m_nameSTKey.IsEmpty)) {
                 ulong templateId = entry.m_actorTemplateID != 0 ? entry.m_actorTemplateID : TemplateOfPersona(entry.m_personaName);
+
+                // A line whose picture is another NPC's is that NPC's: "Quests marked with a star..." shows Gamma but
+                // names Ceren Nightchant's persona (Niduus, 2026-10-25). The picture's own persona speaks it instead.
+                if (!string.IsNullOrEmpty(entry.m_picture)
+                    && PersonaOfPicture(entry.m_picture) is { } pictured
+                    && pictured != (string) entry.m_personaName
+                    && (templateId == 0 || (CoreObjectFactory.GetCoreTemplate(templateId) as GameObjectTemplate)?.m_sIcon is { IsEmpty: false } icon
+                        && (string) icon != (string) entry.m_picture)) {
+                    entry.m_personaName = pictured;
+                    templateId = TemplateOfPersona(pictured);
+                }
+
                 var (first, last) = NameKeysOfTemplate(templateId);
                 if (string.IsNullOrEmpty(first)) {
                     continue;
@@ -298,6 +313,48 @@ internal static class QuestMadlibs {
                 dialog.m_madlibs = madlibs;
             }
         }
+    }
+
+    private static Dictionary<string, string> s_picturePersonas;
+
+    /// <summary>
+    /// The persona whose lines show this picture most of the time across all quests (Art_Portrait_Gamma is
+    /// WC-HUB-NPC07_Persona), or null when no line with a persona shows it.
+    /// </summary>
+    private static string PersonaOfPicture(string picture) {
+        var map = LazyInitializer.EnsureInitialized(ref s_picturePersonas, () => {
+            var counts = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
+            void Count(ActorDialogListBase list) {
+                foreach (var entry in (list as ActorDialogList)?.m_dialogs?.SelectMany(d => d?.m_dialogEntries ?? []).OfType<NPCDialogEntry>() ?? []) {
+                    string pic = entry.m_picture, persona = entry.m_personaName;
+                    if (string.IsNullOrEmpty(pic) || string.IsNullOrEmpty(persona)) {
+                        continue;
+                    }
+
+                    if (!counts.TryGetValue(pic, out var byPersona)) {
+                        counts[pic] = byPersona = new Dictionary<string, int>(StringComparer.Ordinal);
+                    }
+
+                    byPersona[persona] = byPersona.GetValueOrDefault(persona) + 1;
+                }
+            }
+
+            foreach (var quest in QuestTemplateCollection.GetAllQuests().Where(q => q is not null)) {
+                Count(quest.m_dialogList);
+                foreach (var goal in quest.m_goals ?? []) {
+                    Count(goal?.m_dialogList);
+                }
+            }
+
+            // A picture several NPCs share (a plain townsperson's) belongs to none of them: only one persona showing it
+            // at least two times in three counts.
+            return counts
+                .Select(p => (Picture: p.Key, Top: p.Value.MaxBy(c => c.Value), Total: p.Value.Values.Sum()))
+                .Where(p => p.Top.Value * 3 >= p.Total * 2)
+                .ToDictionary(p => p.Picture, p => p.Top.Key, StringComparer.OrdinalIgnoreCase);
+        });
+
+        return map.GetValueOrDefault(picture);
     }
 
     private static MadlibArgT_ByteString[] GetTallyArguments(GoalTemplate gTemplate)
