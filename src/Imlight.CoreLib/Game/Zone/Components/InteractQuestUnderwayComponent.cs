@@ -153,6 +153,8 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
         }
 
         _givesQuests.Sort((a, b) => string.Compare(a.m_questTitle, b.m_questTitle, StringComparison.Ordinal));
+        Logger.Information("UNDERWAYDIAG OnStart NPC templateId={0} gives=[{1}]",
+            Logger.Args(entity.ActiveGameObject.m_templateID, string.Join(",", _givesQuests.Select(q => q.m_questName))));
     }
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
@@ -216,6 +218,12 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
 
                 break; // Take the first underway quest.
             }
+        }
+
+        var hadPrev = _cachedPlayerStates.TryGetValue(playerId, out var prevState);
+        if (!hadPrev || prevState.HasUnderwayQuest != state.HasUnderwayQuest) {
+            Logger.Information("UNDERWAYDIAG NPC templateId={0} player={1} underway={2} quest={3}",
+                Logger.Args(Entity.ActiveGameObject.m_templateID, playerId, state.HasUnderwayQuest, state.UnderwayQuest?.m_questName));
         }
 
         _cachedPlayerStates[playerId] = state;

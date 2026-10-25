@@ -69,6 +69,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
 
     public static bool ShouldAttachToEntity(CoreTemplate template)
         => template is GameObjectTemplate gameObjectTemplate
+        && template.m_behaviors is not null
         && (HasBehavior(template, "WizardSelectBehavior") || IsNamedByAnyUsageGoal(gameObjectTemplate));
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard playerCharacter) {
@@ -105,13 +106,13 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
 
         // Register every usage goal whose client tags name this object; the object is
         // interactable only while one of those goals is active (see GetServiceOptions).
-        foreach (var qTemplate in QuestTemplateCollection.GetAllQuests()) {
-            if (qTemplate is null) {
+        foreach (var qTemplate in QuestTemplateCollection.GetAllQuests() ?? []) {
+            if (qTemplate?.m_goals is null) {
                 continue;
             }
 
             foreach (var goal in qTemplate.m_goals) {
-                if (goal.m_goalType != GOAL_TYPE.GOAL_TYPE_USAGE || !DoesGoalMatchObject(gameObjectTemplate, qTemplate.m_questName, goal)) {
+                if (goal is null || goal.m_goalType != GOAL_TYPE.GOAL_TYPE_USAGE || !DoesGoalMatchObject(gameObjectTemplate, qTemplate.m_questName, goal)) {
                     continue;
                 }
 
@@ -223,8 +224,8 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
         => template.m_behaviors.Any(x => x is not null && x.m_behaviorName == behaviorName);
 
     private static bool IsNamedByAnyUsageGoal(GameObjectTemplate gameObjectTemplate)
-        => QuestTemplateCollection.GetAllQuests()
-            .Where(q => q is not null)
+        => (QuestTemplateCollection.GetAllQuests() ?? [])
+            .Where(q => q?.m_goals is not null)
             .SelectMany(q => q.m_goals.Where(g => g is not null).Select(g => (q.m_questName, Goal: g)))
             .Any(x => x.Goal.m_goalType == GOAL_TYPE.GOAL_TYPE_USAGE && DoesGoalMatchObject(gameObjectTemplate, x.m_questName, x.Goal));
 
@@ -271,7 +272,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
     /// </summary>
     internal static bool IsNamedByUsageGoal(InteractOptionTemplate option) {
         var tags = OptionTags(option).ToList();
-        var quests = QuestTemplateCollection.GetAllQuests().Where(q => q?.m_goals is not null).ToList();
+        var quests = (QuestTemplateCollection.GetAllQuests() ?? []).Where(q => q?.m_goals is not null).ToList();
 
         return (tags.Count > 0
                 && quests.SelectMany(q => q.m_goals)
@@ -283,7 +284,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
         => InteractOptions(gameObjectTemplate).SelectMany(OptionTags);
 
     private static IEnumerable<InteractOptionTemplate> InteractOptions(GameObjectTemplate gameObjectTemplate)
-        => gameObjectTemplate.m_behaviors
+        => (gameObjectTemplate.m_behaviors ?? [])
             .OfType<InteractableBehaviorTemplate>()
             .SelectMany(behavior => behavior.m_interactOptions ?? []);
 

@@ -510,6 +510,10 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
             var persistentTriggerData = databaseTriggers?.Teleports
                 .FirstOrDefault(x => x.TriggerName == trigger.m_triggerName);
 
+            Logger.Information("TRIGGERDIAG {0}: trigger '{1}' matched={2} results=[{3}]",
+                Logger.Args(zoneName, trigger.m_triggerName, persistentTriggerData is not null,
+                    string.Join(",", trigger.m_results?.m_results?.Select(r => r?.GetType().Name) ?? [])));
+
             if (persistentTriggerData is not null) {
                 // April Fools: if we've confirmed this is a zone transfer, we'll instead
                 // grab a random zone transfer from the database. Then, we'll set the trigger

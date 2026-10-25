@@ -91,23 +91,73 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
     private readonly Dictionary<ulong, DateTime> _lastWizBangUpdate = [];
     private readonly Dictionary<ulong, PlayerPersonaGoalState> _cachedPlayerStates = [];
     private string _npcName;
+    private uint _npcTemplateId;
 
     public static bool ShouldAttachToEntity(CoreTemplate template) {
-        if (template is not GameObjectTemplate goTemplate ||
-            !template.m_behaviors.Any(x => x is NPCBehaviorTemplate) ||
+        if (template is not GameObjectTemplate goTemplate || template.m_behaviors is null) {
+            return false;
+        }
+
+        if (!template.m_behaviors.Any(x => x is NPCBehaviorTemplate) ||
             template.m_behaviors.Any(x => x is DuelistBehaviorTemplate)) {
 
             return false;
         }
 
         var npcName = goTemplate.m_objectName;
+        var npcTemplateId = goTemplate.m_templateID;
+
+        var quests = QuestTemplateCollection.GetAllQuests();
+        if (quests is null) {
+            return false;
+        }
+
+        var diagMatch = quests
+            .Where(x => x is not null)
+            .SelectMany(quest => quest.m_goals?.OfType<PersonaGoalTemplate>() ?? [])
+            .Any(goal => PersonaGoalTargetsNpc(goal, npcName, npcTemplateId));
+        if (npcTemplateId is 38116 or 38133 or 38119 || npcName.ToString().Contains("Olivia") || npcName.ToString().Contains("Ryan")) {
+            Logger.Information("PERSONADIAG attach-check NPC '{0}' templateId={1} matched={2}", Logger.Args(npcName, npcTemplateId, diagMatch));
+        }
 
         // Check if this NPC is referenced as a persona goal target in any quest.
-        return QuestTemplateCollection
-            .GetAllQuests()
+        return quests
             .Where(x => x is not null)
-            .SelectMany(quest => quest.m_goals.OfType<PersonaGoalTemplate>())
-            .Any(goal => goal.m_personaName == npcName);
+            .SelectMany(quest => quest.m_goals?.OfType<PersonaGoalTemplate>() ?? [])
+            .Any(goal => PersonaGoalTargetsNpc(goal, npcName, npcTemplateId));
+    }
+
+    private static bool PersonaGoalTargetsNpc(PersonaGoalTemplate goal, string npcName, uint npcTemplateId) {
+        // 1. Goal-level persona name, ignoring the "_Persona" suffix and letter case.
+        if (!string.IsNullOrEmpty(npcName) && PersonaNameMatches(goal.m_personaName, npcName)) {
+            return true;
+        }
+
+        // 2. Fall back to the goal's dialog-entry actor template ID.
+        if (npcTemplateId != 0 && goal.m_dialogList is ActorDialogList dialogList && dialogList.m_dialogs is not null) {
+            foreach (var dlg in dialogList.m_dialogs) {
+                if (dlg?.m_dialogEntries is null) {
+                    continue;
+                }
+
+                foreach (var entry in dlg.m_dialogEntries) {
+                    if (entry is not null && entry.m_actorTemplateID == npcTemplateId) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool PersonaNameMatches(string personaName, string npcName) {
+        if (string.IsNullOrEmpty(personaName)) {
+            return false;
+        }
+
+        var normalized = personaName.Replace("_Persona", "");
+        return string.Equals(normalized, npcName, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -156,17 +206,22 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
     public override void OnStart() {
         if (Entity.Template is GameObjectTemplate goTemplate) {
             _npcName = goTemplate.m_objectName;
+            _npcTemplateId = goTemplate.m_templateID;
         }
 
         // Cache all persona goals that reference this NPC.
-        var questTemplates = QuestTemplateCollection
-            .GetAllQuests()
+        var allQuests = QuestTemplateCollection.GetAllQuests();
+        if (allQuests is null) {
+            return;
+        }
+
+        var questTemplates = allQuests
             .Where(x => x is not null)
             .ToList();
 
         foreach (var questTemplate in questTemplates) {
-            foreach (var goal in questTemplate.m_goals.OfType<PersonaGoalTemplate>()) {
-                if (goal.m_personaName != _npcName) {
+            foreach (var goal in questTemplate.m_goals?.OfType<PersonaGoalTemplate>() ?? []) {
+                if (!PersonaGoalTargetsNpc(goal, _npcName, _npcTemplateId)) {
                     continue;
                 }
 
@@ -178,6 +233,9 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
                 value.Add(goal);
             }
         }
+
+        Logger.Information("PERSONADIAG OnStart NPC '{0}' templateId={1} quests=[{2}]",
+            Logger.Args(_npcName, _npcTemplateId, string.Join(",", _personaGoalsByQuest.Keys)));
     }
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
