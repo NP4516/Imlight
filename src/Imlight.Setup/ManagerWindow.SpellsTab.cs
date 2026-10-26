@@ -43,6 +43,8 @@ namespace Imlight.Setup;
 /// </summary>
 internal sealed partial class ManagerWindow {
 
+    private DockPanel? _spellsDrawer;
+
     private const double SPELL_TILE_WIDTH = 132;
     private const double SPELL_TILE_GAP = 10;
     // A tile's whole width on screen: the picture plus its frame's padding (3) and border (2) on both sides.
@@ -150,8 +152,7 @@ internal sealed partial class ManagerWindow {
             Children = { new TextBlock { Text = label, Foreground = MUTED, FontSize = 12 }, box },
         };
 
-        var filters = new WrapPanel {
-            Children = {
+        var filters = SearchFilters(
                 Labelled("School", _spellsSchool),
                 Labelled("Pip cost", _spellsPips),
                 Labelled("Type", _spellsType),
@@ -173,9 +174,7 @@ internal sealed partial class ManagerWindow {
                 SearchTick(_spellsSchoolPips),
                 SearchTick(_spellsNoEnchant),
                 SearchTick(_spellsNoDiscard),
-                SearchTick(_spellsCloaked),
-            },
-        };
+                SearchTick(_spellsCloaked));
         var details = new ScrollViewer {
             Width = CardPainter.CARD_WIDTH * 2 + 72,
             Margin = new Thickness(14, 0, 0, 0),
@@ -199,7 +198,7 @@ internal sealed partial class ManagerWindow {
                         "Each card shows the game's text, then in { } what the code does (written by Imlight from the spell's effects)."),
                     filters, _spellsCount), Dock.Top),
                 WithMargin(new DockPanel {
-                    Children = { WithDock(details, Dock.Right), _spellsScroll },
+                    Children = { WithDock(_spellsDrawer = DetailsDrawer("Card details", details, () => { ShowSpellsDetails(null); }), Dock.Right), _spellsScroll },
                 }, new Thickness(0, 14, 0, 0)),
             },
         };
@@ -493,6 +492,10 @@ internal sealed partial class ManagerWindow {
 
     /// <summary>Shows a card big on the right with everything about it.</summary>
     private void ShowSpellsDetails(SpellCard? card) {
+        if (_spellsDrawer is not null) {
+            _spellsDrawer.IsVisible = card is not null;
+        }
+
         _spellsPicked = card;
         _spellsDetails.Children.Clear();
         if (card is null || _spellBook is not { } book) {
