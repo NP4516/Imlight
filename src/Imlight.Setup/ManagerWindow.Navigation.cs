@@ -42,19 +42,22 @@ internal sealed partial class ManagerWindow {
 
     /// <summary>The side bar's pages after Home: name, icon, the short line under it, what it is for, and its tabs.</summary>
     private static readonly (string Name, string Icon, string Line, string About, string[] Tabs)[] s_groups = [
-        ("Play", "play", "Play, commands, quests",
-            "Play Wizard101, find chat commands and follow your wizard's quests.", ["Play", "Commands", "Quests"]),
+        ("Play", "play", "Play and chat commands",
+            "Play Wizard101 and find every chat command.", ["Play", "Commands"]),
+        // Niduus, 2026-10-26: "Try to keep all relevant tabs together": your quests, the story's quest tree and the quest
+        // editor sit on one page.
+        ("Quests", "flag", "Quests, story, editor",
+            "Follow your wizard's quests, see every world's main story in order, and change any quest or make your own.",
+            ["Quests", "Quest Tree", "Quest Editor"]),
         // Niduus, 2026-10-25: "move Bosses to Database".
-        // Niduus, 2026-10-26: "in database, add Quest Tree in detail to show the main quest tree's in their entirety".
-        ("Database", "search", "IDs, spells, gear, bosses, quests",
-            "Everything in the game, ready to search: IDs, spell cards, gear, bosses, recipes, vendors and trainers, every world's " +
-            "quest tree, and every line of text.",
-            ["Lookup", "Spells", "Gear", "Bosses", "Recipes", "Vendors", "Quest Tree", "Phrases"]),
-        ("Create", "puzzle", "Cheats, customs, quests",
-            "Change quests, make cheats for yourself, build your own creatures and areas, and word what the server announces.",
-            ["Player Cheats", "Customs", "Quest Editor", "Announcements", "Guides"]),
+        ("Database", "search", "IDs, spells, gear, bosses",
+            "Everything in the game, ready to search: IDs, spell cards, gear, bosses, recipes, vendors and trainers, and every line of text.",
+            ["Lookup", "Spells", "Gear", "Bosses", "Recipes", "Vendors", "Phrases"]),
+        ("Create", "puzzle", "Cheats, customs, guides",
+            "Make cheats for yourself, build your own creatures and areas, word what the server announces, and step-by-step guides.",
+            ["Player Cheats", "Customs", "Announcements", "Guides"]),
         ("Server", "server", "Settings, accounts, logs",
-            "Run the server and set it up: settings, who can log in, logs, game files and updates.",
+            "Run the server and set it up: settings, who can log in, logs, game files and tools.",
             ["Server", "Settings", "Accounts", "Logs", "Game Files", "Tools"]),
     ];
 
@@ -181,7 +184,8 @@ internal sealed partial class ManagerWindow {
         Dispatcher.UIThread.Post(() => _ = Guard(RenderHomeSearchAsync), DispatcherPriority.Background);
 
         var hero = new Border {
-            Background = ManagerTheme.Gradient(70), BorderBrush = ManagerTheme.Brush(ManagerTheme.ACCENT_LIGHT, 90), BorderThickness = new Thickness(1),
+            Background = ManagerTheme.Gradient(60), BorderBrush = ManagerTheme.Brush(ManagerTheme.ACCENT_LIGHT, 110), BorderThickness = new Thickness(1),
+            Effect = ManagerTheme.Glow(ManagerTheme.ACCENT, 30, 0.45),
             CornerRadius = new CornerRadius(ManagerTheme.RADIUS), Padding = new Thickness(26, 22),
             Child = new DockPanel {
                 Children = {
@@ -202,7 +206,6 @@ internal sealed partial class ManagerWindow {
                                 Margin = new Thickness(0, 6, 0, 0),
                                 Children = {
                                     Spaced(_homePlay), Spaced(_homeStart), Spaced(_homeStop),
-                                    Spaced(Action(Plain("What's new"), () => { SelectTab(WHATS_NEW); return Task.CompletedTask; })),
                                 },
                             },
                         },
@@ -213,6 +216,7 @@ internal sealed partial class ManagerWindow {
 
         var cards = new List<Control> {
             hero,
+            HomeWhatsNew(),
             Fold("search", HOME, "Search everything",
                 "Every page, setting, command, item, spell, creature, zone and quest at once.",
                 _homeSearch,

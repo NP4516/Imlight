@@ -175,7 +175,7 @@ internal sealed partial class ManagerWindow {
             return;
         }
 
-        Say($"Saved. The server comes from {source.Describe()} from the next update: click Update Ahziael on the Tools tab.");
+        Say($"Saved. The server comes from {source.Describe()} from the next update: click Update Ahziael at the top of the window.");
     }
 
     private async Task RebuildFromFolderAsync() {

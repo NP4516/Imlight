@@ -219,7 +219,7 @@ internal sealed partial class ServerManager(string installFolder) {
     /// </summary>
     internal async Task<string> PlayHereAsync() {
         if (GameClient.ClientExe(InstallFolder) is null) {
-            throw new PanelException("Wizard101 could not be found. Click \"Update Imlight\" on the Tools tab of the app once, then try again.");
+            throw new PanelException("Wizard101 could not be found. Click \"Update Ahziael\" at the top of the app once, then try again.");
         }
 
         // Away from the window: trying a port nothing listens on waits up to half a second.

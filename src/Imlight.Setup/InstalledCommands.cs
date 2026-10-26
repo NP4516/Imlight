@@ -148,7 +148,7 @@ internal static class InstalledCommands {
         }
 
         if (wizard101 is not { } gameData) {
-            Console.WriteLine("Imlight does not know where Wizard101 is. Click \"Update Imlight\" on the Tools tab of the app once to fix that.");
+            Console.WriteLine("Imlight does not know where Wizard101 is. Click \"Update Ahziael\" at the top of the app once to fix that.");
 
             return null;
         }
@@ -192,7 +192,7 @@ internal static class InstalledCommands {
         var info = InstallInfo.Load(installFolder);
         var client = info.GameFolder is { } game ? Path.Combine(game, "Bin", "WizardGraphicalClient.exe") : null;
         if (client is null || !File.Exists(client)) {
-            return Fail("Wizard101 could not be found. Click \"Update Imlight\" on the Tools tab of the app once, then try again.");
+            return Fail("Wizard101 could not be found. Click \"Update Ahziael\" at the top of the app once, then try again.");
         }
 
         var portText = IniFile.Get(ConfigFile(installFolder), "Login Server", "LoginServerPort");

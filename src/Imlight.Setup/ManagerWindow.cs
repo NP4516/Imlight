@@ -340,36 +340,13 @@ internal sealed partial class ManagerWindow : Window {
         var nav = Navigation(tabs);
         AddHandler(KeyDownEvent, OnShortcutKey, Avalonia.Interactivity.RoutingStrategies.Tunnel);
 
-        // The header: the app's name with "Created by Niduus" beside it on the left (Niduus, 2026-10-25: "Add the
-        // 'Created by Niduus' to be next to where the program name would be"), the server's state as a badge on the right.
+        // The header (ManagerWindow.Glass.cs): the app's name with "Created by Niduus" in one panel (Niduus, 2026-10-26:
+        // "Keep name and created by in the same visual section"), the update panel in the middle, the server's state on
+        // the right as a badge.
         _statusBadge = ManagerTheme.Badge(_dot, _statusText);
         ToolTip.SetTip(_statusBadge, "The server on this computer. Start and stop it on the Server tab, or on Home.");
         ManagerTheme.PaintBadge(_statusBadge, _statusText, MUTED);
-        var header = new Border {
-            Background = ManagerTheme.SIDEBAR_BRUSH, BorderBrush = LINE, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(18, 12, 24, 12),
-            Child = new DockPanel {
-                Children = {
-                    WithDock(_statusBadge, Dock.Right),
-                    WithDock(new Border { Margin = new Thickness(0, 0, 12, 0), Child = ManagerTheme.Tile("sparkle", ManagerTheme.Gradient(), 38) }, Dock.Left),
-                    new StackPanel {
-                        VerticalAlignment = VerticalAlignment.Center, Spacing = 1,
-                        Children = {
-                            new StackPanel {
-                                Orientation = Orientation.Horizontal, Spacing = 12,
-                                Children = {
-                                    new TextBlock {
-                                        Text = Edition.NAME, FontSize = 22, FontWeight = FontWeight.Bold, Foreground = ManagerTheme.Gradient(),
-                                        VerticalAlignment = VerticalAlignment.Center,
-                                    },
-                                    CreditChip(),
-                                },
-                            },
-                            new TextBlock { Text = $"Your Wizard101 server · version {SelfUpdate.CurrentVersion}", FontSize = ManagerTheme.FONT_SMALL, Foreground = MUTED },
-                        },
-                    },
-                },
-            },
-        };
+        var header = Header();
 
         _messageBar.Child = _message;
         _messageBar.BorderBrush = LINE;
@@ -383,23 +360,29 @@ internal sealed partial class ManagerWindow : Window {
         _saveBar.BorderBrush = LINE;
         _saveBar.BorderThickness = new Thickness(0, 1, 0, 0);
 
-        // The pages run down a side bar of their own colour.
+        // The pages run down a glass side bar, over the drifting colours behind everything.
         var body = new Panel {
             Children = {
                 new Border {
                     Width = ManagerTheme.SIDEBAR_WIDTH, HorizontalAlignment = HorizontalAlignment.Left, Background = ManagerTheme.SIDEBAR_BRUSH,
-                    BorderBrush = LINE, BorderThickness = new Thickness(0, 0, 1, 0),
+                    BorderBrush = ManagerTheme.Glass(30), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(18),
+                    Margin = new Thickness(12, 12, 0, 12),
                 },
-                WithMargin(nav, new Thickness(0, 12, 0, 0)),
+                WithMargin(nav, new Thickness(0, 22, 0, 0)),
             },
         };
 
-        Content = new DockPanel {
+        Content = new Panel {
             Children = {
-                WithDock(header, Dock.Top),
-                WithDock(_messageBar, Dock.Bottom),
-                WithDock(_saveBar, Dock.Bottom),
-                body,
+                Backdrop(),
+                new DockPanel {
+                    Children = {
+                        WithDock(header, Dock.Top),
+                        WithDock(_messageBar, Dock.Bottom),
+                        WithDock(_saveBar, Dock.Bottom),
+                        body,
+                    },
+                },
             },
         };
 
@@ -421,6 +404,7 @@ internal sealed partial class ManagerWindow : Window {
             // The first time the app opens after an update, what that update changed (ManagerWindow.WhatsNew.cs).
             // Not waited for, so the update check below runs while it is open.
             _ = Guard(ShowWhatsNewIfUpdatedAsync);
+            _ = Guard(CheckForUpdateAsync);
             await Guard(AutoUpdateAsync);
         };
         Closed += (_, _) => {
@@ -1113,8 +1097,10 @@ internal sealed partial class ManagerWindow : Window {
         WhenFiltersChange(RefreshLog, _logSearch, _logLevel, _logRepeated);
         WhenFiltersChange(RefreshClientLog, _clientLogSearch);
 
+        // Both logs start folded shut (Niduus, 2026-10-26: "Have server and client logs innate hidden unless revealed"):
+        // click a log's title to show it.
         return Page(
-            Fold("server", "Server", "Server log",
+            Shut(Fold("server", "Server", "Server log",
                 "What the server on this computer is doing.",
                 WithHint(Row(_hideDebug, _hideWarnings, _follow, _pauseLog),
                     "What the server on this computer is doing. The same message repeated in a row shows once, with how many times it happened."),
@@ -1122,8 +1108,7 @@ internal sealed partial class ManagerWindow : Window {
                     "information or debug lines (debug lines show here even with Hide debug lines ticked)."),
                 SearchFilters(SearchFilter("Kind of line", _logLevel), SearchTick(_logRepeated)),
                 LogWell(_logScroll),
-                Row(Action(Plain("Copy all"), CopyLogAsync), Action(Plain("Save log to desktop"), SaveLogAsync))),
-            // Folded shut at first: the server log is the one looked at most. It still reads while this tab is open.
+                Row(Action(Plain("Copy all"), CopyLogAsync), Action(Plain("Save log to desktop"), SaveLogAsync)))),
             Shut(Fold("log", "Logs", "Game log",
                 "The newest log Wizard101 wrote, updated every 2 seconds.",
                 _clientLogFile,
@@ -1242,14 +1227,13 @@ internal sealed partial class ManagerWindow : Window {
     private Control ToolsTab() {
         return Page(
             Fold("download", "Settings", "Updates",
-                $"{Edition.NAME} {SelfUpdate.CurrentVersion}.",
-                Row(Action(_updateButton, UpdateAsync), Action(Plain("What's new"), () => {
-                    SelectTab(WHATS_NEW);
-
-                    return Task.CompletedTask;
-                })),
+                $"{Edition.NAME} {SelfUpdate.CurrentVersion}. Update Ahziael and What's new are at the top of the window, on every page.",
                 AutoUpdateBox(),
                 AutoInstallSwitch()),
+            Fold("sparkle", "What's New", "Look",
+                "How Ahziael looks.",
+                SwitchRow("Moving background", _movingBackground,
+                    "The colours behind the panels drift slowly and the server light breathes. They stop while you play.")),
             ServerSourceCard(),
             AuroriumCard(),
             Fold("folder", "Tools", "Files and folders", $"Installed in {_manager.InstallFolder}.",
@@ -1323,7 +1307,7 @@ internal sealed partial class ManagerWindow : Window {
         _restartButton.IsEnabled = status.Running;
         _playButton.IsEnabled = status.ClientFound;
         if (!status.ClientFound) {
-            _playHelp.Text = "Wizard101 could not be found. Click \"Update Ahziael\" on the Tools tab of the app once.";
+            _playHelp.Text = "Wizard101 could not be found. Click \"Update Ahziael\" at the top of the app once.";
         }
 
         _randomizerCard.IsVisible = status.Randomizer is not null;
@@ -1888,11 +1872,11 @@ internal sealed partial class ManagerWindow : Window {
         try {
             var whenReady = _manager.AutoInstallUpdates ? "the app restarts into it by itself when it is ready" : "the app asks to restart when it is ready";
             Say("A new Imlight is out. It is downloading and building in the background, so keep playing. " +
-                $"This can take a few minutes; {whenReady}. The Update Ahziael button on the Tools tab shows how far along it is.");
+                $"This can take a few minutes; {whenReady}. The update panel at the top of the window shows how far along it is.");
             _updateButton.Content = "Downloading...";
             var progress = new Progress<int>(percent => _updateButton.Content = percent >= 0 ? $"Downloading {percent}%" : "Downloading...");
             if (await SelfUpdate.DownloadNewerAsync(Path.Combine(_manager.InstallFolder, "Pending"), progress) is not { } download) {
-                Say("The new Imlight could not be downloaded. Check your internet connection, then click Update Ahziael on the Tools tab.", true);
+                Say("The new Imlight could not be downloaded. Check your internet connection, then click Update Ahziael at the top of the window.", true);
 
                 return;
             }
@@ -1993,7 +1977,7 @@ internal sealed partial class ManagerWindow : Window {
         else if (!await ConfirmAsync($"{update.Name} is ready. Restart Imlight now to use it?" + (running
                 ? " The server restarts with it, so anyone playing is disconnected for a moment."
                 : ""))) {
-            Say($"{update.Name} is ready. Click Update Ahziael on the Tools tab when you want to restart into it.");
+            Say($"{update.Name} is ready. Click Restart to update at the top of the window when you want to restart into it.");
 
             return;
         }

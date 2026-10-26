@@ -214,7 +214,7 @@ internal sealed partial class SpellBook {
         var rootPath = Path.Combine(folder, "Root.wad");
         if (!System.IO.File.Exists(rootPath)) {
             throw new PanelException("The game's Root.wad could not be found, so the spell cards can't be shown. " +
-                "Click \"Update Ahziael\" on the Tools tab once so the app can find Wizard101.");
+                "Click \"Update Ahziael\" at the top of the app once so the app can find Wizard101.");
         }
 
         var root = ArchiveParser.Parse(OpenRead(rootPath)) ?? throw new PanelException("The game's Root.wad could not be read.");
