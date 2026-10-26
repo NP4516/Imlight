@@ -16,6 +16,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System.Collections.Concurrent;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.WizardData.Models.World;
@@ -23,6 +24,9 @@ using Imlight.CoreLib.WizardData.Models.World;
 namespace Imlight.CoreLib.WizardData.Collections;
 
 public static class GlobalRegistryCollection {
+
+    private static readonly ConcurrentDictionary<string, byte> s_missingEntries = new();
+    private const string LOYALTY_PROGRAM_ENTRY = "LoyaltyProgram";
 
     /// <summary>
     /// Gets the global registry from SpiralDB.
@@ -34,6 +38,17 @@ public static class GlobalRegistryCollection {
     /// Gets a registry entry from the global registry.
     /// </summary>
     public static float GetRegistryEntry(string entry) {
+        // The game's event entries (TreasureTower_01_Fire, ...) follow the event the Manager's Events card has on.
+        if (Imlight.CoreLib.Game.Events.EventButton.RegistryValue(entry) is { } eventValue) {
+            return eventValue;
+        }
+
+        // The live game turns its loyalty program on with this entry, and Majid (the Loyalty Store) is only placed
+        // while it is 1. This server always runs it (Game/Loyalty/LoyaltyStore.cs; Niduus 2026-10-25: "he's not here").
+        if (string.Equals(entry, LOYALTY_PROGRAM_ENTRY, System.StringComparison.OrdinalIgnoreCase)) {
+            return 1;
+        }
+
         var model = SpiralDB.GlobalRegistry;
 
         if (model is null) {
@@ -41,8 +56,10 @@ public static class GlobalRegistryCollection {
         }
 
         if (!model.GlobalRegistryValues.ContainsKey(entry)) {
-            Logger.Warning("Global registry entry {0} does not exist.",
-                Logger.Args(entry));
+            if (s_missingEntries.TryAdd(entry, 0)) {
+                Logger.Warning("Global registry entry {0} does not exist.",
+                    Logger.Args(entry));
+            }
 
             return 0;
         }

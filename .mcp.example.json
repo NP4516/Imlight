@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "imlight": {
+      "command": "node",
+      "args": ["tools/imlight-mcp/index.js"]
+    }
+  }
+}

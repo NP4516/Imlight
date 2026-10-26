@@ -37,7 +37,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/09/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -50,6 +50,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.DropTables;
+using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -61,7 +62,13 @@ namespace Imlight.CoreLib.Game.Services;
 internal class CombatService(SessionActor sessionActor) : MessageService(sessionActor) {
 
     private const uint NO_AGGRO_EFFECT_STRINGID = 1618528611;
+
     private const uint NO_AGGRO_EFFECT_DURATION_IN_SECONDS = 3;
+
+    /// <summary>
+    /// Die = Delete mode: a character that is still dead when its battle ends is deleted.
+    /// </summary>
+    private static bool s_dieDelete => ConfigurationManager.GetValue("Die Delete.Enabled", false);
 
     private readonly CoreObjectSerializer _effectSerializer = new(
         behaviors: SerializerFlags.None
@@ -117,13 +124,45 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]
     private void ReceiveCombatDefeat(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) {
-        GetActiveWizard().IsInDuel = false;
+        var wizard = GetActiveWizard();
+        wizard.IsInDuel = false;
         _currentDuelActor = null;
+
+        if (s_dieDelete && message.DiedInDuel && GetActiveAccount() is { } account) {
+            var name = wizard.PlayerNameBehavior?.GetWizardName() ?? wizard.CharId.ToString();
+            Logger.Information("Die = Delete: {Name} died in battle and will be deleted.", Logger.Args(name));
+            SessionActor.ServerRef.Tell(new SERVER_100_PROTOCOL.MSG_DIEDELETE {
+                AccountID = account.AccountId,
+                CharacterID = wizard.CharId,
+                CharacterName = name,
+            });
+
+            return;
+        }
+
         EquipMountSubtle();
+        Imlight.CoreLib.Game.Events.Deckathalon.OnDefeat(SessionActor.ActorRef, wizard);
 
         // We've fled or have been defeated in this duel. Send us back to the world hub.
-        var hubMsg = new ZONE_102_PROTOCOL.MSG_SENDTOHUB();
+        var hubMsg = new ZONE_102_PROTOCOL.MSG_SENDTOHUB {
+            DestinationZone = message.ExitZone,
+            DestinationLocation = message.ExitLocation
+        };
         TellOtherServices(hubMsg);
+    }
+
+    [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATVICTORY))]
+    private void ReceiveVictorySceneDone(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATVICTORY message) {
+        // The client sends this when its victory scene is over; a PvP duel waits for it before it lets everyone go.
+        _currentDuelActor?.Tell(new COMBAT_106_PROTOCOL.MSG_PVPVICTORYSEEN { Actor = SessionActor.ActorRef });
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_PVPDUELENDED))]
+    private void ReceivePvPDuelEnded(COMBAT_106_PROTOCOL.MSG_PVPDUELENDED message) {
+        // A PvP duel grants no experience or loot and sends nobody to a hub; the director sends the players back.
+        GetActiveWizard().IsInDuel = false;
+        _currentDuelActor = null;
+        EquipMount();
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
@@ -131,6 +170,8 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         GetActiveWizard().IsInDuel = false;
         _currentDuelActor = null;
         EquipMount();
+        // Creatures leave a wizard alone for 3 seconds after a won battle; one touched then starts the next battle
+        // the moment it ends (Niduus, 2026-10-25).
         SetNoAggroGrace();
 
         // Send a message to ourselves to end the no aggro grace period.
@@ -149,10 +190,30 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         };
         TellOtherServices(msg);
 
-        GrantMobLoot(message.MobTemplateIds);
+        PetCombatXp.Award(SessionActor.ActorRef, GetActiveGameObject(), GetActiveWizard());
+
+        GrantMobLoot(message.MobLootKeys ?? message.MobTemplateIds, Math.Max(1, message.AllyCharIds?.Length ?? 1), message.CountedRounds);
+        TeachSpellAfterBattle();
+        Imlight.CoreLib.Game.Events.Deckathalon.OnWin(SessionActor.ActorRef, GetActiveWizard(), message.MobLootKeys ?? message.MobTemplateIds,
+            message.CountedRounds);
+        // The Scroll of Fortune and the other events count each creature beaten (ClassProjects.cs).
+        Imlight.CoreLib.Game.Events.ClassProjects.CreaturesBeaten(SessionActor.ActorRef, GetActiveWizard(), message.MobTemplateIds);
     }
 
-    private void GrantMobLoot(ulong[] defeatedMobTemplateIds) {
+    private void TeachSpellAfterBattle() {
+        // Randomizer mode: a win can teach a random battle spell from anywhere in the game.
+        var wizard = GetActiveWizard();
+        if (Randomization.Randomizer.PickSpellAfterBattle(wizard) is not { } pick) {
+            return;
+        }
+
+        var result = Imlight.CoreLib.Game.Spells.SpellTeacher.TryTeach(SessionActor.ActorRef, wizard, pick.TemplateId, randomize: false);
+        if (result == Imlight.CoreLib.Game.Spells.SpellTeachResult.Learned) {
+            InformGameClient($"Randomizer: you learned {pick.Name} from that battle!");
+        }
+    }
+
+    private void GrantMobLoot(ulong[] defeatedMobTemplateIds, int wizards, int rounds) {
         // Rolls and grants drop-table loot for the defeated mobs (raw template ids). Each mob's tables
         // come from NpcDropTableCollection; a single roll across all of a mob's tables yields one combined
         // loot popup for that mob.
@@ -164,14 +225,91 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         var playerRef = SessionActor.ActorRef;
         var playerObj = GetActiveGameObject();
 
-        foreach (var templateId in defeatedMobTemplateIds) {
-            if (!NpcDropTableCollection.TryGetDropTable(templateId, out var npcDropTable)) {
-                continue;
+        // TODO: real mob drops. Every mob drops only gold today: the client names each mob's loot tables
+        // (WizGameObjectTemplate.m_lootTable, about 2,225 names such as MS-Level-40-42) but not what is in them, and
+        // SpiralDB has no NpcDropTable data. Niduus allows Wizard101 Central only boss by boss (2026-10-21: Malistaire the
+        // Undying, spiraldb-extra/NpcDropTable). The housing gauntlets' creatures have theirs from Wizard404 (2026-10-24:
+        // spiraldb-extra/NpcDropTable and DropTables/w404-*, their chances in DropOdds.json).
+        foreach (var key in defeatedMobTemplateIds) {
+            // A custom (Customs.cs) drops its own Drops when it names any, else its creature's.
+            // A boss of the Bosses tab (BossOverrides) can name its own Drops too.
+            var templateId = Imlight.CoreLib.Game.Combat.Customs.BaseOf(key);
+            var changes = Imlight.CoreLib.Game.Combat.BossOverrides.For(key);
+            var customDrops = changes?.Drops;
+            string[] tables = customDrops is { Count: > 0 } ? [.. customDrops]
+                : NpcDropTableCollection.TryGetDropTable(templateId, out var npcDropTable) ? npcDropTable.DropTableNames.ToArray()
+                : [];
+
+            // Tamed Drops: a boss's loot follows how many rounds the battle took, with account-wide pity.
+            Imlight.CoreLib.WizardData.Models.World.DropTableResult loot = null;
+            if (tables.Length > 0 && TamedDrops.AppliesTo(templateId, customDrops is { Count: > 0 })) {
+                try {
+                    loot = TamedDrops.Roll(tables, key, rounds, playerRef, playerObj, wizard, out var note);
+                    if (note is not null) {
+                        InformGameClient(note);
+                    }
+                }
+                catch (Exception e) {
+                    Logger.Error("Tamed Drops failed for {0}, rolling normally: {1}", Logger.Args(key, e));
+                }
             }
 
-            var loot = DropTableRoller.Roll(npcDropTable.DropTableNames.ToArray(), playerRef, playerObj, wizard);
-            LootGranter.GrantAndDisplay(playerRef, wizard, loot);
+            if (loot is null) {
+                loot = tables.Length > 0
+                    ? DropTableRoller.Roll(tables, playerRef, playerObj, wizard)
+                    : new Imlight.CoreLib.WizardData.Models.World.DropTableResult();
+            }
+
+            // Every defeated monster drops some gold, more for higher levels and bosses.
+            if (loot.GoldAmount <= 0) {
+                loot.GoldAmount = BattleGold(templateId);
+            }
+
+            CreatureRewards(key, changes, loot, wizards, wizard);
+
+            if (loot.HasRewards) {
+                LootGranter.GrantAndDisplay(playerRef, wizard, loot);
+            }
         }
+    }
+
+    /// <summary>
+    /// The XP and gold the app set for a creature or custom (BossOverrides XP, GoldMin, GoldMax, RewardShared): they
+    /// replace what its drop tables and the game give, each only when it is set.
+    /// </summary>
+    private static void CreatureRewards(ulong key, Imlight.CoreLib.Game.Combat.BossOverrides.BossOverride changes,
+        Imlight.CoreLib.WizardData.Models.World.DropTableResult loot, int wizards, Wizard wizard) {
+        if (changes is null || (changes.XP is null && changes.GoldMin is null && changes.GoldMax is null)) {
+            return;
+        }
+
+        var split = changes.RewardShared == true ? Math.Max(1, wizards) : 1;
+        if (changes.XP is { } xp) {
+            loot.ExperienceAmount = Math.Max(0, xp) / split;
+        }
+
+        if (changes.GoldMin is not null || changes.GoldMax is not null) {
+            var min = Math.Max(0, changes.GoldMin ?? changes.GoldMax ?? 0);
+            var max = Math.Max(min, changes.GoldMax ?? min);
+            loot.GoldAmount = Random.Shared.Next(min, max + 1) / split;
+        }
+
+        var name = Imlight.CoreLib.Game.Combat.Customs.IsCustom(key)
+            ? $"custom {Imlight.CoreLib.Game.Combat.Customs.IdOf(key)}"
+            : $"creature {key}";
+        Logger.Information("Custom reward | {0} gives {1}: {2} XP, {3} gold{4}.", Logger.Args(
+            name, wizard.PlayerNameBehavior?.GetWizardName() ?? wizard.CharId.ToString(), loot.ExperienceAmount, loot.GoldAmount,
+            split > 1 ? $" (shared by {split} wizards)" : ""));
+    }
+
+    private static int BattleGold(ulong mobTemplateId) {
+        var npc = System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.OfType<NPCBehaviorTemplate>(
+            (Imlight.CoreLib.Shared.Resources.CoreObjectFactory.GetCoreTemplate(mobTemplateId) as GameObjectTemplate)?.m_behaviors
+            ?? []));
+        var level = Math.Max(1, npc?.m_nLevel ?? 1);
+        var gold = Random.Shared.Next(level * 3, level * 6 + 1) + 5;
+
+        return npc?.m_bossMob == true ? gold * 3 : gold;
     }
 
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATDRAW))]
@@ -194,6 +332,101 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             return;
         }
 
+        _currentDuelActor.Tell(message);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATDRAWCARDS))]
+    private void ReceiveCheatDrawCards(COMBAT_106_PROTOCOL.MSG_CHEATDRAWCARDS message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in a battle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATDELAYCAST))]
+    private void ReceiveCheatDelayCast(COMBAT_106_PROTOCOL.MSG_CHEATDELAYCAST message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in a battle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATANNOUNCE))]
+    private void ReceiveCheatAnnounce(COMBAT_106_PROTOCOL.MSG_CHEATANNOUNCE message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in a battle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATTURNORDER))]
+    private void ReceiveCheatTurnOrder(COMBAT_106_PROTOCOL.MSG_CHEATTURNORDER message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in a battle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATJOINME))]
+    private void ReceiveCheatJoinMe(COMBAT_106_PROTOCOL.MSG_CHEATJOINME message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in a battle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATGIVEPIPS))]
+    private void ReceiveCheatGivePips(COMBAT_106_PROTOCOL.MSG_CHEATGIVEPIPS message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in a battle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_SETARCHMASTERYSCHOOL))]
+    private void ReceiveSetArchmasterySchool(COMBAT_106_PROTOCOL.MSG_SETARCHMASTERYSCHOOL message) {
+        // Out of battle the deck keeps it for the next one (SpellBookService saved it).
+        if (_currentDuelActor is null) {
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATMASTERY))]
+    private void ReceiveCheatMastery(COMBAT_106_PROTOCOL.MSG_CHEATMASTERY message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in a battle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
         _currentDuelActor.Tell(message);
     }
 
@@ -235,16 +468,27 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
 
         // The spell target given by the client is logarithmic. We need to convert it to a linear scale.
-        // A selection of 0 means a target of self.
-        int actualSelection = (int) Math.Log(message.SpellTarget, 2);
+        // If it's a single-bit power of 2, convert to 0-based circle slot. Otherwise keep raw value.
+        // Check SpellTarget before Log2, because Log2(0) results in -Infinity!
+        uint actualSelection;
+        if (message.SpellTarget > 0 && (message.SpellTarget & (message.SpellTarget - 1)) == 0) {
+            actualSelection = (uint) Math.Log2(message.SpellTarget);
+        }
+        else {
+            actualSelection = message.SpellTarget;
+        }
 
         var msg = new COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE {
             Actor = SessionActor.ActorRef,
             MoveType = message.MoveType,
             SpellSelection = message.SpellSelection,
-            SpellTarget = (uint) actualSelection,
-            TimeLeft = message.TimeLeft
+            SpellTarget = actualSelection,
+            RawSpellTarget = message.SpellTarget,
+            TimeLeft = message.TimeLeft,
+            ShadowPactTarget = message.ShadowPactTarget, // -1 (If not used(?))
+            SelectedTieredSpellID = message.SelectedTieredSpellID
         };
+
         _currentDuelActor.Tell(msg);
     }
 
@@ -287,6 +531,12 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
 
         var wizard = GetActiveWizard();
+        if (!wizard.InventoryBehavior.HasItem(_cachedMountId)) {
+            _cachedMountId = 0;
+
+            return;
+        }
+
         var wizEquipmentBehavior = wizard.EquipmentBehavior;
         var slot = wizEquipmentBehavior.GetSlotOfItem(_cachedMountId);
 
@@ -316,6 +566,12 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
 
         var wizard = GetActiveWizard();
+        if (!wizard.InventoryBehavior.HasItem(_cachedMountId)) {
+            _cachedMountId = 0;
+
+            return;
+        }
+
         if (!wizard.InventoryToEquipmentTransfer(_cachedMountId, out var addedEffects, out var _)) {
             Logger.Warning("Equip failed on item {0}", Logger.Args(_cachedMountId));
             return;
@@ -366,10 +622,17 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     }
 
     private void BroadcastEquipItem(WizClientObjectItem item) {
-        // Serialize item and broadcast equip action to other players.
+        // Confirm the server-side equip to this player so its local equipment state is restored too.
+        SendToSocket(new GAME_5_PROTOCOL.MSG_EQUIPITEM() {
+            ItemID = item.m_globalID,
+            SlotName = "Mount",
+            IsEquip = 1
+        });
+
+        // Serialize item and broadcast equip action using the same mask as normal equipment changes.
         var pubItem = ItemHelper.GetPublicItem(item);
 
-        if (_itemSerializer.Serialize(pubItem, PropertyFlags.Prop_Transmit, out var data)) {
+        if (!_itemSerializer.Serialize(pubItem, 1, out var data)) {
             Logger.Error("Failed to serialize item {0}", Logger.Args(item.m_globalID));
 
             return;
@@ -446,7 +709,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     private void SetNoAggroGrace() {
         var wizard = GetActiveWizard();
         var charObjId = GetActiveGameObject().m_globalID;
-        var effectInternalId = wizard.GameEffects.Count + 1;
+        var effectInternalId = wizard.NextEffectId();
 
         var epoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var endTime = epoch + NO_AGGRO_EFFECT_DURATION_IN_SECONDS;

@@ -79,7 +79,7 @@ internal static class CharacterEffectHelper {
                 continue;
             }
 
-            gameEffect.m_internalID = wizard.GameEffects.Count;
+            gameEffect.m_internalID = wizard.NextEffectId();
             var effect = AddGameEffectToStats(wizard.GameStats, effectInfo);
 
             if (gameEffect is ProvideSpellEffect provideSpellEffect) {
@@ -218,11 +218,19 @@ internal static class CharacterEffectHelper {
         // Apply effects that don't require a school.
         stats.m_baseHitpoints += (int) statistic.m_hitPointBonus;
         stats.m_baseMana += (int) statistic.m_manaBonus;
+        stats.m_energyMax += (int) statistic.m_energyBonus;
         stats.m_powerPipBonusPercentAll += statistic.m_powerPipBonusPercent;
         stats.m_healBonusPercentAll += statistic.m_healBonusPercent;
         stats.m_healIncBonusPercentAll += statistic.m_healIncBonusPercent;
+        stats.m_stunResistancePercent += statistic.m_stunResistancePercent;
+        stats.m_archmasteryBonus += statistic.m_archmastery;
+        stats.m_archmasteryBonusPercent += statistic.m_archmasteryBonusPercent;
+        LogBattleStat("added", effectName, statistic);
 
-        if (effectName.Contains("Damage") && !effectName.Contains("Reduce")) {
+        if (effectName.Contains("ArmorPiercing")) {
+            ApplyArmorPiercing(stats, effectName, statistic.m_armorPiercingBonusPercent);
+        }
+        else if (effectName.Contains("Damage") && !effectName.Contains("Reduce")) {
             ApplyDamageIncrease(stats, effectName, statistic);
         }
         else if (effectName.Contains("Accuracy") && !effectName.Contains("Rating")) {
@@ -233,6 +241,9 @@ internal static class CharacterEffectHelper {
         }
         else if (effectName.Contains("Mastery")) {
             ApplySchoolMastery(stats, effectName);
+        }
+        else if (effectName.Contains("PipConversion")) {
+            ApplyPipConversion(stats, effectName, statistic.m_pipConversionRating);
         }
         else if (effectName.Contains("CriticalHit")) {
             // Crit gear is school-based; route like damage, only falling back to the
@@ -266,11 +277,19 @@ internal static class CharacterEffectHelper {
         // Remove effects that don't require a school.
         stats.m_baseHitpoints -= (int) statistic.m_hitPointBonus;
         stats.m_baseMana -= (int) statistic.m_manaBonus;
+        stats.m_energyMax -= (int) statistic.m_energyBonus;
         stats.m_powerPipBonusPercentAll -= statistic.m_powerPipBonusPercent;
         stats.m_healBonusPercentAll -= statistic.m_healBonusPercent;
         stats.m_healIncBonusPercentAll -= statistic.m_healIncBonusPercent;
+        stats.m_stunResistancePercent -= statistic.m_stunResistancePercent;
+        stats.m_archmasteryBonus -= statistic.m_archmastery;
+        stats.m_archmasteryBonusPercent -= statistic.m_archmasteryBonusPercent;
+        LogBattleStat("removed", effectName, statistic);
 
-        if (effectName.Contains("Damage") && !effectName.Contains("Reduce")) {
+        if (effectName.Contains("ArmorPiercing")) {
+            ApplyArmorPiercing(stats, effectName, -statistic.m_armorPiercingBonusPercent);
+        }
+        else if (effectName.Contains("Damage") && !effectName.Contains("Reduce")) {
             RemoveDamageIncrease(stats, effectName, statistic);
         }
         else if (effectName.Contains("Accuracy") && !effectName.Contains("Rating")) {
@@ -281,6 +300,9 @@ internal static class CharacterEffectHelper {
         }
         else if (effectName.Contains("Mastery")) {
             RemoveSchoolMastery(stats, effectName);
+        }
+        else if (effectName.Contains("PipConversion")) {
+            ApplyPipConversion(stats, effectName, -statistic.m_pipConversionRating);
         }
         else if (effectName.Contains("CriticalHit")) {
             var school = effectName.Contains("All") ? null : ExtractSchoolName(effectName);
@@ -299,6 +321,32 @@ internal static class CharacterEffectHelper {
             else {
                 stats.m_blockRatingAll -= statistic.m_blockRating;
             }
+        }
+    }
+
+    private static void ApplyArmorPiercing(ServerWizGameStats stats, string effectName, float value) {
+        var school = effectName.Contains("All") ? null : ExtractSchoolName(effectName);
+        if (school is not null && MagicSchools.GetMagicSchool(school) is not null) {
+            ApplySchoolEffect(ref stats.m_apBonusPercent, school, value);
+        }
+        else {
+            stats.m_apBonusPercentAll += value;
+        }
+    }
+
+    /// <summary>
+    /// Pip Conversion rating, per school or for all schools. Shadow pip conversion is the shadow pip stat, not this.
+    /// </summary>
+    private static void ApplyPipConversion(ServerWizGameStats stats, string effectName, float rating) {
+        var school = effectName.Contains("All") ? null : ExtractSchoolName(effectName);
+        if (school == "Shadow") {
+            return;
+        }
+        if (school is not null && MagicSchools.GetMagicSchool(school) is not null) {
+            ApplySchoolEffect(ref stats.m_pipConversionRatingPerSchool, school, rating);
+        }
+        else {
+            stats.m_pipConversionRatingAll += rating;
         }
     }
 
@@ -509,6 +557,17 @@ internal static class CharacterEffectHelper {
                 var schoolName = ExtractSchoolName(effectName);
                 RemoveSchoolEffect(ref stats.m_dmgReducePercent, schoolName, statistic.m_damageReducePercent);
             }
+        }
+    }
+
+    // Damage, pierce and resist as they reach a wizard's stats, to compare with the game's own numbers (Niduus,
+    // 2026-10-23: the server's Tempest did a third of what the game showed, so Draconians looked dead).
+    private static void LogBattleStat(string change, string effectName, WizStatisticEffect statistic) {
+        if (statistic.m_damageBonusPercent != 0 || statistic.m_damageBonusFlat != 0 || statistic.m_armorPiercingBonusPercent != 0
+            || statistic.m_damageReducePercent != 0) {
+            Logger.Verbose("Stat {0}: {1} damage {2} flat {3} pierce {4} resist {5}.",
+                Logger.Args(change, effectName, statistic.m_damageBonusPercent, statistic.m_damageBonusFlat,
+                    statistic.m_armorPiercingBonusPercent, statistic.m_damageReducePercent));
         }
     }
 

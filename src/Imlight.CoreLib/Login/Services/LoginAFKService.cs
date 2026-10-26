@@ -51,6 +51,9 @@ internal class LoginAFKService : MessageService {
     private readonly ushort _afkCheckInterval 
         = ConfigurationManager.Settings["Login Server.LoginAfkCheckInterval"].AsUShort();
 
+    // [Login Server] DisableIdleKick: nobody is ever disconnected for being idle.
+    private static bool s_disableIdleKick => ConfigurationManager.GetValue("Login Server.DisableIdleKick", true);
+
     private const string AfkCheckTimerKey = "AfkCheck";
 
     private bool _halted;
@@ -86,6 +89,14 @@ internal class LoginAFKService : MessageService {
         _lastReceivedSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
     }
 
+    // The game's own MSG_NOT_AFK, sent here at character select: by the Idle button of the Options book (which then
+    // repeats it every 5 minutes) or by the patcher while it downloads. It only counts as activity; it no longer opens
+    // the promo code window (Niduus, 2026-10-24: "Completely remove Promo Code UI usage on the server").
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_NOT_AFK))]
+    private void ReceiveNotAfk(GAME_5_PROTOCOL.MSG_NOT_AFK message) {
+        _lastReceivedSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    }
+
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_OPCODE_HALT))]
     private void ReceiveHalt(SERVICE_101_PROTOCOL.MSG_OPCODE_HALT message) {
         _halted = true;
@@ -97,7 +108,7 @@ internal class LoginAFKService : MessageService {
     }
 
     private void CheckAfk() {
-        if (_disposed || _halted) {
+        if (_disposed || _halted || s_disableIdleKick) {
             return;
         }
 

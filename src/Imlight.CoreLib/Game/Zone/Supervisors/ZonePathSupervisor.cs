@@ -24,6 +24,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imcodec.ObjectProperty.TypeCache;
 using Microsoft.VisualBasic;
@@ -47,6 +48,8 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
             nodesById.TryAdd(node.m_id.Full, node);
         }
 
+        LogWispSpawners(pathData, creatureSpawnData);
+
         foreach (var path in pathData.m_pathList) {
             if (!TryGetNodesForPath(path, nodesById, out var nodes)) {
                 continue;
@@ -55,9 +58,41 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
             var creatures = GetCreaturesForPath(path, creatureSpawnData);
             var pathActor = Context.ActorOf(Props.Create(() => new ZonePath(path, nodes, creatures, ZoneRef, Zone)));
             BeginEntityLoad(pathActor, path.m_name);
+            _paths[path.m_id.Full] = pathActor;
         }
 
         ReportLoadedWhenEntitiesLoad();
+    }
+
+    // The paths by id, so a ZoneObjects creature removed while the zone runs can be found.
+    private readonly Dictionary<ulong, IActorRef> _paths = [];
+
+    // ZoneObjects creatures added, removed or changed while the zone runs (Niduus, 2026-10-23: a battle added in the
+    // Customs tab counts at once). A removed one's path takes its creature away and stops; an added one gets a path.
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED))]
+    public override void ReceiveZoneObjectsChanged(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED message) {
+        base.ReceiveZoneObjectsChanged(message);
+
+        foreach (var id in message.RemovedCreatures) {
+            if (_paths.Remove(id, out var pathActor)) {
+                pathActor.Tell(message);
+                EntityActors.Remove(pathActor);
+            }
+        }
+
+        foreach (var (path, nodes, spawner) in message.AddedCreatures) {
+            try {
+                var pathActor = Context.ActorOf(Props.Create(() => new ZonePath(path, nodes, new List<SpawnObject> { spawner }, ZoneRef, Zone)));
+                pathActor.Tell(new ZONE_102_PROTOCOL.MSG_ZONEOBJECTLOADBEGIN());
+                EntityActors.Add(pathActor);
+                _paths[path.m_id.Full] = pathActor;
+                Logger.Information("Zone {0}: creature {1} (template {2}) added while it runs.",
+                    Logger.Args(Zone.ZonePath, path.m_name, spawner.m_spawnList?.FirstOrDefault()?.m_objectInfo?.m_templateID));
+            }
+            catch (Exception e) {
+                Logger.Error("Zone {0}: the added creature {1} could not be made: {2}", Logger.Args(Zone.ZonePath, path.m_name, e));
+            }
+        }
     }
 
     private static bool TryGetNodesForPath(PathObjectTemplate path, Dictionary<ulong, NodeObject> nodesById,
@@ -76,6 +111,43 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
 
         return true;
     }
+
+    /// <summary>
+    /// Writes one log line for every wisp spawner in this zone's data, so a missing wisp can be traced to its
+    /// spawner settings or to a path the server never loads.
+    /// </summary>
+    private void LogWispSpawners(PathTemplateList pathData, SpawnManager spawnData) {
+        if (spawnData?.m_spawners is null) {
+            return;
+        }
+
+        var paths = new Dictionary<ulong, PathObjectTemplate>();
+        foreach (var path in pathData?.m_pathList ?? []) {
+            paths.TryAdd(path.m_id.Full, path);
+        }
+
+        foreach (var spawner in spawnData.m_spawners) {
+            var wisps = spawner.m_spawnList?.Where(x => x.m_objectInfo is not null && IsWisp(x.m_objectInfo)).ToList();
+            if (wisps is null || wisps.Count == 0) {
+                continue;
+            }
+
+            foreach (var wisp in wisps) {
+                var info = wisp.m_objectInfo;
+                var template = CoreObjectFactory.GetCoreTemplate(info.m_templateID) as GameObjectTemplate;
+                var pathName = paths.TryGetValue(info.m_pathID.Full, out var path) ? path.m_name.ToString() : "(no such path)";
+                Logger.Information(
+                    "Wisp spawner {Spawner} in {Zone}: {Wisp} on path {Path}, active {Active}, max {Max}, at least one {AtLeastOne}, every {Seconds}s, requirements {Reqs}.",
+                    Logger.Args(spawner.m_name.ToString(), Zone.ZoneName, template?.m_objectName.ToString() ?? info.m_templateID.ToString(),
+                                pathName, spawner.m_active, spawner.m_maxNumberOfSpawns, spawner.m_atLeastOneSpawn,
+                                spawner.m_spawnTime, spawner.m_globalDynamicReqs is not null));
+            }
+        }
+    }
+
+    internal static bool IsWisp(SpawnObjectInfo info)
+        => CoreObjectFactory.GetCoreTemplate(info.m_templateID) is GameObjectTemplate template
+           && template.m_objectName.ToString().Contains("Wisp");
 
     private static List<SpawnObject> GetCreaturesForPath(PathObjectTemplate path, SpawnManager spawnData) {
         var creatureList = new List<SpawnObject>();
@@ -101,6 +173,11 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
                 );
 
                 if (!requirementsMet) {
+                    if (spawnObject.m_spawnList.Any(x => x.m_objectInfo?.m_pathID == path.m_id && IsWisp(x.m_objectInfo))) {
+                        Logger.Information("Wisp spawner {0} on path {1} is off: its spawn requirements are not met.",
+                            Logger.Args(spawnObject.m_id, path.m_name));
+                    }
+
                     continue;
                 }
             }

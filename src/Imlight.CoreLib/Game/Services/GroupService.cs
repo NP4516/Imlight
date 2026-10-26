@@ -40,7 +40,7 @@
  * 
  * Created by: Jay
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -49,7 +49,9 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
+using Imlight.Common;
 using Imlight.CoreLib.Game.Groups;
+using Imlight.CoreLib.Game.Housing;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -179,10 +181,20 @@ internal class GroupService(SessionActor sessionActor) : MessageService(sessionA
         var wizard = GetActiveWizard();
         var targetCharId = message.TargetCharacterID;
 
-        if (!GroupRegistry.AreGrouped(wizard.CharId, targetCharId)
-            || !TryGetOnlinePlayer(targetCharId, out var target)
-            || target.CurrentRealm != GetRealmName()) {
-            SendToSocket(new GAME_5_PROTOCOL.MSG_GOTOPLAYERRESP { TargetCharacterID = targetCharId, Error = 1 });
+        if (!GroupRegistry.AreGrouped(wizard.CharId, targetCharId)) {
+            RefuseGoTo("friend.busy.notgrouped");
+
+            return;
+        }
+
+        if (!TryGetOnlinePlayer(targetCharId, out var target)) {
+            RefuseGoTo("friend.busy.offline");
+
+            return;
+        }
+
+        if (target.CurrentRealm != GetRealmName()) {
+            RefuseGoTo("friend.busy.realm");
 
             return;
         }
@@ -193,7 +205,26 @@ internal class GroupService(SessionActor sessionActor) : MessageService(sessionA
                 timeout: TimeSpan.FromSeconds(QueryGroupMateTimeoutInSeconds))
             .Result;
         if (targetCharacter?.Wizard is null) {
-            SendToSocket(new GAME_5_PROTOCOL.MSG_GOTOPLAYERRESP { TargetCharacterID = targetCharId, Error = 1 });
+            RefuseGoTo("friend.busy.offline");
+
+            return;
+        }
+
+        // A group mate inside a house is visited through the house's lot, which only the house's owner may allow.
+        HouseEntry houseEntry = null;
+        if (targetCharacter.Wizard.AttachedLotGid != 0 && !HouseVisits.TryPrepare(wizard, targetCharacter.Wizard, out houseEntry, out var failure)) {
+            Logger.Information("Character {CharId} cannot go to group mate {TargetCharId} in a house: {Failure}.",
+                Logger.Args(wizard.CharId, targetCharId, failure));
+            RefuseGoTo(failure == HouseVisitFailure.Denied ? "friend.busy.houseclosed" : "friend.busy.house");
+
+            return;
+        }
+
+        // As on live, nobody teleports into a dungeon (or any other instance) to a group mate (Niduus, 2026-10-22).
+        if (targetCharacter.Wizard.AttachedLotGid == 0 && World.InstancedPlayers.IsInInstance(targetCharId)) {
+            Logger.Information("Character {CharId} cannot go to group mate {TargetCharId}, who is in an instance.",
+                Logger.Args(wizard.CharId, targetCharId));
+            RefuseGoTo("friend.busy.dungeon");
 
             return;
         }
@@ -202,7 +233,8 @@ internal class GroupService(SessionActor sessionActor) : MessageService(sessionA
             destinationZone: target.CurrentZone,
             destinationLocation: Util.GetCompactStringFromVector((Vector4) targetCharacter.Wizard.Location),
             doTeleportEffects: true,
-            ownerCharId: targetCharId
+            ownerCharId: targetCharId,
+            houseEntry: houseEntry
         );
     }
 

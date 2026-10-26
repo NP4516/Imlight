@@ -45,6 +45,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using Akka.Actor;
 using Imlight.Common;
 using Imlight.CoreLib.Auth;
@@ -56,6 +58,7 @@ using Imlight.CoreLib.WizardData;
 using Imlight.CoreLib.WizardData.Databases;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.Game.CrownShop;
 
 namespace Imlight.Director;
 
@@ -119,10 +122,24 @@ internal static class Program {
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config/Imlight.ini")
         );
         Logger.Information("Imlight configuration loaded.");
+        Imlight.CoreLib.Shared.Resources.ServerHealth.Start();
+
+        // Saving Imlight.ini (by hand or from the Manager) applies at once.
+        Imlight.CoreLib.Shared.Resources.LiveSettings.Start();
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            Logger.Fatal("The server stopped because of an error: {Exception}", Logger.Args(e.ExceptionObject));
 
         // =============================================================
         // AKKA.NET CONFIGURATION
         // =============================================================
+        // Akka.NET reports an actor that crashed through Serilog's shared logger, which wrote nowhere: a game server that
+        // crashed and restarted left no trace in the log (Niduus's drop at the Unicorn Way gate, 2026-10-25). Its
+        // warnings and errors now go to the server log.
+        Serilog.Log.Logger = new Serilog.LoggerConfiguration()
+            .MinimumLevel.Warning()
+            .WriteTo.Logger(Logger.Log)
+            .CreateLogger();
+
         Logger.Information("Getting Akka.NET configuration..");
         if (!AkkaConfiguration.CreateActorSystem(ActorSystemName, out var system)) {
             Logger.Fatal($"Could not find Akka.NET config file!");
@@ -132,6 +149,23 @@ internal static class Program {
         }
         Logger.Information("Akka.NET system created.");
         s_imlightSystem = system;
+
+        Imlight.CoreLib.Game.Commands.AgentBridge.Actors = s_imlightSystem;
+        AgentScripting.Map();
+        Imlight.CoreLib.Game.Commands.AgentBridge.StartIfEnabled();
+
+        // =============================================================
+        // PLAYER DATABASE
+        // =============================================================
+        // The database runs in a process of its own that takes 6 to 14 s to start (Niduus's log of 2026-10-25). It
+        // starts now and makes the admin account while the game data loads, instead of after it.
+        var database = Task.Run(() => {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            _ = PlayerDatabase.Instance.Store;
+            CreateEmbeddedDatabaseAccounts();
+            Logger.Information("The player database was ready in {0} ms, while game data loaded.",
+                Logger.Args(stopwatch.ElapsedMilliseconds));
+        });
 
         // =============================================================
         // RESOURCES
@@ -144,6 +178,8 @@ internal static class Program {
         // Load resources. Record the time it takes to load resources.
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         Logger.Information("Director is now explicitly loading resources..");
+        // SpiralDB's files need none of the game's, so they are read side by side with them.
+        SpiralDB.StartReading();
         var resourceContainer = new ResourceContainer();
         LoadResources();
         Logger.Information("Director has called all resources to load.");
@@ -151,17 +187,29 @@ internal static class Program {
         Logger.Information($"Resource loading completed in {0} ms.",
             Logger.Args(stopwatch.ElapsedMilliseconds));
 
+        // The ID lookup reads every template, so it builds in the background.
+        Imlight.CoreLib.Shared.Resources.IdCatalog.StartBackgroundBuild();
+        Imlight.CoreLib.Game.Randomization.Randomizer.StartBackgroundBuild();
+
         // =============================================================
         // SERVERS
         // =============================================================
         var loginServer = StartLoginServer();
         StartGameServers(loginServer);
 
-        // Force load dragon database. Create a dud account if the database ends up using the embedded database.
-        _ = PlayerDatabase.Instance.Store;
-        CreateEmbeddedDatabaseAccounts();
+        // Wait for the database started above (and its admin account) before anyone can log in.
+        try {
+            database.GetAwaiter().GetResult();
+        }
+        catch (Exception ex) {
+            Logger.Fatal("The player database did not start, so nobody can log in. {Message}", Logger.Args(ex.GetBaseException().Message));
+            Environment.ExitCode = 1;
+
+            return;
+        }
 
         OnlinePlayerCollection.Clear();
+        TradeEscrowCollection.RecoverAll();
         LoginWarmup.Run();
 
         // The login and game servers accept no connection until everything above is done.
@@ -198,9 +246,10 @@ internal static class Program {
     }
 
     private static void LoadResources() {
-        // Load SpiralDB — the in-memory world database from JSON files.
         SpiralDB.Load();
+        CrownShopHandler.Load();
     }
+
     private static IActorRef StartLoginServer() {
         var loginServerName = s_loginServerName;
         var loginServerPort = s_loginServerPort;
@@ -284,8 +333,10 @@ internal static class Program {
         Console.Write("   :: L&G Boot ::    ");
         Console.ForegroundColor = ConsoleColor.White;
 
-        // Write the version. Our schema is NNyWWc, where NN is the two-digit year, and WW is the week of the year.
-        // c is the build configuration, which is either DEBUG or RELEASE.
+        // Write the version. Our schema is {yy}Q{quarter}.{week}c, followed by the build configuration (dev or canary).
+        // yy is the two-digit year and week uses the .NET FirstDay/Monday rule (not ISO). Published builds can stamp
+        // the version as {yy}Q{quarter}.{week}c{commit count} in the assembly's InformationalVersion (the part before
+        // any '+'); when that is present it is shown as is, otherwise the banner is computed from the current date.
         var buildConfiguration = GetBuildConfiguration();
         Console.Write(@"|___/");
         Console.ForegroundColor = ConsoleColor.DarkGray;
@@ -300,8 +351,27 @@ internal static class Program {
                         CalendarWeekRule.FirstDay,
                         DayOfWeek.Monday);
 
-        Console.Write($" ({MajorVersion} {year}Q{quarter}.{week}c {buildConfiguration})\n");
+        string builtVersion = GetBuiltVersion();
+        if (builtVersion != null) {
+            Console.Write($" ({MajorVersion} {builtVersion} {buildConfiguration})\n");
+        } else {
+            Console.Write($" ({MajorVersion} {year}Q{quarter}.{week}c {buildConfiguration})\n");
+        }
         Console.WriteLine("");
+    }
+
+    /// <summary>
+    /// Returns the version stamped into the assembly at publish time (the InformationalVersion part before '+'),
+    /// or null when it is missing or not in the {yy}Q{quarter}.{week}c{count} format.
+    /// </summary>
+    private static string GetBuiltVersion() {
+        var informational = Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (informational == null) {
+            return null;
+        }
+
+        var core = informational.Split('+')[0];
+        return Regex.IsMatch(core, @"^\d{2}Q[1-4]\.\d{1,2}c\d+$") ? core : null;
     }
 
     private static string GetBuildConfiguration() {

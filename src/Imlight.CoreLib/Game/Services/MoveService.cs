@@ -40,6 +40,7 @@ using System;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Imcodec.Math;
+using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
@@ -88,7 +89,11 @@ internal class MoveService : MessageService {
 
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
     private void ReceivePostAttach(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
-        var wizard = GetActiveWizard();
+        SendMarkedLocation(GetActiveWizard());
+    }
+
+    /// Tells the client where the wizard's marker is (Result 2), so it shows and can recall to it.
+    private void SendMarkedLocation(Wizard wizard) {
         var zoneMap = WorldHubZones.GetHubForZone(wizard.Zone);
 
         var rsp = new GAME_5_PROTOCOL.MSG_MARK_LOCATION_RESPONSE {
@@ -99,7 +104,7 @@ internal class MoveService : MessageService {
             LocationX = wizard.MarkedLocation.X,
             LocationY = wizard.MarkedLocation.Y,
             LocationZ = wizard.MarkedLocation.Z,
-            Direction = wizard.Orientation.Z,
+            Direction = wizard.MarkedOrientation.Z,
             MarkType = "",
             InstanceId = new GID(1),
             CommonsZoneId = zoneMap?.m_hubZoneDisplayName ?? "0",
@@ -122,6 +127,10 @@ internal class MoveService : MessageService {
 
         // Broadcast the move to all other players in the zone.
         BroadcastClientMove(message);
+
+        // The trainer hall door sends a wizard on when they walk up to it. Locations arrive divided by 4.
+        TrainerHallDoor.OnMove(SessionActor.ActorRef, _wizard, unchecked((short) message.LocationX * 4),
+            unchecked((short) message.LocationY * 4), unchecked((short) message.LocationZ * 4));
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PLAYERMOVEINTERVAL))]
@@ -156,7 +165,7 @@ internal class MoveService : MessageService {
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_JUMP))]
     private void ReceiveClientJump(GAME_5_PROTOCOL.MSG_JUMP message) {
         var excludeOriginator = message.ExcludeOriginator == 1;
-        ZoneBroadcast(message, excludeOriginator);
+        BroadcastMove(message, excludeOriginator);
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_MARK_LOCATION))]
@@ -249,6 +258,10 @@ internal class MoveService : MessageService {
             TellOtherServices(broadcastMsg);
 
             SendToSocket(recallRsp);
+
+            // Like the live game, the marker stays after recalling to it. Re-send it so the client keeps it too;
+            // a zone change gets it back from ReceivePostAttach instead.
+            SendMarkedLocation(wizard);
         }
         else {
             var ml = wizard.MarkedLocation;
@@ -265,8 +278,6 @@ internal class MoveService : MessageService {
             };
             SendToSocket(recallRsp);
         }
-
-        wizard.SetMarkedLocation(Vector3.Zero, Vector3.Zero, "", "");
     }
 
     private void BroadcastClientMove(GAME_5_PROTOCOL.MSG_CLIENTMOVE message) {
@@ -281,7 +292,7 @@ internal class MoveService : MessageService {
             Direction = message.Direction,
             MobileID = _activeCoreObject.m_nMobileID,
         };
-        ZoneBroadcast(serverMoveMsg);
+        BroadcastMove(serverMoveMsg);
     }
 
     private void BroadcastClientMoveState(GAME_5_PROTOCOL.MSG_CLIENTMOVESTATE message) {
@@ -293,7 +304,29 @@ internal class MoveService : MessageService {
             NewState = message.NewState,
             GlobalID = _activeCoreObject.m_globalID
         };
-        ZoneBroadcast(stateMsg);
+        BroadcastMove(stateMsg);
+    }
+
+    // Straight to the zone, which serves it before anything else (ZonePriorityMailbox). Through the session and the
+    // ZoneService it waited behind whatever those had queued, so a move reached the other players late (Niduus,
+    // 2026-10-26: "try to tighten the sync a bit more"). Only players draw it: sent to the whole zone, every move also
+    // went to each NPC, door and trigger there.
+    private void BroadcastMove(IMessage message, bool isSelfless = true) {
+        var broadcast = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Message = message,
+            Selfless = isSelfless,
+            Sender = SessionActor.ActorRef,
+            Targets = ZoneBroadcastTarget.Players,
+        };
+
+        var zoneActor = SessionActor.GetZoneActor();
+        if (zoneActor is null) {
+            ZoneBroadcast(message, isSelfless, ZoneBroadcastTarget.Players);
+
+            return;
+        }
+
+        zoneActor.Tell(broadcast, Self);
     }
 
     private void SendZoneInteractionFishRequest() {

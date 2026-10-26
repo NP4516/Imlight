@@ -23,6 +23,7 @@ using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.Zone.Components;
@@ -43,23 +44,29 @@ namespace Imlight.CoreLib.Game.Zone.Supervisors;
 /// text, etc.</remarks>
 internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervisor(zone) {
 
-    private static readonly bool s_randomizeGateways 
-        = ConfigurationManager.Settings["April Fools.RandomizeGateways"].AsBool();
+    private static bool s_randomizeGateways => ConfigurationManager.Settings["April Fools.RandomizeGateways"].AsBool();
+
+    // [World] OpenAllDoors: doors and other teleports work without their quest, level or event requirements.
+    private static bool s_openAllDoors => ConfigurationManager.GetValue("World.OpenAllDoors", false);
 
     // A trigger's own object is hidden with this state when the trigger is deactivated.
     private const string DEACTIVATED_OBJECT_STATE = "Off";
 
     private readonly List<(Trigger Trigger, IActorRef Actor)> _orderedTriggers = [];
     private readonly HashSet<string> _undecodableLogged = [];
+    private readonly HashSet<string> _deadTeleportsLogged = [];
     private readonly HashSet<string> _chainedEvents = [];
     private readonly HashSet<string> _cinematicEndsPosted = [];
     private readonly HashSet<string> _unenforceableTriggers = [];
+    // EnterZone triggers a player was refused on entry, checked again once the quest has updated its goals.
+    private readonly Dictionary<IActorRef, HashSet<string>> _refusedOnEntry = [];
 
     // The objects that enabled triggers own (walls, gates, collision), by trigger name.
     private readonly Dictionary<string, (IActorRef Actor, CoreObject Object, string Tag)> _triggerObjects = new(StringComparer.OrdinalIgnoreCase);
 
     // The activate event a trigger lists to start the zone with it enabled.
     private const string START_ZONE_EVENT = "StartZone";
+    private const string START_ZONE_ENTER_EVENT = "EnterZone";
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS))]
     public override void ReceiveZoneLoadResults(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS message) {
@@ -98,22 +105,32 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         ReportLoadedWhenEntitiesLoad();
     }
 
-    protected override void OnEntityLoadFailed(IActorRef entityActor) {
-        _orderedTriggers.RemoveAll(x => x.Actor.Equals(entityActor));
-
-        foreach (var name in _triggerObjects.Where(x => x.Value.Actor.Equals(entityActor)).Select(x => x.Key).ToList()) {
-            _triggerObjects.Remove(name);
-        }
-    }
-
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_POSTEVENT))]
     private void ReceivePostEvent(ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
         // Client wads pair multiple triggers on the same event; every passing trigger fires
         // (their results are independent), but paired teleporter triggers must not both win:
         // only one ResTeleport trigger may execute (see PickTeleportTrigger).
         var passing = new List<(Trigger Trigger, IActorRef Actor)>();
+        HashSet<string> retry = null;
+        if (message.RetryRefused && (message.PlayerActor is null || !_refusedOnEntry.Remove(message.PlayerActor, out retry))) {
+            return;
+        }
+
         foreach (var (trigger, triggerActor) in _orderedTriggers) {
             if (trigger.m_fireEvents is null || !trigger.m_fireEvents.Any(x => x == message.EventName)) {
+                continue;
+            }
+
+            if (retry is not null && !retry.Contains(trigger.m_triggerName)) {
+                continue;
+            }
+
+            // With OpenAllDoors, a door goes through as long as its fire limit allows.
+            if (s_openAllDoors && HasTeleportResult(trigger)) {
+                if (Zone.ScriptState.HasTriggerFiresLeft(trigger.m_triggerName, trigger.m_triggerMax)) {
+                    passing.Add((trigger, triggerActor));
+                }
+
                 continue;
             }
 
@@ -136,13 +153,36 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
             }
 
             if (!EvaluateRequirements(trigger, message)) {
+                // A door that stays shut is otherwise silent ("friend can not enter Hedge Maze", 2026-10-22).
+                if (HasTeleportResult(trigger)) {
+                    Logger.Debug("Zone {0}: teleport trigger {1} on event {2} refused {3}: requirements not met.",
+                        Logger.Args(Zone.ZonePath, trigger.m_triggerName, message.EventName, message.PlayerActor?.Path.Name));
+                }
+                else if (retry is null && message.EventName == START_ZONE_ENTER_EVENT && message.PlayerActor is not null) {
+                    if (!_refusedOnEntry.TryGetValue(message.PlayerActor, out var refused)) {
+                        _refusedOnEntry[message.PlayerActor] = refused = [];
+                    }
+                    refused.Add(trigger.m_triggerName);
+                }
+
                 continue;
             }
 
             passing.Add((trigger, triggerActor));
         }
 
+        if (retry is not null) {
+            foreach (var (trigger, _) in passing) {
+                Logger.Information("Zone {0}: trigger {1} fires after the quest updated on entry.",
+                    Logger.Args(Zone.ZonePath, trigger.m_triggerName));
+            }
+        }
+
         var teleportWinner = PickTeleportTrigger(passing, message);
+        if (teleportWinner is not null) {
+            Logger.Debug("Zone {0}: event {1} takes the player through teleport trigger {2}.",
+                Logger.Args(Zone.ZonePath, message.EventName, teleportWinner.m_triggerName));
+        }
         foreach (var (trigger, triggerActor) in passing) {
             // Two passing events in one message cannot both take the last fire.
             if (!Zone.ScriptState.HasTriggerFiresLeft(trigger.m_triggerName, trigger.m_triggerMax)) {
@@ -163,6 +203,10 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         }
 
         // Triggers that fired saw the state from before this event; now the event's own enables and disables land.
+        if (retry is not null) {
+            return;
+        }
+
         ApplyTriggerStateEvents(message.EventName, message.PlayerActor, message.PlayerGameObject);
     }
 
@@ -314,18 +358,55 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
     private static bool HasTeleportResult(Trigger trigger)
         => trigger.m_results?.m_results?.Any(result => result is ResTeleport) == true;
 
-    private static Trigger PickTeleportTrigger(List<(Trigger Trigger, IActorRef Actor)> passing, ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
+    // The teleport handler sends a player with no destination zone out of a house zone only; anywhere else it does nothing.
+    private bool LeadsSomewhere(Trigger trigger)
+        => NamesDestination(trigger) || (HasTeleportResult(trigger) && HouseExits.TryResolve(Zone.ZonePath, out _, out _));
+
+    private static bool NamesDestination(Trigger trigger)
+        => trigger.m_results?.m_results?.Any(result => result is ResTeleport teleport
+            && !string.IsNullOrEmpty(teleport.m_destinationZone)) == true;
+
+    private Trigger PickTeleportTrigger(List<(Trigger Trigger, IActorRef Actor)> passing, ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
         // ReqHasQuest also passes for a completed quest: prefer the trigger naming a currently active quest, else the last passing one.
         var teleports = passing.Where(x => HasTeleportResult(x.Trigger)).Select(x => x.Trigger).ToList();
+
+        // A paired trigger whose teleport names no destination (the client data leaves it blank and spiraldb has none for it)
+        // would win and take nobody anywhere, suppressing the one that does lead somewhere. Unicorn Way pairs the Hedge Maze
+        // entrance with "And After Hedgemaze Quest" this way. Those only win when no passing teleport has a destination.
+        var leading = teleports.Where(LeadsSomewhere).ToList();
+        if (leading.Count > 0 && leading.Count < teleports.Count) {
+            foreach (var dead in teleports.Except(leading)) {
+                if (_deadTeleportsLogged.Add(dead.m_triggerName)) {
+                    Logger.Information("Trigger {0} in {1} teleports with no destination; {2} takes the player instead.",
+                        Logger.Args(dead.m_triggerName, Zone.ZonePath, leading[^1].m_triggerName));
+                }
+            }
+
+            teleports = leading;
+        }
+
+        // In a house zone a trigger naming its own destination beats one that only falls back to the world's hub. The
+        // dorm's exit pairs the boys' and girls' door triggers (each to its Ravenwood tower) with the first quest's
+        // Trigger-WC-COMMONS-MAIN-002, which has none and would send the wizard to the Commons (Niduus, 2026-10-25).
+        var named = teleports.Where(NamesDestination).ToList();
+        if (named.Count > 0 && named.Count < teleports.Count) {
+            foreach (var fallback in teleports.Except(named)) {
+                if (_deadTeleportsLogged.Add(fallback.m_triggerName)) {
+                    Logger.Information("Trigger {0} in {1} only leads to the world's hub; {2} names its destination and takes the player instead.",
+                        Logger.Args(fallback.m_triggerName, Zone.ZonePath, named[^1].m_triggerName));
+                }
+            }
+
+            teleports = named;
+        }
+
         if (teleports.Count <= 1) {
             return teleports.FirstOrDefault();
         }
 
         HashSet<string> activeQuests = [];
-        if (message.PlayerActor is not null) {
-            var wizardResponse = message.PlayerActor
-                .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD()).Result;
-            activeQuests = wizardResponse.Wizard.QuestBehavior.CurrentQuestInstances
+        if (ZoneTrigger.QueryWizard(message.PlayerActor) is { } wizard) {
+            activeQuests = wizard.QuestBehavior.CurrentQuestInstances
                 .Select(q => q.QuestName).ToHashSet();
         }
 
@@ -355,7 +436,7 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
 
     // Events raised before object and kill events existed: zone entry, volumes and chained events.
     private bool IsLongRaisedEvent(string eventName)
-        => eventName == "EnterZone"
+        => eventName == START_ZONE_ENTER_EVENT
         || eventName.StartsWith("Enter_", StringComparison.Ordinal)
         || eventName.StartsWith("Exit_", StringComparison.Ordinal)
         || _chainedEvents.Contains(eventName);
@@ -450,16 +531,13 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
             return true;
         }
 
-        var queryWizardMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-        var wizardResponse = message.PlayerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryWizardMsg).Result;
-
         return RequirementDispatcher.EvaluateRequirements(
             requirements: trigger.m_requirements,
             context: new ZoneRequirementContext(
                 trigger.m_requirements,
                 message.PlayerActor,
                 message.PlayerGameObject,
-                wizardResponse.Wizard,
+                ZoneTrigger.QueryWizard(message.PlayerActor),
                 ZoneRef,
                 trigger.m_triggerName) {
                 ScriptState = Zone.ScriptState,
@@ -532,9 +610,38 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
                 };
                 trigger.m_results = resultList;
             }
+
+            UseZoneObjectsExit(trigger);
         }
 
         return triggers;
+    }
+
+    // A copy of the zone whose spiraldb-extra/ZoneObjects file gives it an exit (an added sigil's instance) sends its
+    // teleports out there. The teleports are copied, so the stored ones and the zone's other copies are untouched.
+    private void UseZoneObjectsExit(Trigger trigger) {
+        var results = trigger.m_results?.m_results;
+        if (results is null || !results.Any(r => r is ResTeleport)) {
+            return;
+        }
+
+        var changed = false;
+        var exits = results.Select(r => {
+            if (r is not ResTeleport teleport
+                || !Zone.Extras.TryGetExit(trigger.m_triggerName, teleport.m_destinationZone, out var zone, out var loc)) {
+                return r;
+            }
+
+            changed = true;
+
+            return teleport with { m_destinationZone = zone, m_destinationLoc = loc };
+        }).ToList();
+
+        if (changed) {
+            trigger.m_results = new ResultList { m_results = exits };
+            Logger.Information("Zone {0}: trigger {1} now leads to the ZoneObjects exit.",
+                Logger.Args(Zone.ZonePath, trigger.m_triggerName));
+        }
     }
 
 }

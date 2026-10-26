@@ -31,8 +31,8 @@ namespace Imlight.CoreLib.Shared.Resources;
 /// </summary>
 internal static class PatchServerFascade {
 
-    private static readonly int s_pathServerWait = ConfigurationManager.Settings["ADvanced.LocalWadCacheWaitForPatchServerTimeout"].AsInt();
-    private static readonly int s_pathServerDownloadTimeout = ConfigurationManager.Settings["Patch Server.PatchServerDownloadTimeout"].AsInt();
+    private static int s_pathServerWait => ConfigurationManager.Settings["ADvanced.LocalWadCacheWaitForPatchServerTimeout"].AsInt();
+    private static int s_pathServerDownloadTimeout => ConfigurationManager.Settings["Patch Server.PatchServerDownloadTimeout"].AsInt();
     internal static bool EndpointReached => PatchServer.EndpointReached;
 
     /// <summary>
@@ -80,7 +80,7 @@ internal static class PatchServerFascade {
                 .Result
                 .FileStream;
 
-            return true;
+            return fileStream is not null;
         }
         catch (Exception ex) {
             if (ex.Message.ToLower().Contains("task was cancelled")) {

@@ -90,7 +90,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -98,11 +98,15 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.Math;
+using Imcodec.IO;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Social;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
@@ -174,12 +178,8 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_BUDDYSTATS))]
     private void ReceiveBuddyStats(GAME_5_PROTOCOL.MSG_BUDDYSTATS message) {
-        if (!Wizard.TryGetCharacterId(message.BuddyID, out var buddyCharID)) {
-            return;
-        }
-
         var wizard = GetActiveWizard();
-        if (wizard is null) {
+        if (wizard is null || !TryResolveCharacterId(message.BuddyID, wizard, out var buddyCharID)) {
             return;
         }
 
@@ -203,6 +203,26 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         }
 
         SendStoredBuddyStats(message, buddyCharID, SessionActor.ActorRef, targetCharacterGid: 0);
+    }
+
+    private bool TryResolveCharacterId(ulong buddyId, Wizard activeWizard, out ulong charId) {
+        if (Wizard.TryGetCharacterId(buddyId, out charId)) {
+            if (charId == activeWizard.CharId
+                || TryGetOnlinePlayer(charId, out _)
+                || WizardCollection.GetCharacterUnloaded(charId) is not null) {
+                return true;
+            }
+        }
+
+        if (buddyId == activeWizard.CharId
+            || TryGetOnlinePlayer(buddyId, out _)
+            || WizardCollection.GetCharacterUnloaded(buddyId) is not null) {
+            charId = buddyId;
+            return true;
+        }
+
+        charId = 0;
+        return false;
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_BUDDYSTATSFWD))]
@@ -566,15 +586,24 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_GOTOPLAYER))]
     private void ReceiveGoToPlayer(GAME_5_PROTOCOL.MSG_GOTOPLAYER message) {
         var targetID = message.TargetCharacterID;
+        var wizard = GetActiveWizard();
+
+        // The friends list only offers Go To for friends.
+        if (!BuddyRelationshipCollection.AreFriends(wizard.CharId, targetID)) {
+            Logger.Warning("Player {0} tried to teleport to character ID {1}, who is not a friend.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), targetID));
+
+            RefuseGoTo("friend.busy.notfriend");
+
+            return;
+        }
 
         // Check if the target is online.
         if (!TryGetOnlinePlayer(targetID, out var onlinePlayer)) {
             Logger.Debug("Player {0} tried to teleport to character ID {1}, but the character is not online.",
                 Logger.Args(GetActiveWizard().PlayerNameBehavior.GetWizardName(), targetID));
 
-            SendToSocket(new GAME_5_PROTOCOL.MSG_GOTOPLAYERRESP {
-                Error = 1
-            });
+            RefuseGoTo("friend.busy.offline");
 
             return;
         }
@@ -590,14 +619,55 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         if (queryResult is not null) {
             var coordinates = Util.GetCompactStringFromVector((Vector4) queryResult.Wizard.Location);
 
+            // A friend inside a house is visited through the house's lot, which only the house's owner may allow.
+            HouseEntry houseEntry = null;
+            var failure = HouseVisitFailure.None;
+            var canVisit = true;
+            if (queryResult.Wizard.AttachedLotGid != 0) {
+                try {
+                    canVisit = HouseVisits.TryPrepare(wizard, queryResult.Wizard, out houseEntry, out failure);
+                }
+                catch (Exception ex) {
+                    Logger.Error("Preparing the visit of {0} to character ID {1} in lot {2} failed: {3}",
+                        Logger.Args(wizard.CharId, targetID, queryResult.Wizard.AttachedLotGid, ex));
+                    canVisit = false;
+                    failure = HouseVisitFailure.Unavailable;
+                }
+            }
+
+            if (!canVisit) {
+                Logger.Information("Player {0} cannot go to character ID {1} in a house: {2}.",
+                    Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), targetID, failure));
+                RefuseGoTo(failure == HouseVisitFailure.Denied ? "friend.busy.houseclosed" : "friend.busy.house");
+
+                return;
+            }
+
+            if (houseEntry is not null) {
+                Logger.Information("Player {0} teleports to character ID {1} in house lot {2} ({3}), owner {4}: same instance as the owner.",
+                    Logger.Args(wizard.CharId, targetID, houseEntry.LotGid, houseEntry.Zone, houseEntry.OwnerCharId));
+            }
+
+            // As on live, nobody teleports into a dungeon (or any other instance) to a friend (Niduus, 2026-10-22).
+            if (queryResult.Wizard.AttachedLotGid == 0 && World.InstancedPlayers.IsInInstance(targetID)) {
+                Logger.Information("Player {0} cannot go to character ID {1}, who is in an instance.",
+                    Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), targetID));
+                RefuseGoTo("friend.busy.dungeon");
+
+                return;
+            }
+
             Teleport(
                 destinationZone: onlinePlayer.CurrentZone,
                 destinationLocation: coordinates,
                 doTeleportEffects: true,
-                ownerCharId: targetID
+                ownerCharId: targetID,
+                houseEntry: houseEntry
             );
-        } else {
+        }
+        else {
             Logger.Error("Failed to query the target wizard for teleportation.");
+            RefuseGoTo("friend.busy.offline");
         }
     }
 
@@ -668,9 +738,67 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         var msg = new GAME_5_PROTOCOL.MSG_IGNORELIST {
             ListOwnerGID = wizard.GameObjectID,
             ListData = listBytes,
-            Add = add ? (byte)1 : (byte)0
+            Add = add ? (byte) 1 : (byte) 0
         };
         SendToSocket(msg);
+    }
+
+    [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_REQUESTRECENTWIZARDS))]
+    private void ReceiveRequestRecentWizards(WIZARD3_56_PROTOCOL.MSG_REQUESTRECENTWIZARDS message) {
+        // The friends window's Recent tab asks for the wizards this one battled, grouped, hatched or dueled with.
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        SendRecentWizards(wizard, message.PlayerGID);
+    }
+
+    /// The Recent tab's list, answered with the same message the window asked with.
+    internal void SendRecentWizards(Wizard wizard, ulong requestedGid) {
+        var list = new RecentWizardInfoList { m_recentWizardInfoList = [] };
+        foreach (var entry in RecentWizards.For(wizard.CharId)) {
+            var other = WizardCollection.GetCharacterUnloaded(entry.CharId);
+            if (other?.PlayerNameBehavior is null) {
+                continue;
+            }
+
+            var isOnline = TryGetOnlinePlayer(entry.CharId, out _);
+            var nameHex = other.PlayerNameBehavior.GetWizardNameAsByteHexString();
+            list.m_recentWizardInfoList.Add(new RecentWizardInfo {
+                m_characterGID = (GID) entry.CharId,
+                m_packedName = new ByteString(DataManipulation.SpacedHexStringToBytes(nameHex)),
+                m_lastSeenTime = entry.LastSeen,
+                m_level = (uint) Math.Max(0, other.MagicSchoolBehavior?.Level ?? 0),
+                m_school = other.MagicSchoolBehavior is null ? 0 : MagicSchoolIndex.ToSocialIndex(other.MagicSchoolBehavior.MagicSchool),
+                m_combatCount = entry.Combat,
+                m_instanceCount = entry.Instance,
+                m_hatchCount = entry.Hatch,
+                m_PVPCount = entry.PvP,
+                m_objectGID = (GID) (isOnline ? Wizard.GetGameObjectId(entry.CharId) : 0),
+                m_isOnline = isOnline,
+            });
+        }
+
+        var serializer = new ObjectSerializer(
+            Versionable: false,
+            Behaviors: SerializerFlags.None
+        );
+
+        if (!serializer.Serialize(list, 1, out var listBytes)) {
+            Logger.Error("Recent wizards | {0} asked for the Recent tab, but the list could not be made.",
+                Logger.Args(wizard.CharId));
+
+            return;
+        }
+
+        SendToSocket(new WIZARD3_56_PROTOCOL.MSG_REQUESTRECENTWIZARDS {
+            PlayerGID = requestedGid != 0 ? requestedGid : wizard.GameObjectID,
+            Data = listBytes,
+        });
+
+        Logger.Information("Recent wizards | Sent {0} the Recent tab with {1} wizard(s).",
+            Logger.Args(wizard.CharId, list.m_recentWizardInfoList.Count));
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT))]

@@ -38,6 +38,9 @@
 
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
+using Imlight.CoreLib.Game.DailyAssignments;
+using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -87,9 +90,6 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_VOLUMEDETAILS))]
     private void ReceiveVolumeDetails(ZONE_102_PROTOCOL.MSG_VOLUMEDETAILS message) {
         _volume = message.Volume;
-        if (_volume is null) {
-            return;
-        }
 
         // Track every quest goal that references this volume by its proximity tag, so we
         // only ever bother a player's quest service for goals this volume actually activates.
@@ -99,15 +99,24 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
         }
 
         var zonePath = Entity.Zone?.ZonePath;
-        foreach (var quest in QuestTemplateCollection.GetAllQuests() ?? []) {
-            if (quest?.m_goals is null) {
-                continue;
-            }
 
+        // A place some Daily Assignment visits: remembered so the game can be told where it is.
+        try {
+            var center = Entity.ActiveGameObject.m_location;
+            DailyAssignmentData.RememberVolume(zonePath, volumeName, center.X, center.Y, center.Z,
+                _volume.m_radius > 0 ? _volume.m_radius : MathF.Max(_volume.m_length, _volume.m_width) / 2);
+        }
+        catch (Exception ex) {
+            Logger.Error("Daily Assignments | Remembering volume {0} failed. {1}", Logger.Args(volumeName, ex.Message));
+        }
+
+        foreach (var quest in QuestTemplateCollection.GetAllQuests()) {
             foreach (var goal in quest.m_goals) {
+                // The tag is the volume's name or, as most game quests write it, its enter event ("Enter_<name>").
                 if (goal is not WaypointGoalTemplate waypointGoal
                     || string.IsNullOrEmpty(waypointGoal.m_proximityTag)
-                    || waypointGoal.m_proximityTag != volumeName) {
+                    || (waypointGoal.m_proximityTag != volumeName
+                        && _volume.m_enterEvents?.Any(e => (string) e == waypointGoal.m_proximityTag) != true)) {
                     continue;
                 }
 
@@ -138,7 +147,7 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
     }
 
     private void OnProximityEnter(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard, bool playerSpawned = false) {
-        foreach (var enterEvent in _volume.m_enterEvents ?? []) {
+        foreach (var enterEvent in _volume.m_enterEvents) {
             var postEventMsg = new ZONE_102_PROTOCOL.MSG_POSTEVENT {
                 EventName = enterEvent,
                 PlayerActor = playerActor,
@@ -152,6 +161,11 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
         // Quest proximity goals are tied to the volume by name; if the player has one of
         // this volume's goals active, tell their quest service to complete it.
         NotifyProximityGoals(playerObj, playerActor, playerWizard);
+
+        string volumeName = _volume.m_volumeName;
+        if (DailyAssignmentData.IsAssignmentVolume(volumeName)) {
+            playerActor.Tell(new DailyAssignmentVolumeEntered { ZonePath = Entity.Zone?.ZonePath, VolumeName = volumeName });
+        }
     }
 
     private void NotifyProximityGoals(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
@@ -179,7 +193,7 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
     }
 
     private void OnProximityExit(CoreObject playerObj, IActorRef playerActor) {
-        foreach (var exitEvent in _volume.m_exitEvents ?? []) {
+        foreach (var exitEvent in _volume.m_exitEvents) {
             var postEventMsg = new ZONE_102_PROTOCOL.MSG_POSTEVENT {
                 EventName = exitEvent,
                 PlayerActor = playerActor,

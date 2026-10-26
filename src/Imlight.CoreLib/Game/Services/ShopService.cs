@@ -33,10 +33,11 @@
  * 
  * Created by: Jooty, Joji
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
@@ -50,9 +51,12 @@ using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.Game.Badges;
 using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Game.Rentals;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Game.WizBang;
+using Imlight.CoreLib.Game.Bank;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -103,28 +107,173 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        var playerWizard = GetActiveWizard();
-        var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(itemTemplateID);
-        var item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemTemplateID);
-        item.m_primaryColor = message.texture;
-        item.m_secondaryColor = message.decal;
+        // A custom vendor's own price for the item as it is listed (a recipe's, not what it makes), or the fixed price.
+        var price = vendorComponent.PriceOf(itemTemplateID);
+        Logger.Information("Shop buy: item {0} (ShopID {1}) from NPC {2}, quantity {3}, currency {4}, fixed price {5}.",
+            Logger.Args(itemTemplateID, message.ShopID, message.npcGlobalID, message.quantity, message.CurrencyType, price));
 
-        var goldCost = CalculateItemCost(template);
-
-        // Check if the user can afford the item.
-        if (playerWizard.GameStats.m_currentGold >= goldCost) {
-            ProcessSuccessfulPurchase(playerWizard, item, itemTemplateID, goldCost);
+        // A recipe shop's window buys a recipe, which goes into the recipe book for crafting (Game/Crafting).
+        if (CoreObjectFactory.GetCoreTemplate(itemTemplateID) is RecipeTemplate boughtRecipe && !Crafting.Crafting.ShopGivesItem) {
+            BuyRecipe(itemTemplateID, boughtRecipe, price);
 
             return;
         }
 
-        SendShopDenyMessage();
+        // [Crafting] RecipeShopGivesItem (or crafting turned off): the buyer gets what the recipe makes, the elixir,
+        // snack or furniture, as before crafting (Niduus, 2026-10-23).
+        if (CoreObjectFactory.GetCoreTemplate(itemTemplateID) is RecipeTemplate recipe) {
+            var madeId = (uint) recipe.m_itemID;
+            if (madeId == 0) {
+                Logger.Warning("Shop buy: recipe {0} makes no item.", Logger.Args(itemTemplateID));
+                SendShopDenyMessage();
+
+                return;
+            }
+
+            Logger.Information("Shop buy: recipe {0} ({1}) gives item {2}.", Logger.Args(itemTemplateID, (string) recipe.m_recipeName, madeId));
+            itemTemplateID = madeId;
+        }
+
+        var playerWizard = GetActiveWizard();
+        var template = CoreObjectFactory.GetCoreTemplate(itemTemplateID) as WizItemTemplate;
+        var isPet = PetFactory.IsPetTemplate(itemTemplateID);
+
+        // Snacks go into the snack bag and reagents into the reagent bag, not the backpack (Hao and the house sellers).
+        if (template is PetSnackItemTemplate or ReagentItemTemplate) {
+            BuyIntoBag(playerWizard, template, price ?? (int) template.m_baseCost, message.quantity);
+
+            return;
+        }
+
+        if (BadgeGate.Blocks(template?.m_purchaseRequirements, itemTemplateID, SessionActor.ActorRef, GetActiveGameObject(), playerWizard, SessionActor.GetZoneActor())) {
+            Logger.Warning("{0} tried to buy item {1} without the badge it requires.",
+                Logger.Args(playerWizard.PlayerNameBehavior.GetWizardName(), itemTemplateID));
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        // The client refuses a second rental of one type; a forged or racing request gets the same answer.
+        if (RentalItems.TryGetRentalTemplate(template, out var rentalTemplate) && RentalItems.OwnsType(playerWizard, rentalTemplate)) {
+            Logger.Warning("{0} tried to buy rental {1} while owning a rental of the same type.",
+                Logger.Args(playerWizard.PlayerNameBehavior.GetWizardName(), itemTemplateID));
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        WizClientObjectItem item;
+        if (isPet) {
+            if (!TryCreatePurchasedPet(playerWizard, template, message, out item)) {
+                SendShopDenyMessage();
+
+                return;
+            }
+        } else {
+            item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemTemplateID);
+            item.m_primaryColor = message.texture;
+            item.m_secondaryColor = message.decal;
+        }
+
+        var goldCost = price ?? PriceModifiersConfig.GetShopBuyCost(template, message.texture, message.decal);
+
+        // Check if the user can afford the item.
+        if (playerWizard.GameStats.m_currentGold < goldCost) {
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        // Buy More: the quantity the player picked, as many as the gold pays for. A pet is always one.
+        var copies = isPet ? 1 : (int) Math.Clamp(message.quantity, 1u, MAX_COPIES);
+        var bought = 0;
+        while (bought < copies && playerWizard.GameStats.m_currentGold >= goldCost) {
+            if (bought > 0) {
+                item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemTemplateID);
+                item.m_primaryColor = message.texture;
+                item.m_secondaryColor = message.decal;
+            }
+
+            if (!ProcessSuccessfulPurchase(playerWizard, item, itemTemplateID, goldCost, isPet, confirm: false)) {
+                break;
+            }
+
+            bought++;
+        }
+
+        if (bought == 0) {
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM());
+        if (bought < copies) {
+            InformGameClient($"Bought {bought} of {copies}: not enough gold or room for the rest.");
+        }
     }
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST))]
     private void ReceiveShopSellRequest(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST message) {
         var wizard = GetActiveWizard();
+        // Sell More can sell a whole stack, so only the stack size limits it (Buy More stops at MAX_COPIES).
+        var quantity = (int) Math.Clamp(message.quantity, 1u, int.MaxValue);
+        Logger.Information("Shop sell: item {0}, quantity {1}, quick sell {2}.", Logger.Args(message.GlobalID, message.quantity, message.IsQuickSell));
+
+        // Sell More in the reagent and snack shops sells from the reagent bag or the snack bag.
+        if (wizard.AlchemyBehavior.Reagents?.FirstOrDefault(r => r.m_globalID.Full == message.GlobalID) is { } reagent) {
+            SellReagent(wizard, reagent, quantity);
+
+            return;
+        }
+
+        if (wizard.PetSnackBehavior.Snacks?.FirstOrDefault(s => s.m_globalID.Full == message.GlobalID) is { } snack) {
+            SellSnack(wizard, snack, quantity);
+
+            return;
+        }
+
         var item = wizard.InventoryBehavior.GetItem(message.GlobalID);
+        if (item is null) {
+            Logger.Warning("Failed to find item {0} in inventory for shop sell", Logger.Args(message.GlobalID));
+            ProcessFailedSale();
+
+            return;
+        }
+
+        if (ItemHelper.IsLocked(item)) {
+            Logger.Warning("Item lock: refused to sell {0} of {1} to a shop, the item is locked.",
+                Logger.Args(ItemHelper.DescribeForLog(item), wizard.CharId));
+            ProcessFailedSale();
+
+            return;
+        }
+
+        // A vault would be sold with what it holds.
+        if (wizard.IsFilledVault(message.GlobalID)) {
+            Logger.Information("Vaults: refused to sell vault {ItemId} of {CharId} to a shop, it still holds items.",
+                Logger.Args(message.GlobalID, wizard.CharId));
+            InformGameClient("A vault that still holds items cannot be sold. Place it in your house and empty it first.");
+            ProcessFailedSale();
+
+            return;
+        }
+
+        // Sell More on a backpack item sells that many copies of it.
+        if (quantity > 1) {
+            var copies = (wizard.InventoryBehavior.Items ?? [])
+                .Where(other => other.m_templateID == item.m_templateID && other.m_globalID.Full != message.GlobalID
+                    && !(wizard.EquipmentBehavior.EquippedItemIds?.Contains(other.m_globalID.Full) ?? false)
+                    && !ItemHelper.IsLocked(other) && !wizard.IsFilledVault(other.m_globalID.Full))
+                .Take(quantity - 1)
+                .Select(other => other.m_globalID.Full)
+                .ToList();
+            foreach (var copy in copies) {
+                if (wizard.RemoveItemFromInventory(copy)) {
+                    ProcessSuccessfulSale(wizard, copy, CalculateItemSellValue((WizItemTemplate) CoreObjectFactory.GetCoreTemplate(item.m_templateID)));
+                }
+            }
+        }
 
         var removedItemSuccess = wizard.RemoveItemFromInventory(message.GlobalID);
         if (!removedItemSuccess) {
@@ -162,8 +311,8 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             }
         }
 
-        var template = CoreObjectFactory.GetCoreTemplate(item.m_templateID) as WizItemTemplate;
-        if (template is null || !IsValidDye(item, template, message)) {
+        var template = ItemHelper.GetDisplayTemplate(item);
+        if (template is null || !IsValidDye(item, template, message.texture, message.decal, message.decal2)) {
             Logger.Warning("Rejected dye {0}/{1}/{2} for item {3} (template {4})",
                 Logger.Args(message.texture, message.decal, message.decal2, item.m_globalID, item.m_templateID.Full));
 
@@ -314,6 +463,68 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         SendToSocket(removeItemMsg);
     }
 
+    private void SellReagent(Wizard wizard, ClientReagentItem reagent, int quantity) {
+        var reagentId = reagent.m_globalID.Full;
+        var template = CoreObjectFactory.GetCoreTemplate(reagent.m_templateID) as WizItemTemplate;
+        var count = Math.Min(quantity, reagent.m_quantity);
+        // Take all but one straight off the stack, then the last through the bag so it saves once.
+        if (count < 1) {
+            ProcessFailedSale();
+
+            return;
+        }
+
+        reagent.m_quantity -= count - 1;
+        if (!wizard.RemoveReagent(reagentId, out var left)) {
+            reagent.m_quantity += count - 1;
+            ProcessFailedSale();
+
+            return;
+        }
+
+        if (left is not null && left.m_quantity > 0) {
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_REAGENTUPDATE { GlobalID = wizard.GameObjectID, ItemID = left.m_globalID, Quantity = left.m_quantity });
+        }
+        else {
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_REAGENTREMOVE { GlobalID = wizard.GameObjectID, ItemID = reagentId });
+        }
+
+        FinishStackSale(wizard, reagentId, BagSellValue(template) * count);
+    }
+
+    private void SellSnack(Wizard wizard, ClientPetSnackItem snack, int quantity) {
+        var snackId = snack.m_globalID.Full;
+        var template = CoreObjectFactory.GetCoreTemplate(snack.m_templateID) as WizItemTemplate;
+        var count = Math.Min(quantity, snack.m_quantity);
+        if (count < 1 || !wizard.RemoveSnack(snackId, count, out var left)) {
+            ProcessFailedSale();
+
+            return;
+        }
+
+        if (left is not null && left.m_quantity > 0) {
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKUPDATE { GlobalID = wizard.GameObjectID, ItemID = left.m_globalID, Quantity = left.m_quantity });
+        }
+        else {
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKREMOVE { GlobalID = wizard.GameObjectID, ItemID = snackId });
+        }
+
+        FinishStackSale(wizard, snackId, BagSellValue(template) * count);
+    }
+
+    // Reagents and snacks sell for at least 1 gold each.
+    private static int BagSellValue(WizItemTemplate template)
+        => template is null ? 1 : Math.Max(1, CalculateItemSellValue(template));
+
+    private void FinishStackSale(Wizard wizard, ulong stackId, int gold) {
+        wizard.AddGold(gold);
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
+            Gold = wizard.GameStats.m_currentGold,
+            MaxGold = wizard.GameStats.m_baseGoldPouch
+        });
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPSELLCONFIRM { GlobalID = stackId, Failure = 0 });
+    }
+
     private void ProcessFailedSale() {
         var shopDenyMsg = new WIZARD_12_PROTOCOL.MSG_SHOPSELLCONFIRM {
             Failure = 1,
@@ -369,9 +580,8 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         }
     }
 
-    private static bool IsValidDye(WizClientObjectItem item, WizItemTemplate template,
-                                   WIZARD_12_PROTOCOL.MSG_DYEREQUEST message) {
-        if (!IsDyeInRange(message.texture) || !IsDyeInRange(message.decal) || !IsDyeInRange(message.decal2)) {
+    private static bool IsValidDye(WizClientObjectItem item, WizItemTemplate template, int texture, int decal, int decal2) {
+        if (!IsDyeInRange(texture) || !IsDyeInRange(decal) || !IsDyeInRange(decal2)) {
             return false;
         }
 
@@ -380,15 +590,95 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         // A pet's colors are its template's own texture choices, so no dye beyond them is offered.
-        return IsPetLayerDye(message.texture, item.m_primaryColor, template.m_numPrimaryColors)
-            && IsPetLayerDye(message.decal, item.m_secondaryColor, template.m_numSecondaryColors)
-            && IsPetLayerDye(message.decal2, item.m_pattern, template.m_numPatterns);
+        return IsPetLayerDye(texture, item.m_primaryColor, template.m_numPrimaryColors)
+            && IsPetLayerDye(decal, item.m_secondaryColor, template.m_numSecondaryColors)
+            && IsPetLayerDye(decal2, item.m_pattern, template.m_numPatterns);
+    }
+
+    private static bool TryCreatePurchasedPet(Wizard wizard, WizItemTemplate template,
+                                              WIZARD_12_PROTOCOL.MSG_SHOPBUYREQUEST message, out WizClientObjectItem pet) {
+        pet = PetFactory.CreateHatchedPet(wizard.CharId, template.m_templateID);
+        if (pet is null) {
+            return false;
+        }
+
+        if (!IsValidDye(pet, template, message.texture, message.decal, message.decal2)) {
+            Logger.Warning("Rejected dye {0}/{1}/{2} for the purchase of pet template {3}",
+                Logger.Args(message.texture, message.decal, message.decal2, template.m_templateID));
+
+            return false;
+        }
+
+        pet.m_primaryColor = message.texture;
+        pet.m_secondaryColor = message.decal;
+        pet.m_pattern = message.decal2;
+
+        // The name keys are zero when the client did not open the naming window, which keeps the factory default.
+        if (message.petName == 0) {
+            return true;
+        }
+
+        if (!WizardNameBank.IsValidPetName(message.petName) || !PetFactory.TrySetPetName(pet, message.petName)) {
+            Logger.Warning("Rejected name keys {0} for the purchase of pet template {1}",
+                Logger.Args(message.petName, template.m_templateID));
+
+            return false;
+        }
+
+        return true;
     }
 
     private static bool IsDyeInRange(int dye) => dye is >= 0 and <= MaxDye;
 
     private static bool IsPetLayerDye(int dye, int currentDye, int templateColorCount)
         => dye == currentDye || (templateColorCount > 1 && dye < templateColorCount);
+
+    private void BuyRecipe(uint recipeId, RecipeTemplate recipe, int? price) {
+        var wizard = GetActiveWizard();
+        var name = Crafting.Crafting.NameOf(recipeId, recipe);
+        if (wizard.AlchemyBehavior?.RecipeIds?.Contains(recipeId) == true) {
+            name = Crafting.Crafting.ShownNameOf(recipeId, recipe);
+            InformGameClient($"You already know the recipe {name}.");
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        if (Crafting.RecipeChanges.RefusalOf(recipeId, name, wizard.MagicSchoolBehavior?.Level ?? 1) is { } refused) {
+            InformGameClient(refused);
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        if (BadgeGate.Blocks(recipe.m_purchaseRequirements, recipeId, SessionActor.ActorRef, GetActiveGameObject(), wizard, SessionActor.GetZoneActor())) {
+            Logger.Warning("{0} tried to buy recipe {1} without the badge it requires.", Logger.Args(wizard.CharId, recipeId));
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        var cost = Math.Max(0, price ?? Crafting.RecipeChanges.GoldCostOf(recipeId, recipe.m_goldCost));
+        if (wizard.GameStats.m_currentGold < cost) {
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        if (!Crafting.Crafting.Learn(SessionActor.ActorRef, wizard, recipeId)) {
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        if (cost > 0) {
+            wizard.RemoveGold(cost);
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
+        }
+
+        Logger.Information("Shop buy: {0} learned recipe {1} ({2}) for {3} gold.", Logger.Args(wizard.CharId, recipeId, name, cost));
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM());
+    }
 
     private void SendShopDenyMessage() {
         var shopDenyMsg = new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM {
@@ -399,31 +689,86 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         SendToSocket(shopDenyMsg);
     }
 
-    private void ProcessSuccessfulPurchase(Wizard playerWizard, WizClientObjectItem item, uint itemTemplateID, int goldCost) {
-        // Serialize the item without behaviors.
-        if (!s_itemSerializer.Serialize(item, 1, out var serializedItemWithoutBehaviors)) {
-            Logger.Error("Failed to serialize item {0} for purchase", 
-                Logger.Args(item.m_globalID));
+    // The most copies one Buy More request buys.
+    private const uint MAX_COPIES = 99;
+
+    /// <summary>
+    /// Buys a snack into the snack bag or a reagent into the reagent bag, the same messages the bazaar sends.
+    /// </summary>
+    private void BuyIntoBag(Wizard wizard, WizItemTemplate template, int goldCost, uint quantity) {
+        var templateId = (ulong) template.m_templateID;
+        var copies = (int) Math.Clamp(quantity, 1u, MAX_COPIES);
+        var bought = 0;
+        while (bought < copies && wizard.GameStats.m_currentGold >= goldCost) {
+            if (template is PetSnackItemTemplate) {
+                if (!wizard.AddSnack(templateId, out var snack) || !s_itemSerializer.Serialize(snack, 24, out var snackData)) {
+                    break;
+                }
+
+                SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKADD { GlobalID = wizard.GameObjectID, Data = snackData });
+                SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKUPDATE { GlobalID = wizard.GameObjectID, ItemID = snack.m_globalID, Quantity = snack.m_quantity });
+                if (bought == 0) {
+                    SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION { ItemGlobalID = snack.m_globalID, ItemTemplateID = (uint) templateId, ItemLocation = 1 });
+                }
+            }
+            else {
+                if (!wizard.AddReagent(templateId, out var reagent) || !s_itemSerializer.Serialize(reagent, 27, out var reagentData)) {
+                    break;
+                }
+
+                SendToSocket(new WIZARD_12_PROTOCOL.MSG_REAGENTADD { GlobalID = wizard.GameObjectID, Data = reagentData });
+                SendToSocket(new WIZARD_12_PROTOCOL.MSG_REAGENTUPDATE { GlobalID = wizard.GameObjectID, ItemID = reagent.m_globalID, Quantity = reagent.m_quantity });
+                if (bought == 0) {
+                    SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION { ItemGlobalID = reagent.m_globalID, ItemTemplateID = (uint) templateId, ItemLocation = 1 });
+                }
+            }
+
+            wizard.RemoveGold(goldCost);
+            bought++;
+        }
+
+        if (bought == 0) {
+            SendShopDenyMessage();
 
             return;
         }
-        playerWizard.AddItemToInventory(item);
+
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM());
+        if (bought < copies) {
+            InformGameClient($"Bought {bought} of {copies}: not enough gold or room for the rest.");
+        }
+    }
+
+    private bool ProcessSuccessfulPurchase(Wizard playerWizard, WizClientObjectItem item, uint itemTemplateID, int goldCost,
+                                           bool isPet, bool confirm = true) {
+        // A pet comes from the pet factory with its behaviors set; anything else is a bare template copy.
+        if (!isPet && item is not null) {
+            CoreObjectFactory.InitializeCoreObjectBehaviors(item, item.m_templateID);
+        }
+
+        // A full backpack sends the purchase to the bank, as the game does.
+        var placement = item is null ? Placement.Lost : ItemPlacement.Give(SessionActor.ActorRef, playerWizard, item);
+        if (placement == Placement.Lost) {
+            Logger.Warning("Could not add purchased item {0} to the backpack or bank of {1}.",
+                Logger.Args(itemTemplateID, playerWizard.CharId));
+            if (confirm) {
+                SendShopDenyMessage();
+            }
+
+            return false;
+        }
+
         playerWizard.RemoveGold(goldCost);
 
-        // Inform the game client that a new item has been added to the player's inventory.
-        var addItemMsg = new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
-            GlobalID = playerWizard.GameObjectID,
-            SerializedItem = serializedItemWithoutBehaviors,
-        };
-        SendToSocket(addItemMsg);
-
         // Inform the game client that the player has acquired a new item.
-        var itemAcqMsg = new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-            ItemGlobalID = item.m_globalID,
-            ItemTemplateID = itemTemplateID,
-            ItemLocation = 1,
-        };
-        SendToSocket(itemAcqMsg);
+        if (placement == Placement.Backpack) {
+            SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+                ItemGlobalID = item.m_globalID,
+                ItemTemplateID = itemTemplateID,
+                ItemLocation = 1,
+            });
+        }
 
         // Inform the game client that the player's gold has been updated.
         var goldUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
@@ -433,8 +778,11 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         SendToSocket(goldUpdateMsg);
 
         // Inform the game client that the purchase was successful.
-        var shopConfirmMsg = new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM();
-        SendToSocket(shopConfirmMsg);
+        if (confirm) {
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM());
+        }
+
+        return true;
     }
 
     private void HandleIllegalPurchaseAttempt(uint itemTemplateID, ulong interactedObjectGID) {
@@ -456,15 +804,6 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         return goldValue;
-    }
-
-    private static int CalculateItemCost(WizItemTemplate template) {
-        var goldCost = (int) template.m_baseCost;
-        if (template.m_numPrimaryColors != 1 && template.m_numSecondaryColors != 0) {
-            goldCost = (int) Math.Ceiling(goldCost * DYED_ITEM_COST_MULTIPLIER) + 1;
-        }
-
-        return goldCost;
     }
 
 }

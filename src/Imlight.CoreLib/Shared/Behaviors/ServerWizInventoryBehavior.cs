@@ -21,7 +21,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Serialization;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Bank;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Shared.Resources;
 
 namespace Imlight.CoreLib.Shared.Behaviors;
 
@@ -30,29 +32,70 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
 
     [JsonIgnore] public bool NoTransfer { get; set; } = false;
 
-    private static int s_maxItemsAllowed = ConfigurationManager.Settings["Character.MaxInventoryItems"].AsInt();
-    private static readonly int s_maxJewelsAllowed = ConfigurationManager.Settings["Character.MaxJewelsAllowed"].AsInt();
-    private static readonly int s_maxItemsAllowedFallback = 20;
+    // Read on every use, so a change in Imlight.ini applies live. 80 is the game's backpack without the elixir.
+    private static int s_maxItemsAllowed => ConfigurationManager.GetValue("Character.MaxInventoryItems", s_maxItemsAllowedDefault);
+    private const int s_maxItemsAllowedDefault = 80;
+    private static int s_maxJewelsAllowed => ConfigurationManager.Settings["Character.MaxJewelsAllowed"].AsInt();
+
+    private static int s_numEmotesAllowed => ConfigurationManager.Settings["Character.MaxEmotesAllowed"].AsInt();
+    private static int s_numTeleportsAllowed => ConfigurationManager.Settings["Character.MaxTeleportsAllowed"].AsInt();
 
     public List<ulong> InventoryItemIds { get; set; }
 
+    /// <summary>
+    /// This character's own backpack size, set with the .backpack command; 0 uses [Character] MaxInventoryItems.
+    /// </summary>
+    public int ItemLimit { get; set; }
+
+    /// <summary>
+    /// The backpack slots Expand Backpack Elixirs added, on top of the base size. See BackpackElixirs.
+    /// </summary>
+    public int ExtraSlots { get; set; }
+
+    /// <summary>
+    /// The smallest backpack any wizard has (Niduus, 2026-10-26: "Universal backpack MINIMUM is 80"). A lower
+    /// [Character] MaxInventoryItems or .backpack size gives this.
+    /// </summary>
+    public const int MinimumLimit = s_maxItemsAllowedDefault;
+
+    /// <summary>
+    /// The backpack size before elixirs: the .backpack size, else [Character] MaxInventoryItems, never under
+    /// <see cref="MinimumLimit"/>.
+    /// </summary>
+    [JsonIgnore] public int BaseLimit
+        => Math.Max(MinimumLimit, ItemLimit > 0 ? ItemLimit : s_maxItemsAllowed);
+
+    /// <summary>
+    /// How many items the backpack holds: the base size and the elixir slots.
+    /// </summary>
+    [JsonIgnore] public int Limit
+        => BaseLimit + Math.Max(0, ExtraSlots);
+
     [JsonIgnore] public List<WizClientObjectItem> Items { get; set; }
+
+    /// <summary>
+    /// The number of backpack items that take a slot: jewels go in the jewel pouch, and reagents, pet snacks and
+    /// emotes are not counted either, see <see cref="BankRules.TakesBackpackSlot"/>. An item the game is not sent
+    /// does not show in its count, so it takes no slot here either.
+    /// </summary>
+    [JsonIgnore] public int UsedSlots
+        => Items.Count(item => BankRules.TakesBackpackSlot(item) && CanSendToGame(item, report: false));
+
+    /// <summary>
+    /// The number of items that still fit in the inventory. Equipped items are not counted, as in
+    /// <see cref="AddItem"/>; a new item is checked against Wizard.BackpackFreeSlots, which counts them.
+    /// </summary>
+    [JsonIgnore] public int FreeSlots
+        => Math.Max(0, Limit - UsedSlots);
 
     /// <summary>
     /// Adds an item to the player's inventory.
     /// </summary>
     /// <param name="item">The item to be added.</param>
+    /// <param name="ignoreLimit">True for a Crown Shop item, which the game lets past a full backpack.</param>
     /// <returns>True if the item was successfully added, false otherwise.</returns>
-    public bool AddItem(WizClientObjectItem item) {
-        if (s_maxItemsAllowed <= 0) {
-            Logger.Warning("Configuration states that {0} is not allowed to have any items in their inventory! "
-                + "This is not possible, and causes many game-breaking bugs. Defaulting to {1} items.",
-                Logger.Args(nameof(s_maxItemsAllowed), s_maxItemsAllowedFallback));
-
-            s_maxItemsAllowed = s_maxItemsAllowedFallback;
-        }
-
-        if (Items.Count >= s_maxItemsAllowed) {
+    public bool AddItem(WizClientObjectItem item, bool ignoreLimit = false) {
+        if (!ignoreLimit && BankRules.TakesBackpackSlot(item) && UsedSlots >= Limit) {
             Logger.Debug("Player inventory is full. Cannot add item with global id {0}.", Logger.Args(item.m_globalID));
 
             return false;
@@ -116,6 +159,34 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
         return true;
     }
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> s_notSentReported = new();
+
+    /// <summary>
+    /// An item the game cannot make (no such template, or a bundle, which is only ever claimed, never held) makes it
+    /// drop the whole backpack and the connection at login (Niduus, 2026-10-21: "can't load my character"). Such items
+    /// are left out of what the game is sent.
+    /// </summary>
+    private static bool CanSendToGame(WizClientObjectItem item) => CanSendToGame(item, report: true);
+
+    private static bool CanSendToGame(WizClientObjectItem item, bool report) {
+        var template = CoreObjectFactory.GetCoreTemplate(item.m_templateID);
+        // Bundles, booster packs and currency amounts are not backpack objects to the game: one in the list stops the
+        // whole backpack from loading ("Unable to instantiate object of type: 107"), so the character never loads in
+        // (Walter Blanco, 2026-10-21: the Witch Hut bundle's Mega-Snack Pack).
+        if (template is WizItemTemplate and not (ItemBundleTemplate or BoosterPackTemplate or GoldAmountTemplate
+            or LunariAmountTemplate or CurrencyTemplate or TourneyTokensAmountTemplate)) {
+            return true;
+        }
+
+        // Once per item and server run: the backpack is sent on every load and zone change.
+        if (report && s_notSentReported.TryAdd(item.m_globalID.Full, 0)) {
+            Logger.Warning("Inventory: item {0} (template {1}, {2}) is not sent to the game; it cannot show it.",
+                Logger.Args(item.m_globalID.Full, item.m_templateID.Full, template?.GetType().Name ?? "no template"));
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Checks if the inventory contains an item with the specified global ID.
     /// </summary>
@@ -130,11 +201,12 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
     public WizClientObjectItem GetItem(ulong globalId) => Items.FirstOrDefault(item => item.m_globalID == globalId);
 
     public ClientWizInventoryBehavior GetClientBehaviorInstance() => new() {
-        m_numItemsAllowed = s_maxItemsAllowed,
+        m_numItemsAllowed = Limit,
         m_numJewelsAllowed = s_maxJewelsAllowed,
-        m_itemList = Items.ConvertAll(item =>
-            (item as IClientBehaviorProvider<CoreObject>)?.GetClientBehaviorInstance() ?? item)
-
+        m_itemList = Items.Where(CanSendToGame).Select(item =>
+            (item as IClientBehaviorProvider<CoreObject>)?.GetClientBehaviorInstance() ?? item).ToList(),
+        m_numCEEmotesAllowed = s_numEmotesAllowed,
+        m_numCETeleportsAllowed = s_numTeleportsAllowed
     };
 
 }

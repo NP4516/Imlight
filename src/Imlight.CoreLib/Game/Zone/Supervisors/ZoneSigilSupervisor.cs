@@ -22,9 +22,13 @@ using Akka.Actor;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.PvP;
+using Imlight.CoreLib.Game.PvP.Arena;
+using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.Game.Zone.Core;
 
 namespace Imlight.CoreLib.Game.Zone.Supervisors;
 
@@ -35,6 +39,7 @@ namespace Imlight.CoreLib.Game.Zone.Supervisors;
 internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor(zone) {
 
     private readonly Dictionary<CoreObject, IActorRef> _sigils = [];
+    private readonly Dictionary<IActorRef, ulong> _pvpSigilObjectIds = [];
     
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS))]
     public override void ReceiveZoneLoadResults(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS message) {
@@ -46,66 +51,115 @@ internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor
                 continue;
             }
 
-            var template = CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID) as GameObjectTemplate;
-            if (template is null) {
-                Logger.Warning("Dungeon sigil template {0} not found; skipping.",
-                    Logger.Args(objectInfo.m_templateID));
-
-                continue;
-            }
-
-            var coreObject = CoreObjectFactory.FinalizeCoreObject(objectInfo, template);
-            if (coreObject is null) {
-                Logger.Warning("Could not finalize dungeon sigil (template {0}); skipping.",
-                    Logger.Args(objectInfo.m_templateID));
-
-                continue;
-            }
-
-            // The pad octagon sits low and clips into the terrain; lift it like the combat sigils.
-            var newLoc = coreObject.m_location;
-            newLoc.Z += 5;
-            coreObject.m_location = newLoc;
-
-            CreateEntityActor(coreObject, template, objectInfo);
+            CreatePad(objectInfo, "");
         }
 
         // Initialize any objects found within the zone data.
         foreach (var objectInfo in zoneData.m_objectList) {
-            if (!IsObjectEligibleForSpawn(objectInfo)) {
-                continue;
+            if (IsObjectEligibleForSpawn(objectInfo)) {
+                CreateCircle(objectInfo, "");
             }
-
-            var template = (GameObjectTemplate) CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID);
-            var coreObject = CoreObjectFactory.FinalizeCoreObject(objectInfo, template);
-            if (coreObject is null) {
-                Logger.Warning("Could not finalize combat sigil (template {TemplateId}); skipping.",
-                    Logger.Args(objectInfo.m_templateID));
-
-                continue;
-            }
-
-            // Sometimes the sigil may spawn in the ground.
-            var newLoc = coreObject.m_location;
-            newLoc.Z += 5;
-            coreObject.m_location = newLoc;
-
-            // Create the sigil actor and inform it of the details.
-            var objectActor = CreateEntityActor(coreObject, template, objectInfo);
-            var detailsMsg = new ZONE_102_PROTOCOL.MSG_SIGILDETAILS {
-                CombatSigilObjectInfo = (CombatSigilObjectInfo) objectInfo,
-            };
-            objectActor.Tell(detailsMsg);
-
-            _sigils.Add(coreObject, objectActor);
         }
 
         ReportLoadedWhenEntitiesLoad();
     }
 
-    protected override void OnEntityLoadFailed(IActorRef entityActor) {
-        foreach (var coreObject in _sigils.Where(x => x.Value.Equals(entityActor)).Select(x => x.Key).ToList()) {
-            _sigils.Remove(coreObject);
+    private void CreateCircle(CoreObjectInfo objectInfo, string nameSuffix) {
+        var template = CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID) as GameObjectTemplate;
+        if (template is null) {
+            Logger.Warning("Combat sigil template {TemplateId} not found; skipping.",
+                Logger.Args(objectInfo.m_templateID));
+
+            return;
+        }
+
+        var coreObject = CoreObjectFactory.FinalizeCoreObject(objectInfo, template);
+        if (coreObject is null) {
+            Logger.Warning("Could not finalize combat sigil (template {TemplateId}); skipping.",
+                Logger.Args(objectInfo.m_templateID));
+
+            return;
+        }
+
+        // Sometimes the sigil may spawn in the ground.
+        var newLoc = coreObject.m_location;
+        newLoc.Z += 5;
+        coreObject.m_location = newLoc;
+
+        // Create the sigil actor and inform it of the details.
+        var objectActor = CreateEntityActor(coreObject, template, objectInfo, nameSuffix);
+        objectActor.Tell(new ZONE_102_PROTOCOL.MSG_SIGILDETAILS {
+            CombatSigilObjectInfo = (CombatSigilObjectInfo) objectInfo,
+        });
+
+        _sigils.Add(coreObject, objectActor);
+        _circles[coreObject.m_globalID.Full] = (objectActor, coreObject);
+        if (SigilFactory.GetSigilTemplate(((CombatSigilObjectInfo) objectInfo).m_sigilType) is PvPCombatSigilTemplate) {
+            _pvpSigilObjectIds.Add(objectActor, coreObject.m_globalID);
+        }
+    }
+
+    private void CreatePad(CoreObjectInfo objectInfo, string nameSuffix) {
+        var template = CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID) as GameObjectTemplate;
+        if (template is null) {
+            Logger.Warning("Dungeon sigil template {0} not found; skipping.",
+                Logger.Args(objectInfo.m_templateID));
+
+            return;
+        }
+
+        var coreObject = CoreObjectFactory.FinalizeCoreObject(objectInfo, template);
+        if (coreObject is null) {
+            Logger.Warning("Could not finalize dungeon sigil (template {0}); skipping.",
+                Logger.Args(objectInfo.m_templateID));
+
+            return;
+        }
+
+        // The pad octagon sits low and clips into the terrain; lift it like the combat sigils.
+        var newLoc = coreObject.m_location;
+        newLoc.Z += 5;
+        coreObject.m_location = newLoc;
+
+        _pads[coreObject.m_globalID.Full] = (CreateEntityActor(coreObject, template, objectInfo, nameSuffix), coreObject);
+    }
+
+    // The dungeon sigil pads, by global id, so one a spiraldb-extra/ZoneObjects change removes can be found.
+    private readonly Dictionary<ulong, (IActorRef Actor, CoreObject Object)> _pads = [];
+
+    // The battle circles, by global id, the same way.
+    private readonly Dictionary<ulong, (IActorRef Actor, CoreObject Object)> _circles = [];
+    private int _addedWhileRunning;
+
+    // A dungeon sigil pad or battle circle added or removed while the zone runs; moved ones move themselves
+    // (RenderComponent). Niduus (2026-10-23): battle circles count at once too, no restart.
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED))]
+    public override void ReceiveZoneObjectsChanged(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED message) {
+        base.ReceiveZoneObjectsChanged(message);
+
+        foreach (var id in message.Removed) {
+            if (_pads.Remove(id, out var pad)) {
+                RemoveEntity(pad.Actor, pad.Object);
+            }
+
+            if (_circles.Remove(id, out var circle)) {
+                _sigils.Remove(circle.Object);
+                _pvpSigilObjectIds.Remove(circle.Actor);
+                RemoveEntity(circle.Actor, circle.Object);
+            }
+        }
+
+        foreach (var objectInfo in message.Added.OfType<MinigameSigilInfo>()) {
+            // A pad the zone has already (a second visitor's house sends the same gauntlet pads) is kept.
+            if (ZoneObjects.GlobalIdOf(objectInfo) is { } id && _pads.ContainsKey(id.Full)) {
+                continue;
+            }
+
+            CreatePad(objectInfo, $"_{++_addedWhileRunning}");
+        }
+
+        foreach (var objectInfo in message.Added.Where(IsObjectEligibleForSpawn)) {
+            CreateCircle(objectInfo, $"_{++_addedWhileRunning}");
         }
     }
 
@@ -116,10 +170,36 @@ internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor
         // Find the sigil that is closest to the first participant. Forward
         // the request to that sigil.
         var closestSigil = _sigils
+            .Where(x => !_pvpSigilObjectIds.ContainsKey(x.Value))
             .OrderBy(x => Vector3.Distance(x.Key.m_location, firstParticipantObj.m_location))
             .FirstOrDefault();
         
         closestSigil.Value?.Forward(message);
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH))]
+    private void ReceiveStartPvPMatch(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH message) {
+        if (_pvpSigilObjectIds.Count == 0) {
+            Logger.Error("Zone {ZoneName} has no PvP sigil; match {MatchId} cannot start.",
+                Logger.Args(Zone.ZonePath, message.MatchId));
+
+            PvPDirector.Instance?.Tell(new PVP_111_PROTOCOL.MSG_MATCHCANCELLED {
+                MatchId = message.MatchId,
+                Reason = PvPCancelReason.NoArena
+            });
+
+            return;
+        }
+
+        // Several sigils: the lowest object id hosts the match.
+        _pvpSigilObjectIds.OrderBy(x => x.Value).First().Key.Forward(message);
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_FORFEITPVPPARTICIPANT))]
+    private void ReceiveForfeitPvPParticipant(ZONE_102_PROTOCOL.MSG_FORFEITPVPPARTICIPANT message) {
+        foreach (var sigil in _pvpSigilObjectIds.Keys) {
+            sigil.Forward(message);
+        }
     }
 
     private static bool IsObjectEligibleForSpawn(CoreObjectInfo objectInfo) 

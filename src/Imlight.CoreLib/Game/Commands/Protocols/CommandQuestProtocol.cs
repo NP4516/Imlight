@@ -140,7 +140,7 @@ internal class CommandQuest : CommandProtocol {
                 m_goalDestinationZone = goal.m_destinationZone,
                 m_goalImage1 = goal.m_displayImage1,
                 m_goalImage2 = goal.m_displayImage2,
-                m_goalNameID = goal.m_goalNameID,
+                m_goalNameID = Services.QuestArrowGoals.GetGoalNameId(quest, goal),
                 m_goalMadlibs = QuestMadlibs.GetAppropriateMadlibBlockForGoal(goal, null)
             })]
         };
@@ -182,6 +182,7 @@ internal class CommandQuest : CommandProtocol {
     }
 
     private void SendActorDialog(ActorDialog dialogEntry, string completionType, ulong questId = 0, ulong goalId = 0) {
+        QuestMadlibs.NameDialogSpeakers(dialogEntry);
         var serializer = new ObjectSerializer(Versionable: false);
         if (!serializer.Serialize(dialogEntry, 16, out var serializedData)) {
             Logger.Error("Failed to serialize '{0}' dialog.", Logger.Args(completionType));

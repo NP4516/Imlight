@@ -36,7 +36,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/10/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -84,6 +84,13 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
             typeof(ControlMessageProtocol.KeepAliveResponse)
         ];
     private bool _isDisposed;
+    // How long the bucket must stay empty before a flood closes the session.
+    private static readonly TimeSpan SustainedFloodTime = TimeSpan.FromSeconds(10);
+    private DateTime? _floodSince;
+    private readonly Dictionary<string, int> _droppedByType = [];
+
+    private string DescribeDropped()
+        => string.Join(", ", _droppedByType.OrderByDescending(pair => pair.Value).Take(6).Select(pair => $"{pair.Key} x{pair.Value}"));
 
     private sealed class SocketReadCompleted {
         public byte[] Buffer;
@@ -197,17 +204,29 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
             }
 
             foreach (var packet in packets) {
-                if (IsCriticalPacket(packet)) {
+                if (IsCriticalPacket(packet) || IsMovePacket(packet)) {
                     _tokenBucket.Spend();
+                } else if (packet is GAME_5_PROTOCOL.MSG_REQASKSERVER) {
+                    // The game asks dozens of these at once on entering some areas (about 50 in Unicorn Way) and waits
+                    // for each answer. Counted, they emptied the bucket for up to 8 s and lost everything else too.
                 } else if (!_tokenBucket.TryAcquire()) {
-                    Logger.Warning("SessionActor {SessionId} failed to acquire token.", Logger.Args(_sessionid));
+                    // The rate limit was reached. A short burst only loses the extra messages: Niduus's game was
+                    // disconnected a second or two after most logins (9 times on 2026-10-22, once in the middle of
+                    // a battle he had just come back into) because 5 messages in a row found the bucket empty.
+                    // Only a flood that keeps the bucket empty for a while closes the session.
+                    var now = DateTime.UtcNow;
+                    _floodSince ??= now;
+                    var typeName = packet.GetType().Name;
+                    _droppedByType[typeName] = _droppedByType.GetValueOrDefault(typeName) + 1;
+                    if (_droppedByType.Values.Sum() == 1) {
+                        Logger.Warning("SessionActor {SessionId} is sending faster than the rate limit; dropping messages (first: {MessageName}).",
+                            Logger.Args(_sessionid, typeName));
+                    }
 
-                    // The rate limit was reached.
                     var failedAcquisitionCount = _tokenBucket.GetFailedAcquisitionCount();
-                    if (failedAcquisitionCount >= _tokenBucketFailedAcquisitionLimit) {
-                        // Log warning.
-                        Logger.Warning("SessionActor {SessionId} failed to acquire token {FailedAcquisitionCount} times.",
-                            Logger.Args(_sessionid, failedAcquisitionCount));
+                    if (failedAcquisitionCount >= _tokenBucketFailedAcquisitionLimit && now - _floodSince.Value >= SustainedFloodTime) {
+                        Logger.Warning("SessionActor {SessionId} failed to acquire token {FailedAcquisitionCount} times in a row after {Seconds:0} s of flooding; closing it. Dropped: {Dropped}.",
+                            Logger.Args(_sessionid, failedAcquisitionCount, (now - _floodSince.Value).TotalSeconds, DescribeDropped()));
 
                         // The session has exceeded the failed acquisition limit. We'll dispose of the session.
                         this.Dispose();
@@ -217,6 +236,12 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
 
                     // Whole messages are dropped, never raw bytes, so the framing stays intact.
                     continue;
+                } else if (_floodSince is not null && _tokenBucket.AvailableTokens >= _tokenBucketMax / 4) {
+                    // The burst is over: say what was dropped, so the cause can be found.
+                    Logger.Warning("SessionActor {SessionId} is back under the rate limit after {Seconds:0.0} s. Dropped: {Dropped}.",
+                        Logger.Args(_sessionid, (DateTime.UtcNow - _floodSince.Value).TotalSeconds, DescribeDropped()));
+                    _floodSince = null;
+                    _droppedByType.Clear();
                 }
 
                 LogReceivedPacket(packet);
@@ -273,8 +298,17 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
             or GAME_5_PROTOCOL.MSG_ZONETRANSFERACK
             or GAME_5_PROTOCOL.MSG_ZONETRANSFERNACK
             or GAME_5_PROTOCOL.MSG_RETRYTELEPORT
+            or WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTDEEDZONE
+            or WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTHOUSINGZONETELEPORT
+            or WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTHOUSINGZONE
             or LOGIN_7_PROTOCOL.MSG_USER_VALIDATE
             or LOGIN_7_PROTOCOL.MSG_USER_AUTHEN_V3;
+
+    // Counted but never dropped: a lost move made the wizard skip ahead on the other players' screens.
+    private static bool IsMovePacket(IMessage packet)
+        => packet is GAME_5_PROTOCOL.MSG_CLIENTMOVE
+            or GAME_5_PROTOCOL.MSG_CLIENTMOVESTATE
+            or GAME_5_PROTOCOL.MSG_JUMP;
 
     private static string GetScopedMessageName(IMessage packet)
         => packet

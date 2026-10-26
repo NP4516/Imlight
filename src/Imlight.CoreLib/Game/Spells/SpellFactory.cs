@@ -80,15 +80,70 @@ internal class SpellFactory : RootDirectoryResourceSingleton<SpellFactory>, IMem
 
             var stringHash = StringHash.Compute(spellTemplate.m_name);
 
-            s_spellTemplates.Add(stringHash, spellTemplate);
+            // The Director creates every resource up front and Instance can create a second one later,
+            // so this can run twice over the same static tables; overwrite instead of throwing.
+            s_spellTemplates[stringHash] = spellTemplate;
             counter++;
 
             // Store the path of the spell template for later use.
-            s_spellTemplatePaths.Add(stringHash, fileRecord.FileName);
+            s_spellTemplatePaths[stringHash] = fileRecord.FileName;
         }
 
         Logger.Information("Loaded {0} spell templates.", 
             Logger.Args(counter));
+    }
+
+    /// <summary>
+    /// Every spell template the game has, with the file it came from.
+    /// </summary>
+    internal static List<(string Path, SpellTemplate Template)> AllSpellTemplates() {
+        if (s_spellTemplates.Count == 0) {
+            _ = Instance;
+        }
+
+        var templates = new List<(string Path, SpellTemplate Template)>(s_spellTemplates.Count);
+        foreach (var (hash, template) in s_spellTemplates) {
+            templates.Add((s_spellTemplatePaths[hash], template));
+        }
+
+        return templates;
+    }
+
+    /// <summary>
+    /// Whether a spell template has this name. Unlike <see cref="GetSpell(string)"/>, a missing name is not logged.
+    /// </summary>
+    internal static bool Exists(string spellName) {
+        if (s_spellTemplates.Count == 0) {
+            _ = Instance;
+        }
+
+        return !string.IsNullOrEmpty(spellName) && s_spellTemplates.ContainsKey(StringHash.Compute(spellName));
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, uint> s_idsByName = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The template ID of a spell template, found by its name (0 if none), kept once found: a cheat's spell typed as its
+    /// ID ("857718733") is matched against it (Niduus, 2026-10-26: "Do blocks accept spell ID's?").
+    /// </summary>
+    internal static uint TemplateIdOf(SpellTemplate template) {
+        // The spell as the game's cheats see it was loaded by its ID: that ID.
+        if (CoreObjectFactory.LoadedIdOf(template) is var loaded and > 0 and <= uint.MaxValue) {
+            return (uint) loaded;
+        }
+
+        string name = template?.m_name;
+        if (string.IsNullOrEmpty(name)) {
+            return 0;
+        }
+
+        return s_idsByName.GetOrAdd(name, n => {
+            if (!Exists(n) || !s_spellTemplatePaths.TryGetValue(StringHash.Compute(n), out var path)) {
+                return 0;
+            }
+
+            return CoreObjectFactory.TryGetCoreTemplateID(x => x.m_filename == path, out uint id) ? id : 0;
+        });
     }
 
     /// <summary>
@@ -104,9 +159,7 @@ internal class SpellFactory : RootDirectoryResourceSingleton<SpellFactory>, IMem
         }
 
         var spellTemplateActualPath = s_spellTemplatePaths[stringHash];
-        var templateId = CoreObjectFactory.GetCoreTemplateID(x => x.m_filename == spellTemplateActualPath);
-
-        if (templateId == 0) {
+        if (!CoreObjectFactory.TryGetCoreTemplateID(x => x.m_filename == spellTemplateActualPath, out uint templateId)) {
             Logger.Warning("Could not find template ID for spell {0}.", Logger.Args(spellName));
             return null;
         }
@@ -178,7 +231,8 @@ internal class SpellFactory : RootDirectoryResourceSingleton<SpellFactory>, IMem
             return 0;
         }
 
-        return CoreObjectFactory.GetCoreTemplateID(x => x.m_filename == path);
+        CoreObjectFactory.TryGetCoreTemplateID(x => x.m_filename == path, out uint templateId);
+        return templateId;
     }
 
     /// <summary>

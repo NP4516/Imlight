@@ -35,7 +35,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/10/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -47,6 +47,8 @@ using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Game;
 using Imlight.CoreLib.Game.Groups;
+using Imlight.CoreLib.Game.Trading;
+using Imlight.CoreLib.Game.PvP;
 using Imlight.Common;
 
 namespace Imlight.CoreLib.Login;
@@ -55,8 +57,8 @@ internal class GameServerPool : ReceiveProtocolDispatcher {
 
     private readonly byte _maxGameServersAllowed 
         = ConfigurationManager.Settings["Game Server.MaxGameServersAllowed"].AsByte();
-    private readonly ushort _gameServerPlayerCount 
-        = ConfigurationManager.Settings["Game Server.GameServerPlayerLimit"].AsUShort();
+    private ushort _gameServerPlayerCount
+        => ConfigurationManager.Settings["Game Server.GameServerPlayerLimit"].AsUShort();
     private readonly ushort _gameServerQueryTimeout = 10;
 
     private readonly Dictionary<ushort, IActorRef> _gameServers;
@@ -68,6 +70,11 @@ internal class GameServerPool : ReceiveProtocolDispatcher {
 
         // Groups span every realm, so the pool owns the one directory all game servers share.
         Context.ActorOf(GroupDirectory.Props(), nameof(GroupDirectory));
+
+        // Trades span every realm and zone too.
+        Context.ActorOf(TradeDirectory.Props(), nameof(TradeDirectory));
+        // Queued players sit in any zone and realm, so the pool owns the one PvP director.
+        Context.ActorOf(PvPDirector.Props(), nameof(PvPDirector));
 
         Logger.Information("GameServerPool created.");
     }
@@ -158,8 +165,11 @@ internal class GameServerPool : ReceiveProtocolDispatcher {
             return;
         }
 
-        // Sort the servers by player count in descending order
-        Array.Sort(gameServerInfos, (s1, s2) => s2.PlayerCount.CompareTo(s1.PlayerCount));
+        // Sort the servers by player count in descending order. Equal counts go to the lowest port, the first realm,
+        // whose game world preloads the zones players log into (GameWorld PreloadZones).
+        Array.Sort(gameServerInfos, (s1, s2) => s2.PlayerCount != s1.PlayerCount
+            ? s2.PlayerCount.CompareTo(s1.PlayerCount)
+            : s1.Port.CompareTo(s2.Port));
 
         // Find the first non-full server or choose a random one if all servers are full
         var chosenServer = gameServerInfos

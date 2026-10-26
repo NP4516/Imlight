@@ -88,6 +88,31 @@ public class ServerSpellbookBehavior : IClientBehaviorProvider<ClientSpellbookBe
         return TreasureCardTemplateIds.Remove(templateId);
     }
 
+    /// <summary>
+    /// Removes every card in <paramref name="templateIds"/> (one copy per entry), or none of them when
+    /// any copy is missing.
+    /// </summary>
+    public bool TryRemoveTreasureCards(IReadOnlyCollection<uint> templateIds) {
+        var owned = (TreasureCardTemplateIds ?? []).GroupBy(x => x).ToDictionary(x => x.Key, x => x.Count());
+        foreach (var required in templateIds.GroupBy(x => x)) {
+            if (!owned.TryGetValue(required.Key, out var copies) || copies < required.Count()) {
+                return false;
+            }
+        }
+
+        foreach (var templateId in templateIds) {
+            RemoveTreasureCard(templateId);
+        }
+
+        return true;
+    }
+
+    public void AddTreasureCards(IEnumerable<uint> templateIds) {
+        foreach (var templateId in templateIds) {
+            AddTreasureCard(templateId);
+        }
+    }
+
     public int TreasureCardCount(uint templateId) {
         if (TreasureCardTemplateIds is null) {
             return 0;
@@ -98,9 +123,15 @@ public class ServerSpellbookBehavior : IClientBehaviorProvider<ClientSpellbookBe
 
     public ClientSpellbookBehavior GetClientBehaviorInstance() {
         var spellIdList = new List<SpellIDTracker>();
+        var hidden = Imlight.CoreLib.Game.Spells.TieredSpells.SpellsHiddenFromGame(LearnedSpellTemplateIds);
         foreach (var spellTemplateId in LearnedSpellTemplateIds) {
+            if (hidden.Contains(spellTemplateId)) {
+                continue;
+            }
+
             spellIdList.Add(new SpellIDTracker {
-                m_spellID = spellTemplateId
+                m_spellID = spellTemplateId,
+                m_tieredSpellGroupIndex = Imlight.CoreLib.Game.Spells.TieredSpells.GroupOfTemplate(spellTemplateId),
             });
         }
 

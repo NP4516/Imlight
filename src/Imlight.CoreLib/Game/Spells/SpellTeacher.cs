@@ -21,6 +21,7 @@ using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.Game.Randomization;
 
 namespace Imlight.CoreLib.Game.Spells;
 
@@ -45,8 +46,13 @@ internal static class SpellTeacher {
     /// <param name="playerActor">The player's SessionActor, which routes the message.</param>
     /// <param name="wizard">The wizard to teach.</param>
     /// <param name="spellTemplateId">The spell template ID.</param>
+    /// <param name="randomize">False when the spell was already picked by the randomizer and must not be swapped again.</param>
     /// <returns>Learned, AlreadyKnown (nothing changed), or Failed (no spell for that template).</returns>
-    internal static SpellTeachResult TryTeach(IActorRef playerActor, Wizard wizard, uint spellTemplateId) {
+    internal static SpellTeachResult TryTeach(IActorRef playerActor, Wizard wizard, uint spellTemplateId, bool randomize = true) {
+        if (randomize) {
+            spellTemplateId = Randomizer.MapSpell(wizard, spellTemplateId);
+        }
+
         var spell = SpellFactory.GetSpell(spellTemplateId);
         if (spell is null) {
             Logger.Error("Could not resolve a spell for template ID {0}.",

@@ -91,6 +91,12 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
             return;
         }
 
+        // A wisp dropped after a battle (BattleDrops) has no spawner, so no ZonePath ever sends it path details: it
+        // stays where it fell instead of waiting for them and being deleted.
+        if (Entity.ActiveGameObject?.m_zoneTagID == Imlight.CoreLib.Game.Combat.BattleDrops.DropTagId) {
+            return;
+        }
+
         var pathBehavior = Entity.Template.m_behaviors.OfType<PathBehaviorTemplate>().First();
         var pathMovementBehavior = Entity.Template.m_behaviors.OfType<PathMovementBehaviorTemplate>().First();
 
@@ -343,9 +349,24 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
         return new Vector3((float) x, (float) y, (float) z);
     }
 
+    private bool OffersNpcService()
+        => Entity.Template.m_behaviors.Any(x => x is BasicNPCServiceBehaviorTemplate);
+
     private bool CheckPathDetails() {
         if (!_receivedPathDetails) {
             _pathDetailsFailureCount++;
+
+            if (_pathDetailsFailureCount > PATH_DETAILS_FAILURE_COUNT_MAXIMUM && OffersNpcService()) {
+                // An NPC placed in the zone itself (Lewellyn Prideheart and Ian Celtus on the guild grounds, the
+                // museum curators) has no ZonePath to send its path: it stays where it stands and can still be used.
+                Logger.Information(
+                    "Creature {0} in zone {1} got no path details; it stays where it stands.",
+                    Logger.Args(Entity.ActiveGameObject.m_debugName, Entity.Zone.ZoneName)
+                );
+                Stopped = true;
+
+                return false;
+            }
 
             if (_pathDetailsFailureCount > PATH_DETAILS_FAILURE_COUNT_MAXIMUM) {
                 Logger.Error(

@@ -44,6 +44,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
+using Imlight.CoreLib.Game.Madlibs;
 using Imlight.Common;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
@@ -63,7 +64,8 @@ internal class PlayerQuestUnderwayState {
 internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
     : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory {
 
-    private const string PREP_NPC_ICON = "Prep";
+    // The menu icon of a quest in progress: the grey ? (the client's "Unfinished" key), like the one over the head.
+    private const string PREP_NPC_ICON = "Unfinished";
     private const double WIZBANG_UPDATE_INTERVAL_SECONDS = 1.0;
 
     public string ServiceName => "QuestUnderwayService";
@@ -83,12 +85,6 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
     }
 
     private readonly List<QuestTemplate> _givesQuests = [];
-
-    // Quests in which this NPC is the target of a persona goal (not necessarily the quest giver),
-    // with the names of those goals. While such a goal is done and the quest is not, the NPC shows
-    // the unfinished-quest marker.
-    private readonly Dictionary<string, List<string>> _personaTargetGoals = [];
-    private readonly Dictionary<string, QuestTemplate> _personaTargetQuests = [];
     private readonly Dictionary<ulong, DateTime> _lastWizBangUpdate = [];
     private readonly Dictionary<ulong, PlayerQuestUnderwayState> _cachedPlayerStates = [];
 
@@ -99,59 +95,16 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
             return false;
         }
 
-        var allQuests = QuestTemplateCollection.GetAllQuests();
-        if (allQuests is null) {
-            return false;
-        }
-
         // Check if this NPC gives any quests by looking for "Prep" dialogs.
-        var givesQuests = allQuests
+        return QuestTemplateCollection
+            .GetAllQuests()
             .Where(x => x?.m_dialogList is ActorDialogList)
             .Any(quest => {
-                var dialogList = quest.m_dialogList as ActorDialogList;
-                var prepDialogEntry = dialogList.m_dialogs?.FirstOrDefault(de => de.m_dialogTag == "Prep");
-                var templateId = prepDialogEntry?.m_dialogEntries?.FirstOrDefault()?.m_actorTemplateID;
+                // The giver is the Prep line's persona's NPC, not its actor template ID (Pesky Pirates).
+                var templateId = QuestMadlibs.GiverTemplateOf(quest);
 
                 return templateId == goTemplate.m_templateID;
             });
-
-        if (givesQuests) {
-            return true;
-        }
-
-        // Or this NPC is the target of a persona goal in some quest.
-        string npcName = goTemplate.m_objectName;
-
-        return allQuests
-            .Where(x => x is not null)
-            .SelectMany(quest => quest.m_goals?.OfType<PersonaGoalTemplate>() ?? [])
-            .Any(goal => PersonaGoalTargetsNpc(goal, npcName, goTemplate.m_templateID));
-    }
-
-    private static bool PersonaGoalTargetsNpc(PersonaGoalTemplate goal, string npcName, uint npcTemplateId) {
-        // 1. Goal-level persona name, ignoring the "_Persona" suffix and letter case.
-        string personaName = goal.m_personaName;
-        if (!string.IsNullOrEmpty(npcName) && !string.IsNullOrEmpty(personaName)
-            && string.Equals(personaName.Replace("_Persona", ""), npcName, StringComparison.OrdinalIgnoreCase)) {
-            return true;
-        }
-
-        // 2. Fall back to the goal's dialog-entry actor template ID.
-        if (npcTemplateId != 0 && goal.m_dialogList is ActorDialogList dialogList && dialogList.m_dialogs is not null) {
-            foreach (var dlg in dialogList.m_dialogs) {
-                if (dlg?.m_dialogEntries is null) {
-                    continue;
-                }
-
-                foreach (var entry in dlg.m_dialogEntries) {
-                    if (entry is not null && entry.m_actorTemplateID == npcTemplateId) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
     }
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard wizard) {
@@ -164,7 +117,8 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
             yield break;
         }
 
-        var state = GetOrUpdatePlayerState(wizard);
+        // Always fresh: a quest that finished a moment ago must not keep its option (it took the next quest's place).
+        var state = GetOrUpdatePlayerState(wizard, forceUpdate: true);
 
         // The memento wizbang tick reads this property; refresh it from live state.
         WizBang = state.HasUnderwayQuest ? WizBangs.UnfinishedQuest : WizBangs.None;
@@ -188,12 +142,12 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
             .ToList();
 
         foreach (var questTemplate in questTemplates) {
-            if (questTemplate.m_dialogList is not ActorDialogList dialogList) {
+            // With no "Underway" lines there is nothing to show: the option would open an empty dialog.
+            if (questTemplate.m_dialogList is not ActorDialogList dialogs || UnderwayDialog(dialogs) is null) {
                 continue;
             }
 
-            var prepDialogEntry = dialogList.m_dialogs.FirstOrDefault(de => de.m_dialogTag == "Prep");
-            var templateId = prepDialogEntry?.m_dialogEntries?.FirstOrDefault()?.m_actorTemplateID;
+            var templateId = QuestMadlibs.GiverTemplateOf(questTemplate);
 
             if (templateId == entity.ActiveGameObject.m_templateID) {
                 _givesQuests.Add(questTemplate);
@@ -201,34 +155,10 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
         }
 
         _givesQuests.Sort((a, b) => string.Compare(a.m_questTitle, b.m_questTitle, StringComparison.Ordinal));
-
-        // Cache the quests in which this NPC is the target of a persona goal.
-        string npcName = "";
-        uint npcTemplateId = 0;
-        if (Entity.Template is GameObjectTemplate goTemplate) {
-            npcName = goTemplate.m_objectName;
-            npcTemplateId = goTemplate.m_templateID;
-        }
-
-        foreach (var questTemplate in questTemplates) {
-            foreach (var goal in questTemplate.m_goals?.OfType<PersonaGoalTemplate>() ?? []) {
-                if (!PersonaGoalTargetsNpc(goal, npcName, npcTemplateId)) {
-                    continue;
-                }
-
-                if (!_personaTargetGoals.TryGetValue(questTemplate.m_questName, out var goalNames)) {
-                    goalNames = [];
-                    _personaTargetGoals[questTemplate.m_questName] = goalNames;
-                    _personaTargetQuests[questTemplate.m_questName] = questTemplate;
-                }
-
-                goalNames.Add(goal.m_goalName);
-            }
-        }
     }
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
-        if (_givesQuests.Count <= 0 && _personaTargetGoals.Count <= 0) {
+        if (_givesQuests.Count <= 0) {
             WizBang = WizBangs.None;
 
             return;
@@ -239,7 +169,7 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
     }
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
-        if (playerWizard is null || (_givesQuests.Count <= 0 && _personaTargetGoals.Count <= 0)) {
+        if (playerWizard is null || _givesQuests.Count <= 0) {
             return;
         }
 
@@ -258,7 +188,7 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
     }
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
-        var state = GetOrUpdatePlayerState(playerCharacter);
+        var state = GetOrUpdatePlayerState(playerCharacter, forceUpdate: true);
         if (state.HasUnderwayQuest && state.UnderwayQuest != null) {
             ShowQuestUnderwayDialog(playerActor, state.UnderwayQuest);
         }
@@ -290,33 +220,13 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
             }
         }
 
-        // Not a giver of an unfinished quest: this NPC may be the target of a persona goal the player
-        // has already completed in a quest that is still underway.
-        if (!state.HasUnderwayQuest) {
-            foreach (var instance in wizard.QuestBehavior.CurrentQuestInstances) {
-                if (!_personaTargetGoals.TryGetValue(instance.QuestName, out var goalNames)
-                    || wizard.HasCompletedQuest(instance.QuestName)) {
-                    continue;
-                }
-
-                if (goalNames.Any(goalName => instance.IsGoalCompleted(goalName))
-                    && _personaTargetQuests.TryGetValue(instance.QuestName, out var targetQuest)) {
-                    state.HasUnderwayQuest = true;
-                    state.UnderwayQuest = targetQuest;
-
-                    break;
-                }
-            }
-        }
-
         _cachedPlayerStates[playerId] = state;
 
         return state;
     }
 
     private void ShowQuestUnderwayDialog(IActorRef playerActor, QuestTemplate quest) {
-        var dialogList = quest.m_dialogList as ActorDialogList;
-        var underwayDialogList = dialogList?.m_dialogs.FirstOrDefault(de => de.m_dialogTag == "Underway");
+        var underwayDialogList = UnderwayDialog(quest.m_dialogList as ActorDialogList);
 
         if (underwayDialogList == null) {
             Logger.Error("Quest {0} has no 'Underway' dialog entry.",
@@ -328,7 +238,11 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
         SendActorDialog(playerActor, underwayDialogList, "QuestInfo");
     }
 
+    private static ActorDialog UnderwayDialog(ActorDialogList dialogList)
+        => dialogList?.m_dialogs?.FirstOrDefault(de => de is not null && de.m_dialogTag == "Underway");
+
     private void SendActorDialog(IActorRef playerActor, ActorDialog dialogEntry, string completionType, ulong questId = 0, ulong goalId = 0) {
+        QuestMadlibs.NameDialogSpeakers(dialogEntry);
         var serializer = new ObjectSerializer(Versionable: false);
         if (!serializer.Serialize(dialogEntry, 16, out var serializedData)) {
             Logger.Error("Failed to serialize '{0}' dialog.",

@@ -35,7 +35,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/09/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -61,7 +61,7 @@ namespace Imlight.CoreLib.Game.Zone.Core;
 /// <summary>
 /// Represents a zone in the game world.
 /// </summary>
-public class Zone : ReceiveProtocolDispatcher, IWithTimers {
+public partial class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
     private const ushort RESERVED_MOBILE_ID_MAX = ushort.MaxValue / 20; // 5% of the maximum mobile ID count is reserved for special objects.
     private static readonly Vector4 s_locationFailedGiveaway = new(float.MaxValue, float.MaxValue, float.MaxValue, float.MaxValue);
@@ -72,10 +72,22 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     public WizZoneData ZoneData { get; private set; }
 
     /// <summary>
+    /// What spiraldb-extra/ZoneObjects gave this copy of the zone (its encounters and exit); set before the
+    /// supervisors load.
+    /// </summary>
+    internal ZoneObjects.Applied Extras { get; private set; } = ZoneObjects.Applied.None;
+
+    /// <summary>
     /// Whether this zone is a private, per-owner instance (a dungeon/raid loaded under an
     /// <see cref="World.InstanceContainer"/>) rather than a shared public zone.
     /// </summary>
     public bool IsInstance { get; }
+
+    /// <summary>
+    /// How many battles against a ZoneObjects encounter's boss run in this zone now. A distinct spawner (the boss's
+    /// minions) does not spawn while one runs, so the room's helpers are not doubled by spawned ones.
+    /// </summary>
+    internal int EncounterBattles;
 
     /// <summary>
     /// The zone path, formatted as it would be in the access pass.
@@ -125,6 +137,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     private readonly HashSet<IActorRef> _players = [];
     private const string IDLE_EXPIRE_TIMER = "instance-idle-expire";
     private const int DEFAULT_INSTANCE_IDLE_MINUTES = 10;
+    private const int RESET_WHEN_EMPTY_SECONDS = 5;
     private readonly List<ZONE_102_PROTOCOL.MSG_PLAYERMOVE> _pendingPlayerMoves = [];
     private readonly List<ZONE_102_PROTOCOL.MSG_CREATUREMOVE> _pendingCreatureMoves = [];
 
@@ -227,6 +240,8 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         _players.Add(message.PlayerActor);
+        ScriptState.PlayerCount = _players.Count;
+        NoteInstancedPlayer(message.PlayerActor, message.Wizard);
         Timers.Cancel(IDLE_EXPIRE_TIMER);
         InformZoneSupervisors(message.PlayerActor, message);
         RestoreRememberedSpawns(message.Wizard);
@@ -237,6 +252,31 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         };
         Sender.Tell(response);
     }
+
+    // The characters in this zone when it is an instance, so a teleport to them is refused (InstancedPlayers).
+    private readonly Dictionary<IActorRef, ulong> _instancedCharIds = [];
+
+    private void NoteInstancedPlayer(IActorRef playerActor, Wizard wizard) {
+        if (!IsInstance || wizard is null) {
+            return;
+        }
+
+        _instancedCharIds[playerActor] = wizard.CharId;
+        World.InstancedPlayers.Enter(wizard.CharId, this);
+    }
+
+    protected override void PostStop() {
+        ZoneObjects.Unregister(Self);
+        foreach (var charId in _instancedCharIds.Values) {
+            World.InstancedPlayers.Leave(charId, this);
+        }
+
+        base.PostStop();
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED))]
+    private void ReceiveZoneObjectsChanged(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED message)
+        => _supervisors.ForEach(supervisor => supervisor.Forward(message));
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REMOVEPLAYER))]
     protected virtual void ReceiveRemovePlayer(ZONE_102_PROTOCOL.MSG_REMOVEPLAYER message) {
@@ -256,6 +296,10 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         // The leaver is counted until the supervisors are told: the Players target is gated on a non-empty set.
         InformZoneSupervisors(message.PlayerActor, message);
         _players.Remove(message.PlayerActor);
+        ScriptState.PlayerCount = _players.Count;
+        if (_instancedCharIds.Remove(message.PlayerActor, out var charId)) {
+            World.InstancedPlayers.Leave(charId, this);
+        }
         ReleaseObjectIdentifier(message.MobileId);
         ScheduleIdleExpiryIfEmpty();
         Sender.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP());
@@ -326,7 +370,14 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         _zoneLoadTimer.Restart();
+
+        // Objects and creatures added from spiraldb-extra/ZoneObjects join the zone's own before the supervisors make
+        // them; a copy loaded for a variant (an added sigil's instance) takes that variant's file too.
+        Extras = ZoneObjects.AddTo(ZonePath, message.Variant, message);
+        // A change to those files (the Customs tab moving an object) reaches this copy while it runs.
+        ZoneObjects.Register(Self, ZonePath, message.Variant);
         ZoneData = message.ZoneData;
+        SetUpRaid(message.TriggerData);
 
         // Inform each supervisor of the loaded zone data. They are expected to give a reply
         // to inform the zone that they have loaded their data.
@@ -352,6 +403,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             Logger.Information("Zone {ZoneName} loaded in {Time}ms.", Logger.Args(ZoneName, _zoneLoadTimer.ElapsedMilliseconds));
             _isLoading = false;
             ScheduleIdleExpiryIfEmpty();
+            Context.Parent.Tell(new World.GameWorld.ZoneReady { ZonePath = ZonePath });
 
             var startMsg = new ZONE_102_PROTOCOL.MSG_ZONESTART();
 
@@ -392,6 +444,23 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     private void ReceiveTriggerPost(ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
         Logger.Verbose("Zone {ZoneName} received post event {EventName}.", Logger.Args(ZoneName, message.EventName));
 
+        if (message.RetryRefused) {
+            if (message.PlayerActor is not null && _players.Contains(message.PlayerActor)) {
+                _triggerSupervisor.Tell(message);
+            }
+
+            return;
+        }
+
+        // A result list that waited can outlive its player; once the player has left, the event is the zone's own.
+        if (message.PlayerActor is not null && !_players.Contains(message.PlayerActor)) {
+            message = new ZONE_102_PROTOCOL.MSG_POSTEVENT {
+                EventName = message.EventName,
+                PlayerSpawned = message.PlayerSpawned,
+                Adjectives = message.Adjectives,
+            };
+        }
+
         foreach (var supervisor in _supervisors) {
             supervisor.Tell(message);
         }
@@ -412,6 +481,10 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         _triggerSupervisor.Forward(message);
         _objectSupervisor.Forward(message);
     }
+
+    [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_SPAWNHOUSETRAINER))]
+    private void ReceiveSpawnHouseTrainer(SERVICE_101_PROTOCOL.MSG_SPAWNHOUSETRAINER message)
+        => _objectSupervisor.Forward(message);
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ADDTRIGGEROBJECT))]
     private void ReceiveAddTriggerObject(ZONE_102_PROTOCOL.MSG_ADDTRIGGEROBJECT message)
@@ -466,6 +539,14 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         }
     }
 
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYENCOUNTERMINIONS))]
+    private void ReceiveQueryEncounterMinions(ZONE_102_PROTOCOL.MSG_QUERYENCOUNTERMINIONS message)
+        => _supervisors.ForEach(supervisor => supervisor.Forward(message));
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ENCOUNTERBATTLEENDED))]
+    private void ReceiveEncounterBattleEnded(ZONE_102_PROTOCOL.MSG_ENCOUNTERBATTLEENDED message)
+        => _supervisors.ForEach(supervisor => supervisor.Forward(message));
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST))]
     private void ReceiveZoneBroadcast(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST message) {
         DispatchBroadcast(message);
@@ -473,6 +554,14 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL))]
     private void ReceiveRequestCombatSigil(ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL message)
+        => _supervisors.ForEach(supervisor => supervisor.Forward(message));
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH))]
+    private void ReceiveStartPvPMatch(ZONE_102_PROTOCOL.MSG_STARTPVPMATCH message)
+        => _supervisors.ForEach(supervisor => supervisor.Forward(message));
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_FORFEITPVPPARTICIPANT))]
+    private void ReceiveForfeitPvPParticipant(ZONE_102_PROTOCOL.MSG_FORFEITPVPPARTICIPANT message)
         => _supervisors.ForEach(supervisor => supervisor.Forward(message));
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_SPAWNENTITY))]
@@ -553,7 +642,8 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             ErrorCode = 0,
             MobileId = GenerateObjectIdentifier(),
             ZoneDisplayName = ZoneName,
-            CriticalObjects = [.. _criticalObjectIds]
+            CriticalObjects = [.. _criticalObjectIds],
+            IsInstance = IsInstance
         };
 
         var actualLocation = GetLocationFromString(message.DestinationLocation);
@@ -570,6 +660,8 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             }
             else if (pendingEvent is ZONE_102_PROTOCOL.MSG_ADDPLAYER addPlayer) {
                 _players.Add(playerActor);
+                ScriptState.PlayerCount = _players.Count;
+                NoteInstancedPlayer(playerActor, addPlayer.Wizard);
                 Timers.Cancel(IDLE_EXPIRE_TIMER);
                 InformZoneSupervisors(playerActor, addPlayer);
                 RestoreRememberedSpawns(addPlayer.Wizard);
@@ -591,6 +683,15 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     private void ScheduleIdleExpiryIfEmpty() {
         // Instance.IdleMinutes of 0 or less disables the expiry; a join cancels the timer.
         if (!IsInstance || _players.Count > 0 || _isLoading) {
+            return;
+        }
+
+        // [Instance] ResetWhenEmpty: a dungeon starts fresh once everyone has left, after a few seconds so a
+        // player still loading back in is not caught by it.
+        if (ConfigurationManager.GetValue("Instance.ResetWhenEmpty", true)) {
+            Timers.StartSingleTimer(IDLE_EXPIRE_TIMER, new ZONE_102_PROTOCOL.MSG_INSTANCEIDLEEXPIRE(),
+                TimeSpan.FromSeconds(RESET_WHEN_EMPTY_SECONDS));
+
             return;
         }
 

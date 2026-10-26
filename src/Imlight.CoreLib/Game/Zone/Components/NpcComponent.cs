@@ -91,7 +91,9 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
         this.AggressiveFactor = _npcBehaviorTemplate.m_nAggressiveFactor;
         this.StartingHealth = _npcBehaviorTemplate.m_nStartingHealth;
 
-        this.IsMonster = _duelistBehaviorTemplate is not null;
+        // A custom vendor or trainer with a creature's look never starts a battle (CustomNpcs).
+        this.IsMonster = _duelistBehaviorTemplate is not null
+            && !Imlight.CoreLib.Game.World.CustomNpcs.IsCustomTag(entity.Info?.m_zoneTag);
         this.Proximity = _duelistBehaviorTemplate?.m_npcProximity ?? 0;
         
         // Try to parse the npcBehaviorTemplate.m_schoolOfFocus to a MagicSchool.
@@ -106,6 +108,12 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
 
         this.MagicSchool = parsedSchool;
         this.Level = _npcBehaviorTemplate.m_nLevel;
+        // A custom vendor or trainer (CustomNpcs) and a custom (Customs.cs) show their own name; a trainer tome's
+        // trainer is named after the set trainer part it teaches.
+        this.NameOverride = Imlight.CoreLib.Game.World.CustomNpcs.NameFor(entity.Info?.m_zoneTag)
+            ?? Imlight.CoreLib.Game.Combat.Customs.NameOf(entity.ActiveGameObject?.m_globalID.Full ?? 0)
+            ?? Imlight.CoreLib.Game.World.HouseTrainers.NameFor(entity.Info?.m_zoneTag)
+            ?? Imlight.CoreLib.Game.World.HouseVendors.NameFor(entity.Info?.m_zoneTag);
     }
 
     public override void OnStart() {
@@ -141,10 +149,12 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         // Check if the player is now in range of the object.
+        // A player only counts as in range once a battle was asked for: one who walked in while still in a
+        // battle or its grace is pulled in on the next check (every 250 ms), even standing still (Niduus, 2026-10-25).
         if (IsInRadius(playerObj, Proximity) && !_playersInRange.Contains(playerActor)) {
-            // If the player is in range, trigger the enter events.
-            OnProximityEnter(playerObj, playerActor, playerWizard);
-            _playersInRange.Add(playerActor);
+            if (OnProximityEnter(playerObj, playerActor, playerWizard)) {
+                _playersInRange.Add(playerActor);
+            }
         } 
         else if (!IsInRadius(playerObj, Proximity) && _playersInRange.Contains(playerActor)) {
             _playersInRange.Remove(playerActor);
@@ -159,15 +169,19 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
         m_wsNameOverride = NameOverride,
     };
 
-    private void OnProximityEnter(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+    private bool OnProximityEnter(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         // Bug fix: There is an off chance the player spawns in the middle of our proximity radius,
         // before the wizard even has time to load themselves into the world.
         if (playerWizard is null) {
-            return;
+            return false;
         }
 
-        if (!IsMonster || playerWizard.IsInCombatGrace || playerWizard.IsInDuel) {
-            return;
+        if (!IsMonster) {
+            return true;
+        }
+
+        if (playerWizard.IsInCombatGrace || playerWizard.IsInDuel) {
+            return false;
         }
 
         // Hey! I'm a dueling creature and a player just entered my proximity.
@@ -182,6 +196,7 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
 
         // We do nothing further here. This message will be sent to the ZoneSigilSupervisor
         // to locate the closest sigil to the player and the creature.
+        return true;
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS))]

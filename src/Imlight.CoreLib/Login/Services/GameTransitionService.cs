@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/10/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -43,6 +43,7 @@ using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -86,6 +87,12 @@ internal class GameTransitionService(SessionActor sessionActor) : MessageService
 
         // If the given character does not exist on this account, send the client an error.
         var character = account.GetCharacter(message.CharID);
+        if (character is not null) {
+            // The game comes back from character select with a new quest helper that knows no quest yet.
+            Game.Services.QuestService.ForgetQuestHelper(character.CharId);
+            Game.Commands.Protocols.CommandArrowLogProtocol.Forget(character.CharId);
+        }
+
         if (character is null) {
             Logger.Warning("SessionActor {SessionId} account {Id} attempted to get character {CharId} it didn't have.",
                 Logger.Args(SessionActor.SessionID, account.AccountId, message.CharID));
@@ -108,15 +115,16 @@ internal class GameTransitionService(SessionActor sessionActor) : MessageService
         var allocatedKey = CreateSessionKey(gameServer.ActorRef, account);
 
         var wizardName = character.PlayerNameBehavior.GetWizardName();
-        Logger.Information("Sending wizard {name} to game server {IP}:{Port}.",
-            Logger.Args(wizardName, gameServer.IP, gameServer.Port));
+        var gameServerIp = ClientAddress.For(SessionActor, gameServer.IP);
+        Logger.Information("Sending wizard {name} ({RemoteIp}) to game server {IP}:{Port}.",
+            Logger.Args(wizardName, SessionActor.RemoteIp, gameServerIp, gameServer.Port));
 
         var zoneName = DetermineZone(character);
         var location = DetermineLocation(character);
 
         var charSelectedMsg = new LOGIN_7_PROTOCOL.MSG_CHARACTERSELECTED() {
             // Set details about the game server.
-            IP = gameServer.IP,
+            IP = gameServerIp,
             TCPPort = gameServer.Port,
             UDPPort = gameServer.Port,
             Key = allocatedKey,                   // Login server -> game server session key.
@@ -175,14 +183,27 @@ internal class GameTransitionService(SessionActor sessionActor) : MessageService
         SendToSocket(msg);
     }
 
+    // Live never logs a wizard back into an instance (a dungeon, a tower, a house, an arena): the login starts at the
+    // last spot outside any instance, a few steps back from the sigil or door (Niduus, 2026-10-25).
+    private static bool StartsAtSafeSpot(Wizard wizard)
+        => wizard.ZoneIsInstance && !string.IsNullOrEmpty(wizard.SafeZone) && !IsUnreachableOnLogin(wizard.SafeZone)
+           && !string.IsNullOrEmpty(wizard.SafeLocation);
+
     private string DetermineZone(Wizard wizard) {
+        if (StartsAtSafeSpot(wizard)) {
+            Logger.Information("Character {CharId} logged out inside instance {Zone}; logging in at {SafeZone} instead.",
+                Logger.Args(wizard.CharId, wizard.Zone, wizard.SafeZone));
+
+            return wizard.SafeZone;
+        }
+
         // The player may have logged out in a zone we can't put them back into.
-        if (!IsMinigameZone(wizard.Zone)) {
+        if (!IsUnreachableOnLogin(wizard.Zone)) {
             return wizard.Zone;
         }
 
-        // A transfer started inside a minigame zone also saves that zone as the previous one.
-        return string.IsNullOrEmpty(wizard.PreviousZone) || IsMinigameZone(wizard.PreviousZone)
+        // A transfer started inside a minigame or house zone also saves that zone as the previous one.
+        return string.IsNullOrEmpty(wizard.PreviousZone) || IsUnreachableOnLogin(wizard.PreviousZone)
             ? ConfigurationManager.Settings["Character.StartingZone"]
             : wizard.PreviousZone;
     }
@@ -190,13 +211,22 @@ internal class GameTransitionService(SessionActor sessionActor) : MessageService
     private static bool IsMinigameZone(string zone)
         => zone?.StartsWith(MinigameWorldPrefix) == true;
 
+    private static bool IsUnreachableOnLogin(string zone) {
+        // A house needs its lot from the Home button, and a login carries none.
+        return IsMinigameZone(zone) || HouseZoneIndex.IsHouseZone(zone);
+    }
+
     private string DetermineLocation(Wizard wizard) {
+        if (StartsAtSafeSpot(wizard)) {
+            return wizard.SafeLocation;
+        }
+
         if (wizard.Location == Vector3.Zero) {
             return "Start";
         }
 
         // The player may have logged out in a zone we can't put them back into.
-        if (IsMinigameZone(wizard.Zone)) {
+        if (IsUnreachableOnLogin(wizard.Zone)) {
             return "Start";
         }
 

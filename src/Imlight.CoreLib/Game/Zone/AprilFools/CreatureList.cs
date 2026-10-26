@@ -716,6 +716,8 @@ internal static class CreatureList {
         1684005
     ];
 
+    internal static IReadOnlyList<uint> TemplateIDs => s_creatureTemplateIDs;
+
     internal static uint GetRandomCreatureTemplateID() {
         var random = new Random();
         return s_creatureTemplateIDs[random.Next(0, s_creatureTemplateIDs.Count)];

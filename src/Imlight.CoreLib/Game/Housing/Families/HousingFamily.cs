@@ -1,0 +1,218 @@
+/*
+ * Imlight
+ * Copyright (C) 2025 Revive101
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * ========================================================================
+ * HOUSING SYSTEM
+ * ========================================================================
+ *
+ * PURPOSE:
+ * The families of house objects. A family is a kind of object that needs more than a position in a house:
+ * its own blob entry, its own state or its own server feature. The behaviors on an item's template pick its
+ * family, and a family that is not enabled yet is declared all the same.
+ *
+ * USAGE EXAMPLE:
+ * var families = HousingFamilies.Of(template);
+ * if (families.All(family => family.Enabled)) {
+ *     // the object may be placed
+ * }
+ *
+ * NOTE:
+ * - A trigger is an Imcodec type: a behavior template type, or the behavior type that the template's behavior
+ *   name allocates, for the templates the data writes as a plain BehaviorTemplate.
+ * - A template that carries no trigger is plain furniture. A template that carries triggers of several
+ *   families belongs to all of them and is placed only when every one of them is enabled.
+ * - AtticSubType is the blob subtype the client's BlobLoaded gives the attic blob of the family (0x142216a00).
+ *   BlobSubType is the subtype of the family's live entries where BaseClientHousingBlobStrategy::CreateObject
+ *   (0x1422170f0) names one; it is null where the client names none.
+ * - Enabled says what the server supports yet, never what exists.
+ *
+ * TODO:
+ * - Only the names tie InteractableBehavior to the Interact subtype and AquariumBehavior to FishAttic. Is that right?
+ * - Which behavior puts an object in the Wand, JewelWand and HouseFish families?
+ *
+ * Created by: Jay
+ * Version: KALI 1.0
+ * Last Updated: 10/24/2026
+ */
+
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using Imcodec.Cryptography;
+using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Shared.Resources;
+using Type = System.Type;
+
+namespace Imlight.CoreLib.Game.Housing.Families;
+
+/// <summary>
+/// A kind of house object.
+/// </summary>
+/// <param name="Id">The family's name.</param>
+/// <param name="BlobSubType">The subtype of its live blob entries, or <c>null</c> when the client names none.</param>
+/// <param name="AtticSubType">The subtype of its attic blob, or <c>null</c> when the client has none for it.</param>
+/// <param name="Triggers">The types that put a template in the family.</param>
+/// <param name="Enabled">Whether the server supports the family yet.</param>
+internal sealed record HousingFamily(
+    string Id,
+    string BlobSubType,
+    string AtticSubType,
+    IReadOnlyList<Type> Triggers,
+    bool Enabled) {
+
+    /// <summary>
+    /// Checks whether any of the given types puts a template in this family.
+    /// </summary>
+    /// <param name="behaviorTypes">The types of one behavior: its template type and the type its name allocates.</param>
+    /// <returns><c>true</c> when a trigger is one of the types or a base of one.</returns>
+    internal bool IsTriggeredBy(IEnumerable<Type> behaviorTypes)
+        => behaviorTypes.Any(type => Triggers.Any(trigger => trigger.IsAssignableFrom(type)));
+
+}
+
+/// <summary>
+/// Every family of house objects the client knows.
+/// </summary>
+internal static class HousingFamilies {
+
+    private static readonly ConcurrentDictionary<uint, IReadOnlyList<HousingFamily>> s_known = new();
+
+    /// <summary>
+    /// The family of an object that needs nothing beyond a position.
+    /// </summary>
+    internal static HousingFamily Plain { get; } = new("Plain", "Item", "Attic", [], true);
+
+    /// <summary>
+    /// The family of castle blocks, which the client's place and move messages can switch (Game/Housing/HouseCastleBlocks).
+    /// Their live entries are plain items, so their attic entries are plain attic items too.
+    /// </summary>
+    internal static HousingFamily CastleBlock { get; } = Declare("CastleBlock", null, "Attic",
+        [typeof(CastleBlocksBehaviorTemplate), typeof(CastleBlockDoorBehaviorTemplate)], enabled: true);
+
+    /// <summary>
+    /// The family of crafting stations. Their BasicNPCServiceBehavior only gives the station's prompt, so a station
+    /// is not in the Service family for it.
+    /// </summary>
+    internal static HousingFamily CraftingStation { get; } = Declare("CraftingStation", null, "Attic",
+        [typeof(AlchemyStationBehaviorTemplate)], enabled: true);
+
+    /// <summary>
+    /// The family of Castle Magic objects. They are placed among the plain items: their spells are the custom data of their
+    /// Item blob entry, which the client loads into the object's CastleMagicBehavior (Game/Housing/HouseCastleMagic).
+    /// </summary>
+    internal static HousingFamily Magic { get; } = Declare("Magic", "Magic", "MagicAttic", [typeof(CastleMagicBehaviorTemplate)], enabled: true);
+
+    // The family of objects a player clicks. The client runs the click of a Castle Magic object itself, so a Castle Magic
+    // object is not in this family.
+    private const string InteractId = "Interact";
+
+    /// <summary>
+    /// Every declared family, plain furniture first.
+    /// </summary>
+    internal static IReadOnlyList<HousingFamily> All { get; } = [
+        Plain,
+        CastleBlock,
+        // The client keeps the state of an object such as a castle door itself, so a plain entry is all it needs.
+        Declare("ObjectState", null, "Attic", [typeof(ObjectStateBehaviorTemplate)], enabled: true),
+        // Pets and mounts are plain items whose custom data the client shows them from, and they keep their stored
+        // document while placed (Game/Housing/HouseCreatures).
+        Declare("Pet", null, "PetAttic", [typeof(PetItemBehaviorTemplate)], enabled: true),
+        Declare("Mount", null, "MountAttic", [typeof(RidableBehaviorTemplate), typeof(MountItemBehaviorTemplate)], enabled: true),
+        Declare(InteractId, "Interact", "InteractAttic", [typeof(InteractableBehaviorTemplate)]),
+        Declare("IntMusic", "IntMusic", "IntMusicAttic", [typeof(InteractiveMusicBehaviorTemplate)]),
+        Declare("Music", null, "MusicAttic", [typeof(HousingMusicBehaviorTemplate), typeof(HousingMusicPlayerBehavior)]),
+        // Teleporters are placed among the plain items: the server sends their destination with the Item blob and
+        // finds a step onto one itself (Game/Housing/HouseTeleporters).
+        Declare("Teleport", "Teleport", "TeleportAttic", [typeof(HousingTeleporterBehaviorTemplate)], enabled: true),
+        Declare("Sign", null, "SignAttic", [typeof(HousingSignBehaviorTemplate)]),
+        Magic,
+        Declare("Monster", "Monster", "MonsterAttic", [typeof(MonsterArenaBehaviorTemplate)]),
+        Declare("Train", "Train", "TrainAttic", [typeof(TrainBehaviorTemplate)]),
+        Declare("Equip", null, "EquipAttic", [typeof(EquipmentBehaviorTemplate)]),
+        Declare("Fish", null, "FishAttic", [typeof(AquariumBehaviorTemplate)]),
+        Declare("SeedShed", null, "SeedShedAttic", [typeof(GardeningShedBehaviorTemplate)]),
+        Declare("BreadCrumb", null, "BreadCrumbAttic", [typeof(BreadCrumbBehaviorTemplate)]),
+        Declare("Gear", null, "GearAttic", [typeof(GearVaultBehaviorTemplate)]),
+        Declare("JewelVault", null, "JewelVaultAttic", [typeof(JewelVaultBehaviorTemplate)]),
+        Declare("TCPoster", null, "TCPosterAttic", [typeof(TreasureCardPosterBehaviorTemplate)]),
+        Declare("TCVault", null, "TCVaultAttic", [typeof(TreasureCardVaultBehaviorTemplate)]),
+        Declare("Wand", null, "WandAttic", []),
+        Declare("JewelWand", null, "JewelWandAttic", []),
+        Declare("HouseFish", null, "HouseFishAttic", []),
+        // Housing gauntlets, Skeleton Key duels and rematches are plain items: the server finds a step onto one and starts
+        // its dungeon, and turns a used up one into its trophy (Game/Housing/HouseGauntlets).
+        Declare("Sigil", null, "Attic", [typeof(HousingSigilBehaviorTemplate)], enabled: true),
+        Declare("RaidKey", null, null, [typeof(RaidKeyBehaviorTemplate)]),
+        Declare("ObjectRemap", null, null, [typeof(ObjectRemapBehaviorTemplate)]),
+        Declare("ExtraZone", null, null, [typeof(ExtraHousingZoneBehaviorTemplate)]),
+        // Crafting stations open the game's crafting window when clicked (Game/Crafting, CraftingService).
+        CraftingStation,
+        Declare("Service", null, null, [
+            typeof(BasicNPCServiceBehaviorTemplate), typeof(WizShoppingBehaviorTemplate),
+            typeof(WizardQuestingBehaviorTemplate), typeof(ItemFinderBehaviorTemplate), typeof(HousingHallOfFameBehaviorTemplate),
+            typeof(HatchmakingKioskBehaviorTemplate), typeof(PvPKioskBehaviorTemplate), typeof(RitualObjectBehaviorTemplate)]),
+    ];
+
+    /// <summary>
+    /// Finds the families a template belongs to.
+    /// </summary>
+    /// <param name="template">An item template.</param>
+    /// <returns>The declared families whose triggers the template carries, or only <see cref="Plain"/> when it carries none.</returns>
+    internal static IReadOnlyList<HousingFamily> Of(WizItemTemplate template)
+        => s_known.GetOrAdd(template.m_templateID, _ => Resolve(template));
+
+    private static HousingFamily Declare(string id, string blobSubType, string atticSubType, IReadOnlyList<Type> triggers, bool enabled = false)
+        => new(id, blobSubType, atticSubType, triggers, enabled);
+
+    private static IReadOnlyList<HousingFamily> Resolve(WizItemTemplate template) {
+        var behaviorTypes = (template.m_behaviors ?? [])
+            .Where(behavior => behavior is not null)
+            .Select(BehaviorTypes)
+            .ToList();
+        var declared = All
+            .Where(family => family != Plain && behaviorTypes.Any(family.IsTriggeredBy))
+            .ToList();
+
+        // A crafting station's service behavior is its own prompt: the station only needs the crafting family.
+        if (declared.Contains(CraftingStation)) {
+            var otherServices = behaviorTypes.SelectMany(types => types)
+                .Any(type => type != typeof(BasicNPCServiceBehaviorTemplate) && type != typeof(AlchemyStationBehaviorTemplate)
+                          && declared.Any(family => family.Id == "Service" && family.IsTriggeredBy([type])));
+            if (!otherServices) {
+                declared.RemoveAll(family => family.Id == "Service");
+            }
+        }
+
+        // A Castle Magic lever or button is clicked, which the client's Castle Magic answers itself.
+        if (declared.Contains(Magic)) {
+            declared.RemoveAll(family => family.Id == InteractId);
+        }
+
+        return declared.Count == 0 ? [Plain] : declared;
+    }
+
+    private static IEnumerable<Type> BehaviorTypes(BehaviorTemplate behavior) {
+        yield return behavior.GetType();
+
+        // Some templates are written as a plain BehaviorTemplate, and only the name says which behavior they mean.
+        var instance = BehaviorCache.AllocateBehavior(StringHash.Compute(behavior.m_behaviorName));
+        if (instance is not null) {
+            yield return instance.GetType();
+        }
+    }
+
+}

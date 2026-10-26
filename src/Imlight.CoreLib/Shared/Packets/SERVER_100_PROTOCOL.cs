@@ -146,6 +146,8 @@ public sealed class SERVER_100_PROTOCOL : IServerProtocol {
         public ByteString Key;
         public ulong UserID;
         public SessionActor SessionActor;
+        // The character the session attaches with; only it is loaded in full.
+        public ulong CharID;
         
     }
 
@@ -244,6 +246,34 @@ public sealed class SERVER_100_PROTOCOL : IServerProtocol {
         public bool Found;
         public IActorRef ServerActor;
         
+    }
+
+    /// <summary>
+    /// Die = Delete: a character died in battle. Their session is closed, then the character is deleted.
+    /// </summary>
+    public class MSG_DIEDELETE : IServerMessage {
+
+        public byte MessageOrder { get; } = 34;
+        public byte ServiceID { get; } = 100;
+
+        public ulong AccountID;
+        public ulong CharacterID;
+        public string CharacterName;
+
+    }
+
+    /// <summary>
+    /// Die = Delete: deletes the character once its session has finished closing.
+    /// </summary>
+    public class MSG_DIEDELETENOW : IServerMessage {
+
+        public byte MessageOrder { get; } = 35;
+        public byte ServiceID { get; } = 100;
+
+        public ulong AccountID;
+        public ulong CharacterID;
+        public string CharacterName;
+
     }
 
     public class MSG_KICKPLAYER : IServerMessage {

@@ -48,6 +48,7 @@ using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.Game.Randomization;
 
 namespace Imlight.CoreLib.Shared.Character;
 
@@ -55,16 +56,24 @@ internal static class CharacterHelper {
     
     internal const float OrientationCompressionFactor = 0.708f;
 
+    // The wizards whose XP/Level mismatch is already in the log. Stats are recalculated on every load and zone change,
+    // which wrote the same warning hundreds of times a day for one wizard.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> s_mismatchReported = new();
+
     /// <summary>
     /// Recalculates the game stats for a wizard.
     /// </summary>
     /// <param name="wizard">The wizard whose game stats need to be recalculated.</param>
     internal static void RecalculateGameStats(Wizard wizard) {
-        Logger.Debug("Recalculation of game stats for {0}.", Logger.Args(wizard.PlayerNameBehavior.GetWizardName()));
+        Logger.Verbose("Recalculation of game stats for {0}.", Logger.Args(wizard.PlayerNameBehavior.GetWizardName()));
 
         // Reset the base stats to the default values.
         wizard.GameStats.SetBaseStats();
+        wizard.GameStats.ClearEquipmentStats();
         wizard.GameEffects = [];
+        // The gear's cards are added again below, so drop the old ones first. Without this every zone change added
+        // another copy of each wand card, and the copies past those crossed out in the deck showed up in battle.
+        wizard.SpellbookBehavior.TemporarySpells?.RemoveAll(spell => spell.m_itemCard);
 
         // Iterate through the equipped items and apply their effects.
         foreach (var item in wizard.EquipmentBehavior.EquippedItems) {
@@ -75,15 +84,19 @@ internal static class CharacterHelper {
 
             var activatedEffects = CharacterEffectHelper.AddEffectsToWizard(wizard, template);
 
-            Logger.Debug("{0} Applied {1} effects for item {2}.",
+            Logger.Verbose("{0} Applied {1} effects for item {2}.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), activatedEffects.Count, template.m_objectName));
         }
+
+        // Pet talents and socketed jewels, on top of the gear.
+        EquipmentExtras.Forget(wizard);
+        EquipmentExtras.Refresh(wizard);
 
         // Check for level/XP mismatches, but don't modify XP on login.
         // Any mismatch will be corrected on the next XP gain.
         var xp = wizard.MagicSchoolBehavior.ExperiencePoints;
         var matchedLevel = MagicLevelsConfig.GetPlayerLevelAtExperience(xp);
-        if (matchedLevel != wizard.MagicSchoolBehavior.Level) {
+        if (matchedLevel != wizard.MagicSchoolBehavior.Level && s_mismatchReported.TryAdd(wizard.CharId, 0)) {
             Logger.Warning("Player {0} has XP/Level mismatch on login. XP: {1}, Stored Level: {2}, Calculated Level: {3}. " +
                           "This will be corrected on next XP gain.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(),
@@ -92,7 +105,7 @@ internal static class CharacterHelper {
                             matchedLevel));
         }
 
-        Logger.Debug("Game stats recalculated for {0}.", Logger.Args(wizard.PlayerNameBehavior.GetWizardName()));
+        Logger.Verbose("Game stats recalculated for {0}.", Logger.Args(wizard.PlayerNameBehavior.GetWizardName()));
     }
 
     /// <summary>
@@ -102,10 +115,11 @@ internal static class CharacterHelper {
     /// <returns>The created Wizard character.</returns>
     public static Wizard CreateCharacterFromCreationInfo(WizardCharacterCreationInfo creationInfo) {
         // This method is used to create a character from the character creation screen.
-        var school = (MagicSchool) creationInfo.m_schoolOfFocus;
+        var school = Randomizer.PickSchool((MagicSchool) creationInfo.m_schoolOfFocus);
         var wizardAvatar = creationInfo.m_avatarBehavior;
         var nameIndices = creationInfo.m_nameIndices;
         var character = new Wizard(school, wizardAvatar, nameIndices);
+        Randomizer.GiveStartingSpells(character);
 
         return character;
     }

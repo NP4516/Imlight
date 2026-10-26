@@ -39,12 +39,14 @@ public static class DropTableRoller {
     /// <param name="playerRef">Player actor reference for requirements context</param>
     /// <param name="playerObj">Player core object for requirements context</param>
     /// <param name="wizard">Player wizard data for requirements context</param>
+    /// <param name="chanceScale">Multiplies each item's chance (a pick-one table: its weight); null leaves them. Tamed Drops uses it.</param>
     /// <returns>Combined DropTableResult containing all rolled loot that passed requirements</returns>
     public static DropTableResult Roll(
         string[] dropTableNames,
         IActorRef playerRef,
         CoreObject playerObj,
-        Wizard wizard) {
+        Wizard wizard,
+        Func<DropItem, double> chanceScale = null) {
 
         if (dropTableNames == null || dropTableNames.Length == 0) {
             return CreateEmptyResult("no_tables_specified");
@@ -70,7 +72,7 @@ public static class DropTableRoller {
             }
 
             // Load drop table from database.
-            var dropTable = DropTableCollection.GetDropTable(tableName);
+            var dropTable = DropTableFiles.Get(tableName);
             if (dropTable == null) {
                 Logger.Warning("Roller encountered missing drop table {0} that was not present in the database.",
                     Logger.Args(tableName));
@@ -79,7 +81,7 @@ public static class DropTableRoller {
             }
 
             // Roll the table with context for item requirements.
-            var tableResult = RollSingleTable(dropTable, playerRef, playerObj, wizard, random);
+            var tableResult = RollSingleTable(dropTable, playerRef, playerObj, wizard, random, chanceScale);
 
             // Accumulate rewards.
             combinedResult.GoldAmount += tableResult.GoldAmount;
@@ -97,16 +99,24 @@ public static class DropTableRoller {
                                                              IActorRef playerRef,
                                                              CoreObject playerObj,
                                                              Wizard wizard,
-                                                             Random random) {
+                                                             Random random,
+                                                             Func<DropItem, double> chanceScale) {
 
         var result = new DropTableResult {
             DropTableId = dropTable.Id
         };
 
         // Items don't have drop chance, only the table itself does.
-        // Roll that chance to see if we get any rewards at all.
+        // Roll that chance to see if we get any rewards at all. A table with Odds takes its chance from DropOdds.json;
+        // Tamed Drops' odds for its kind of item then multiply it, as each such table holds one kind.
+        var chance = DropOdds.ChanceOf(dropTable);
+        if (chanceScale is not null && !string.IsNullOrWhiteSpace(dropTable.Odds)
+            && dropTable.Items?.Find(item => !string.IsNullOrEmpty(item.ItemId)) is { } first) {
+            chance = Math.Clamp(chance * Math.Max(0, chanceScale(first)), 0, 1);
+        }
+
         var rollValue = random.NextDouble();
-        if (rollValue > dropTable.RollChance) {
+        if (rollValue > chance) {
             // Failed to enter table, return empty result
             return result;
         }
@@ -118,7 +128,7 @@ public static class DropTableRoller {
         result.TrainingPoints = dropTable.TrainingPoints;
         
         // Roll items with requirements validation.
-        result.Items = RollTableItems(dropTable, playerRef, playerObj, wizard, random);
+        result.Items = RollTableItems(dropTable, playerRef, playerObj, wizard, random, chanceScale);
             
         return result;
     }
@@ -145,12 +155,17 @@ public static class DropTableRoller {
                                                                   IActorRef playerRef,
                                                                   CoreObject playerObj,
                                                                   Wizard wizard,
-                                                                  Random random) {
+                                                                  Random random,
+                                                                  Func<DropItem, double> chanceScale) {
         
         var results = new List<DropItemResult>();
 
         if (dropTable.Items == null || dropTable.Items.Count == 0) {
             return results;
+        }
+
+        if (dropTable.EachItem) {
+            return RollEachItem(dropTable, playerRef, playerObj, wizard, random, chanceScale);
         }
 
         // Create a working copy of items to roll from.
@@ -160,8 +175,8 @@ public static class DropTableRoller {
 
         // Keep rolling until we find an item that meets requirements or run out of items.
         while (availableItems.Count > 0) {
-            // Randomly select an item from the remaining pool.
-            var randomIndex = random.Next(availableItems.Count);
+            // Randomly select an item from the remaining pool (by weight when the items have a Chance or Tamed Drops scales them).
+            var randomIndex = PickIndex(availableItems, random, chanceScale);
             var selectedItem = availableItems[randomIndex];
 
             // Check if this item meets requirements.
@@ -190,6 +205,57 @@ public static class DropTableRoller {
                 // Item doesn't meet requirements, remove it from the pool and try again.
                 availableItems.RemoveAt(randomIndex);
             }
+        }
+
+        return results;
+    }
+
+    // A pick-one table whose items carry a Chance (the real pack lists from Wizard404) picks by it as a weight.
+    private static int PickIndex(List<DropItem> items, Random random, Func<DropItem, double> chanceScale) {
+        var weighted = items.Any(item => item.Chance is > 0);
+        if (chanceScale is null && !weighted) {
+            return random.Next(items.Count);
+        }
+
+        var weights = items.Select(item => Math.Max(0, (chanceScale?.Invoke(item) ?? 1) * (weighted ? item.Chance ?? 0 : 1))).ToList();
+        var total = weights.Sum();
+        if (total <= 0) {
+            return random.Next(items.Count);
+        }
+
+        var roll = random.NextDouble() * total;
+        for (var i = 0; i < weights.Count; i++) {
+            roll -= weights[i];
+            if (roll < 0) {
+                return i;
+            }
+        }
+
+        return weights.Count - 1;
+    }
+
+    /// <summary>A table made in the app: each item rolls by its own chance and count.</summary>
+    private static List<DropItemResult> RollEachItem(DropTable dropTable, IActorRef playerRef, CoreObject playerObj,
+        Wizard wizard, Random random, Func<DropItem, double> chanceScale) {
+        var results = new List<DropItemResult>();
+        foreach (var item in dropTable.Items.Where(i => !string.IsNullOrEmpty(i.ItemId))) {
+            var chance = Math.Clamp((item.Chance ?? 100) * (chanceScale?.Invoke(item) ?? 1), 0, 100);
+            if (!item.Guaranteed && random.NextDouble() * 100 >= chance) {
+                continue;
+            }
+
+            if (item.Requirements != null && !RequirementDispatcher.EvaluateRequirements(item.Requirements,
+                    new GenericRequirementContext(requirements: item.Requirements, playerRef: playerRef, playerObj: playerObj, wizard: wizard))) {
+                continue;
+            }
+
+            var min = Math.Max(1, item.MinCount ?? 1);
+            var max = Math.Max(min, item.MaxCount ?? min);
+            results.Add(new DropItemResult {
+                ItemId = item.ItemId,
+                ItemName = item.ItemName,
+                Quantity = random.Next(min, max + 1),
+            });
         }
 
         return results;

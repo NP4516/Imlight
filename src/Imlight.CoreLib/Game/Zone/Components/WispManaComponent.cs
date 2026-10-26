@@ -35,6 +35,7 @@
  * Last Updated: 01.10.2026
  */
 
+using System;
 using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.IO;
@@ -54,9 +55,12 @@ internal sealed class WispManaComponent : ZoneEntityComponent, IComponentFactory
     private readonly string PARTICLE_ASSET = "Character/FX_WispBlue_Dsppr.nif";
     private readonly string SOUND_ASSET = "Sound/GUI/ui_health_powerup_01.wav";
 
-    private const float INTERACTION_RADIUS = 100.0f;
+    private readonly WispPickup _pickup = new();
+    private bool _collected;
     private const float STARTING_WORLD_WISP_MANA = 0.25f;
     private const float WISP_MANA_PERCENT_INCREASE = 0.10f;
+    private const int MIN_WISP_MANA = 5;
+    private const int MIN_STARTING_WORLD_WISP_MANA = 10;
 
     private readonly bool _isStarterWisp;
 
@@ -73,8 +77,10 @@ internal sealed class WispManaComponent : ZoneEntityComponent, IComponentFactory
         }
     }
 
+    public override void OnPlayerLeave(IActorRef playerActor, ulong id) => _pickup.Forget(id);
+
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
-        if (IsInRadius(playerObj, INTERACTION_RADIUS)) {
+        if (!_collected && playerWizard is not null && _pickup.Reached(playerObj, Entity.ActiveGameObject)) {
             // Values with gear and effects.
             var baseMana = playerWizard.GameStats.m_baseMana;
             var currentMana = playerWizard.GameStats.m_currentMana;
@@ -91,7 +97,11 @@ internal sealed class WispManaComponent : ZoneEntityComponent, IComponentFactory
                 ? STARTING_WORLD_WISP_MANA
                 : WISP_MANA_PERCENT_INCREASE;
 
-            var manaUpdate = (int) (baseMana * manaPercentage); // Check for overflow.
+            // A percentage of a low level wizard's small mana pool rounds down to 1, so a wisp always gives
+            // at least a few points and rounds up.
+            var manaUpdate = Math.Max(
+                (int) Math.Ceiling(baseMana * manaPercentage),
+                _isStarterWisp ? MIN_STARTING_WORLD_WISP_MANA : MIN_WISP_MANA); // Check for overflow.
             if (currentMana + manaUpdate > baseMana) {
                 manaUpdate = baseMana - currentMana;
             }
@@ -105,6 +115,7 @@ internal sealed class WispManaComponent : ZoneEntityComponent, IComponentFactory
 
             SendPlayerStateChange(playerWizard);
 
+            _collected = true;
             SendDestroy(playerWizard.GameObjectID);
 
             playerWizard.UpdateMana(currentMana + manaUpdate);

@@ -21,10 +21,19 @@ using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
+using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Shared.Packets;
+
+/// <summary>
+/// What a <see cref="CHARACTER_103_PROTOCOL.MSG_BADGEEVENT"/> asks the badge service to do.
+/// </summary>
+public enum BadgeEventKind : byte {
+    Award,
+    Recheck,
+}
 
 public class CHARACTER_103_PROTOCOL : IServerProtocol {
 
@@ -385,6 +394,423 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
         /// The quest name, or empty for the only active quest.
         /// </summary>
         public string QuestName;
+
+    }
+
+    /// <summary>
+    /// Sent by a service to the EquipmentService: takes the equipped item off the player the way an unequip
+    /// request from the client does. The EquipmentService answers with <see cref="MSG_UNEQUIPITEMRSP"/>.
+    /// </summary>
+    public sealed class MSG_UNEQUIPITEM : IServerMessage {
+
+        public byte MessageOrder { get; } = 31;
+        public byte ServiceID { get; } = 103;
+
+        public ulong ItemId;
+
+    }
+
+    /// <summary>
+    /// The EquipmentService's answer to <see cref="MSG_UNEQUIPITEM"/>.
+    /// </summary>
+    public sealed class MSG_UNEQUIPITEMRSP : IServerMessage {
+
+        public byte MessageOrder { get; } = 32;
+        public byte ServiceID { get; } = 103;
+
+        /// <summary>
+        /// True when the item is no longer equipped.
+        /// </summary>
+        public bool Success;
+
+    }
+
+    /// <summary>
+    /// Sent to the BadgeService: award one badge, or recheck the auto-add badges against the character's state.
+    /// </summary>
+    public sealed class MSG_BADGEEVENT : IServerMessage {
+
+        public byte MessageOrder { get; } = 40;
+        public byte ServiceID { get; } = 103;
+
+        public BadgeEventKind Kind;
+
+        /// <summary>
+        /// The badge to award; only used by <see cref="BadgeEventKind.Award"/>.
+        /// </summary>
+        public uint BadgeId;
+
+    }
+
+    /// <summary>
+    /// Sent by the badge commands: the badge service runs the action through its normal award, counter and title paths and replies to the player with a server message.
+    /// </summary>
+    public sealed class MSG_BADGECOMMAND : IServerMessage {
+
+        public byte MessageOrder { get; } = 41;
+        public byte ServiceID { get; } = 103;
+
+        /// <summary>
+        /// One of: grant, progress, list, reset, title.
+        /// </summary>
+        public string Action;
+
+        /// <summary>
+        /// The badge id or name for grant, the counter key for progress, the title key for title.
+        /// </summary>
+        public string Argument;
+
+        /// <summary>
+        /// The amount added to the counter; only used by progress.
+        /// </summary>
+        public ulong Amount;
+
+    }
+
+    /// <summary>
+    /// Sent by a bank NPC to the BankService of the player who picked its bank option: the bank counts as open
+    /// until the window is closed, the zone changes or the session attaches again.
+    /// </summary>
+    public sealed class MSG_BEGINBANKSESSION : IServerMessage {
+
+        public byte MessageOrder { get; } = 50;
+        public byte ServiceID { get; } = 103;
+
+        /// <summary>
+        /// The global id of the bank NPC.
+        /// </summary>
+        public ulong EntityId;
+
+    }
+
+    /// <summary>
+    /// Sent by the garden command to the HousingService of the player: shows the garden, grows it for testing or sets the
+    /// gardening rank (Game/Services/HousingService.Gardening).
+    /// </summary>
+    public sealed class MSG_GARDENCOMMAND : IServerMessage {
+
+        public byte MessageOrder { get; } = 147;
+        public byte ServiceID { get; } = 103;
+
+        /// <summary>status, grow, ready, rank, spells, seeds, speed, pause, resume, stage, age or times.</summary>
+        public string Action;
+
+        public int Value;
+
+        /// <summary>The rest of the command: speed takes "[part] number", stage a stage name, age a time.</summary>
+        public string Text;
+
+    }
+
+    /// <summary>
+    /// Sent by an Item Finder object (a placed Backpack Butler or a bank) or the itemfinder command to the BankService
+    /// of the player: it opens the game's Item Finder window and fills it with the bank, the attic and the houses.
+    /// </summary>
+    public sealed class MSG_BEGINITEMFINDER : IServerMessage {
+
+        public byte MessageOrder { get; } = 90;
+        public byte ServiceID { get; } = 103;
+
+        /// <summary>
+        /// The global id of the object the window was opened from; 0 for the command.
+        /// </summary>
+        public ulong EntityId;
+
+    }
+
+    /// <summary>
+    /// Sent by the EquipmentService to the RentalService after a rental item was equipped: the timer of the rental
+    /// starts if it has not started yet.
+    /// </summary>
+    public sealed class MSG_STARTRENTAL : IServerMessage {
+
+        public byte MessageOrder { get; } = 60;
+        public byte ServiceID { get; } = 103;
+
+        public ulong ItemId;
+
+    }
+
+    /// <summary>
+    /// Internal timer message and request to the RentalService: expires every rental of the player that has run out,
+    /// then arms the timer for the next one.
+    /// </summary>
+    public sealed class MSG_CHECKRENTALS : IServerMessage {
+
+        public byte MessageOrder { get; } = 61;
+        public byte ServiceID { get; } = 103;
+
+    }
+
+    /// <summary>
+    /// Sent by the RentalService to the EquipmentService: the rental has run out, so it is taken off the player and removed.
+    /// </summary>
+    public sealed class MSG_EXPIRERENTAL : IServerMessage {
+
+        public byte MessageOrder { get; } = 62;
+        public byte ServiceID { get; } = 103;
+
+        public ulong ItemId;
+
+    }
+
+    /// <summary>
+    /// Fired every second to tick down active elixir playtime.
+    /// </summary>
+    public sealed class MSG_DOELIXIRTICK : IServerMessage {
+
+        public byte MessageOrder { get; } = 63;
+        public byte ServiceID { get; } = 103;
+
+    }
+
+    /// <summary>
+    /// Synchronizes an updated Crown Shop wishlist to an online character's session.
+    /// </summary>
+    public sealed class MSG_UPDATE_WISHLIST : IServerMessage {
+
+        public byte MessageOrder { get; } = 33;
+        public byte ServiceID { get; } = 103;
+
+        public ulong CharId;
+        public ByteString WishlistData;
+        public uint RemovedTemplateId;
+
+    }
+
+    /// <summary>
+    /// Asks PetService to breed two pets into an egg for this session's wizard (Niduus, 2026-10-20). ParentA is
+    /// the wizard's own pet; ParentB may be another player's.
+    /// </summary>
+    internal sealed class MSG_BREEDPETS : IServerMessage {
+
+        public byte MessageOrder { get; } = 70;
+        public byte ServiceID { get; } = 103;
+
+        public PetParent ParentA;
+        public PetParent ParentB;
+        public HatchSource Source;
+        // In person: the partner's game object id, for MSG_PETHATCHRESULT.
+        public ulong PartnerGameObjectId;
+
+    }
+
+    /// <summary>
+    /// What one hatching partner's session tells the other's (see HatchService).
+    /// </summary>
+    internal enum HatchPeerKind : byte {
+        Invite,
+        Refused,
+        Join,
+        Ready,
+        PetChosen,
+        Left,
+        // In the pet morph zone: Hatch (1) or Lend (2) on the "Hatch or Lend Pet" screen.
+        Choice,
+        // In the pet morph zone: the hatcher's egg is made, so the lender goes back too (they get no egg).
+        EggMade,
+        // On the sigil: the sender stepped off during the pair's countdown, so the partner's countdown stops too.
+        TripCancelled,
+    }
+
+    /// <summary>
+    /// Sent between the sessions of two players hatching in person.
+    /// </summary>
+    internal sealed class MSG_HATCHPEER : IServerMessage {
+
+        public byte MessageOrder { get; } = 71;
+        public byte ServiceID { get; } = 103;
+
+        public HatchPeerKind Kind;
+        public ulong FromCharId;
+        public IActorRef FromSession;
+        public IActorRef FromZone;
+        public int Value;
+        public PetParent Pet;
+        // In the pet morph zone: the sender's PetGameMorphPartner (character id and pets), written for the game.
+        public ByteString MorphData;
+
+    }
+
+    /// <summary>
+    /// The hatchmaking kiosk was used: opens the kiosk window for this session.
+    /// </summary>
+    internal sealed class MSG_OPENHATCHKIOSK : IServerMessage {
+
+        public byte MessageOrder { get; } = 72;
+        public byte ServiceID { get; } = 103;
+
+        public ulong KioskGID;
+
+    }
+
+    /// <summary>
+    /// The in-person hatch invite went unanswered for too long.
+    /// </summary>
+    internal sealed class MSG_HATCHINVITETIMEOUT : IServerMessage {
+
+        public byte MessageOrder { get; } = 73;
+        public byte ServiceID { get; } = 103;
+
+        public ulong PeerCharId;
+
+    }
+
+    /// <summary>
+    /// What a pet morphing sigil in the Pet Pavilion hatchery asks of a session (see InteractPetMorphSigilComponent).
+    /// </summary>
+    internal enum HatchSigilRole : byte {
+        // The player pressed a solo (1P) sigil: hatch two of their own pets.
+        Solo,
+        // The player pressed a duo sigil with another player on it: ask that player to hatch in person.
+        Requester,
+        // Another player pressed the duo sigil this player stands on, naming this player.
+        Partner,
+        // The player pressed a duo sigil nobody else stands on.
+        Alone,
+        // The player pressed a duo sigil another player stands on who has not pressed X yet: wait for them.
+        WaitingForPartner,
+    }
+
+    /// <summary>
+    /// Sent by a pet morphing sigil (zone actor) to the session of a player on it.
+    /// </summary>
+    internal sealed class MSG_HATCHSIGIL : IServerMessage {
+
+        public byte MessageOrder { get; } = 74;
+        public byte ServiceID { get; } = 103;
+
+        public HatchSigilRole Role;
+        public ulong SigilGID;
+        public string SigilName;
+        public ulong PartnerCharId;
+        public ulong PartnerGameObjectId;
+        public string PartnerName;
+        // The pad, for the sigil countdown and the way back: "X,Y,Z,heading", its sigil type and radius.
+        public string SigilLoc;
+        public string SigilType;
+        public float Radius;
+        // The zone the pad is in.
+        public string ZoneName;
+        // Which of the pad's circles this player is put on: 0 for the first player on the pad, 1 for the second.
+        public int FaceSlot;
+        // From the in-person hatch window (no sigil): straight to the hatching room, with no countdown.
+        public bool FromHatchWindow;
+        // The pad's countdown: seconds left for this player (0 = the usual length). The pad runs one countdown; a
+        // player hopping back on joins it instead of starting it over (Niduus, 2026-10-21).
+        public float CountdownSeconds;
+        // Keep a countdown this player already has running (only the destination changes).
+        public bool KeepCountdown;
+
+    }
+
+    /// <summary>
+    /// Why the trip to the pet morph zone did not happen (see <see cref="MSG_HATCHTRIPFAILED"/>).
+    /// </summary>
+    internal enum HatchTripFailure : byte {
+        // The player stepped off the pad during the countdown.
+        Cancelled,
+        // The session was already counting down or travelling.
+        Busy,
+        // The zone could not be entered (not loaded, refused).
+        TransferFailed,
+    }
+
+    /// <summary>
+    /// Told by the ZoneService to the HatchService when a hatching sigil's countdown or transfer to the pet morph zone
+    /// does not go through.
+    /// </summary>
+    internal sealed class MSG_HATCHTRIPFAILED : IServerMessage {
+
+        public byte MessageOrder { get; } = 75;
+        public byte ServiceID { get; } = 103;
+
+        public HatchTripFailure Failure;
+        public string Detail;
+
+    }
+
+    /// <summary>
+    /// Told by the PetService to the HatchService after a hatch from the pet morph zone: whether the egg was made.
+    /// </summary>
+    internal sealed class MSG_HATCHBRED : IServerMessage {
+
+        public byte MessageOrder { get; } = 76;
+        public byte ServiceID { get; } = 103;
+
+        public bool Success;
+
+    }
+
+    /// <summary>
+    /// The HatchService's timers in the pet morph zone (see HatchService).
+    /// </summary>
+    internal enum HatchZoneTimerKind : byte {
+        // Send the game the morph window's data, once it has had a moment to load the zone.
+        Init,
+        // The partner has not arrived; hatch alone.
+        PartnerWait,
+        // Too long in the zone; back to the hatchery.
+        Timeout,
+        // The egg is made (or the hatch is over); back to the hatchery.
+        Return,
+    }
+
+    internal sealed class MSG_HATCHZONETIMER : IServerMessage {
+
+        public byte MessageOrder { get; } = 77;
+        public byte ServiceID { get; } = 103;
+
+        public HatchZoneTimerKind Kind;
+        public string Reason;
+
+    }
+
+    /// <summary>
+    /// A Pixie Post for the online wizard whose session gets this (PixiePostService).
+    /// </summary>
+    internal sealed class MSG_PIXIEPOSTDELIVER : IServerMessage {
+
+        public byte MessageOrder { get; } = 78;
+        public byte ServiceID { get; } = 103;
+
+        public ulong RecipientCharId;
+        public PixiePost Post;
+
+    }
+
+    /// <summary>
+    /// Moves the player inside the zone they are in, to a spot (a compact "x,y,z,yaw" string): a raid's teleport pads
+    /// (Game/Raids).
+    /// </summary>
+    public sealed class MSG_MOVEINZONE : IServerMessage {
+
+        public byte MessageOrder { get; } = 148;
+        public byte ServiceID { get; } = 103;
+
+        public string Location;
+
+    }
+
+    /// <summary>
+    /// Sends the player out of a raid, back to the guild grounds they came from (Game/Raids).
+    /// </summary>
+    public sealed class MSG_RAIDLEAVE : IServerMessage {
+
+        public byte MessageOrder { get; } = 149;
+        public byte ServiceID { get; } = 103;
+
+    }
+
+    /// <summary>
+    /// Gives the player the drops of the raid they won (Game/Raids/RaidRewards): every wizard in the raid gets them.
+    /// </summary>
+    public sealed class MSG_RAIDREWARD : IServerMessage {
+
+        public byte MessageOrder { get; } = 150;
+        public byte ServiceID { get; } = 103;
+
+        public string Zone;
 
     }
 

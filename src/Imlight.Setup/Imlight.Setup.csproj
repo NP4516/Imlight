@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ImlightSetup</AssemblyName>
+    <RootNamespace>Imlight.Setup</RootNamespace>
+    <!-- Overridden by the release workflow with the tag, e.g. -p:Version=1.2.0 -->
+    <Version>0.0.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <!-- The app window draws itself (Avalonia, with Skia); its native parts go inside the single exe. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <!-- dotnet publish -p:ImlightEdition=Manager builds ImlightManager.exe, which installs the Niduus/Imlight fork. -->
+  <PropertyGroup Condition="'$(ImlightEdition)' == 'Manager'">
+    <AssemblyName>ImlightManager</AssemblyName>
+    <DefineConstants>$(DefineConstants);MANAGER_EDITION</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.22" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pictures the window shows, built into the exe so they show offline (read with avares://<assembly>/Assets/...). -->
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- What a spell name covers in a cheat ("Scald" is every Scald), the same file the server uses. -->
+    <Compile Include="..\Imlight.CoreLib\Game\Combat\SpellNameFamily.cs" Link="Shared\SpellNameFamily.cs" />
+    <Compile Include="..\Imlight.CoreLib\Game\Combat\CheatLookalikes.cs" Link="Shared\CheatLookalikes.cs" />
+    <!-- Every line the server announces, for the Announcements tab: the same list the server uses. -->
+    <Compile Include="..\Imlight.CoreLib\Game\Tools\AnnouncementCatalog.cs" Link="Shared\AnnouncementCatalog.cs" />
+    <!-- And every other message the server sends a player, with its groups. -->
+    <Compile Include="..\Imlight.CoreLib\Game\Tools\ServerMessageCatalog.cs" Link="Shared\ServerMessageCatalog.cs" />
+    <Compile Include="..\Imlight.CoreLib\Game\Tools\ServerMessageCatalog.Generated.cs" Link="Shared\ServerMessageCatalog.Generated.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The archive reader, which needs no game data to build. -->
+    <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.Wad\Imcodec.Wad.csproj" />
+    <!-- The data file decoder for the Game Files tab. It is generated from a type dump, so copy
+         submodule\Imcodec\test\CodeGen\Inputs\*.json into Imcodec.ObjectProperty\GeneratorInput first
+         (the release workflow does). -->
+    <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.ObjectProperty\Imcodec.ObjectProperty.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -23,6 +23,9 @@ using Imcodec.Math;
 using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Game.PvP;
+using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.PvP.Arena;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -36,6 +39,20 @@ namespace Imlight.CoreLib.Shared.Packets;
 /// <summary>
 /// What a session claims on the instance it is in; the zone answers whether it is the first to do it.
 /// </summary>
+/// <summary>
+/// What a <see cref="ZONE_102_PROTOCOL.MSG_RAIDCONTROL"/> asks of a raid zone.
+/// </summary>
+public enum RaidControlKind : byte {
+    Timer,
+    TimeUp,
+    Win,
+    End,
+    SendHome,
+    ToPlayers,
+    Status,
+    SigilSpell,
+}
+
 public enum InstanceQuestClaimKind : byte {
     QuestStart,
     GoalStart,
@@ -78,6 +95,9 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// The path to the zone file as it would appear in the <see cref="AccessPassManager"/>.
         /// </summary>
         public string ZonePath;
+
+        /// <summary>The ZoneObjects variant the zone loads with (spiraldb-extra/ZoneObjects), or empty.</summary>
+        public string Variant;
 
     }
 
@@ -130,6 +150,9 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// The error message, if an error occured during loading.
         /// </summary>
         public string ErrorMessage;
+
+        /// <summary>The ZoneObjects variant the zone was loaded for (spiraldb-extra/ZoneObjects), or empty.</summary>
+        public string Variant;
 
     }
 
@@ -416,6 +439,11 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public ZoneBroadcastTarget Targets = ZoneBroadcastTarget.All;
 
+        /// <summary>
+        /// Players who must not get the client-visible message (they got their own copy directly).
+        /// </summary>
+        public IActorRef[] Except;
+
     }
 
     /// <summary>
@@ -431,6 +459,18 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public bool Force;
+
+    }
+
+    /// <summary>
+    /// `.petform` turned the wizard's pet look on or off: their summoned pet hides while they look like it.
+    /// </summary>
+    public sealed class MSG_PETFORMCHANGED : IServerMessage {
+
+        public byte MessageOrder { get; } = 103;
+        public byte ServiceID { get; } = 102;
+
+        public bool On;
 
     }
 
@@ -519,6 +559,54 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     }
 
     /// <summary>
+    /// Sent by the <see cref="PvPDirector"/> to an arena zone once every player of a PvP match arrived: the
+    /// zone's PvP sigil seats the roster on its circles.
+    /// </summary>
+    public sealed class MSG_STARTPVPMATCH : IServerMessage {
+
+        public byte MessageOrder { get; } = 83;
+        public byte ServiceID { get; } = 102;
+
+        public ulong MatchId;
+        public uint TournamentNameId;
+        public uint LeagueId;
+        internal IReadOnlyList<PvPRosterEntry> Roster;
+
+        /// <summary>
+        /// The rules of a duel circle's duel; null for a match from the queue, which takes its tournament's.
+        /// </summary>
+        internal PvPDuelRules Rules;
+
+    }
+
+    /// <summary>
+    /// Sent by the <see cref="PvPDirector"/> to an arena zone when a player leaves a PvP match that is in progress:
+    /// the duel of the match forfeits that player only.
+    /// </summary>
+    public sealed class MSG_FORFEITPVPPARTICIPANT : IServerMessage {
+
+        public byte MessageOrder { get; } = 85;
+        public byte ServiceID { get; } = 102;
+
+        public ulong MatchId;
+        public ulong CharId;
+
+    }
+
+    /// <summary>
+    /// Sent by an <see cref="World.InstanceContainer"/> of a PvP match to its <see cref="World.GameWorld"/> when its
+    /// last zone is dropped: the world removes the container.
+    /// </summary>
+    public sealed class MSG_INSTANCECONTAINEREMPTY : IServerMessage {
+
+        public byte MessageOrder { get; } = 84;
+        public byte ServiceID { get; } = 102;
+
+        public ulong OwnerId;
+
+    }
+
+    /// <summary>
     /// Called by a <see cref="PathMovementComponent"/> to itself to indicate the interval to check for interactions.
     /// </summary>
     public sealed class MSG_CREATUREFISHINTERACTIONINTERVAL : IServerMessage {
@@ -556,6 +644,12 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// The adjectives of the monster a Monster_Killed event is about; requirements on the event read them.
         /// </summary>
         public IReadOnlyList<string> Adjectives;
+
+        /// <summary>
+        /// Checks again only the EnterZone triggers this player was refused on entry: the quest updates its
+        /// enter-the-zone goals after the zone has already checked them (Caretaker's Tower, Old Judd).
+        /// </summary>
+        public bool RetryRefused;
 
     }
 
@@ -687,11 +781,39 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public ulong OwnerCharId;
 
         /// <summary>
+        /// Loads the zone again even when the player is already in it, instead of moving them inside it. A duel
+        /// circle uses it to reset a defeated wizard's game.
+        /// </summary>
+        public bool ForceReload;
+
+        /// <summary>
         /// A fresh dungeon-sigil entry starts a NEW run: GameWorld drops the owner's stale copy of the
         /// destination before routing the transfer, so a second entry rebuilds the instance instead of
         /// rejoining the old one. Never set by re-attach or recall transfers.
         /// </summary>
         public bool ResetInstance;
+
+        /// <summary>
+        /// The ZoneObjects variant a new copy of the zone loads with (spiraldb-extra/ZoneObjects): its extra objects,
+        /// encounters and exit. Empty for the zone as it is. Only a zone this transfer loads takes it.
+        /// </summary>
+        public string Variant;
+
+        /// <summary>
+        /// A dungeon's way out that names no destination: the player goes back to where they were before the dungeon
+        /// (the safe spot outside any instance). DestinationZone is filled in by the player's session.
+        /// </summary>
+        public bool LeaveInstance;
+
+        /// <summary>
+        /// How the client is asked to load the house zone the player is entering. Null for every ordinary zone.
+        /// </summary>
+        public HouseEntry HouseEntry;
+
+        /// <summary>
+        /// The lot of the house the player is entering. Zero for every ordinary zone.
+        /// </summary>
+        public ulong HouseLotGid => HouseEntry?.LotGid ?? 0;
 
     }
 
@@ -712,6 +834,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public uint ErrorCode;
         public string ErrorMessage;
         public List<GID> CriticalObjects;
+        public bool IsInstance;
 
     }
 
@@ -760,6 +883,10 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
         public byte MessageOrder { get; } = 35;
         public byte ServiceID { get; } = 102;
+
+        /// <summary>Where to go instead of the world's hub (a private room's exit), or null for the hub.</summary>
+        public string DestinationZone;
+        public string DestinationLocation;
 
     }
 
@@ -903,6 +1030,10 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte MessageOrder { get; } = 48;
         public byte ServiceID { get; } = 102;
 
+        // The client came back on a retry or reattach (a dropped connection, a server restart) and still holds
+        // what it was sent before, such as its quest list.
+        public bool ClientKeptState;
+
     }
     
     public sealed class MSG_REGISTERCRITICALOBJECT : IServerMessage {
@@ -972,6 +1103,145 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public CoreTemplate Template;
         /// <summary>Optional: the player actor requesting the spawn (for routing).</summary>
         public IActorRef Requester;
+
+    }
+
+    /// <summary>
+    /// Timer-fired message that removes a wisp dropped after a battle when nobody picked it up.
+    /// </summary>
+    public sealed class MSG_BATTLEDROPEXPIRED : IServerMessage {
+
+        public byte MessageOrder { get; } = 90;
+        public byte ServiceID { get; } = 102;
+
+    }
+
+    /// <summary>
+    /// Timer-fired message that puts a hatchery sigil back to its lit look after a countdown, which the game leaves
+    /// blank when its count runs out.
+    /// </summary>
+    public sealed class MSG_SIGILRELIGHT : IServerMessage {
+
+        public byte MessageOrder { get; } = 92;
+        public byte ServiceID { get; } = 102;
+
+    }
+
+    /// <summary>
+    /// Sent by a duel to its <see cref="Zone"/> when a battle starts against the boss of a ZoneObjects encounter: the
+    /// zone's own creatures of these templates that are not fighting answer with
+    /// <see cref="MSG_QUERYENCOUNTERMINIONSRSP"/>, so the ones already walking the room join the boss.
+    /// </summary>
+    public sealed class MSG_QUERYENCOUNTERMINIONS : IServerMessage {
+
+        public byte MessageOrder { get; } = 93;
+        public byte ServiceID { get; } = 102;
+
+        public HashSet<ulong> TemplateIds;
+        public Vector3 Center;
+        /// <summary>How near the center a creature must be; 0 for anywhere in the zone.</summary>
+        public float Radius;
+
+    }
+
+    /// <summary>
+    /// Sent by a creature in response to <see cref="MSG_QUERYENCOUNTERMINIONS"/>.
+    /// </summary>
+    public sealed class MSG_QUERYENCOUNTERMINIONSRSP : IServerMessage {
+
+        public byte MessageOrder { get; } = 94;
+        public byte ServiceID { get; } = 102;
+
+        public IActorRef CreatureActor;
+        public CoreObject CreatureObject;
+
+    }
+
+    /// <summary>
+    /// Timer-fired message: the victory scene of a won battle is over, so the duel ends for the game (phase 7, ENDDUEL).
+    /// </summary>
+    public sealed class MSG_VICTORYSCENEOVER : IServerMessage {
+
+        public byte MessageOrder { get; } = 101;
+        public byte ServiceID { get; } = 102;
+
+        /// <summary>Which battle of the sigil it is for, so a late timer of an ended battle does nothing.</summary>
+        public int Battle;
+    }
+
+    /// <summary>
+    /// Timer-fired message: the creatures of an encounter that answered have joined, so the duel spawns the rest.
+    /// </summary>
+    public sealed class MSG_ENCOUNTERMINIONSDUE : IServerMessage {
+
+        public byte MessageOrder { get; } = 95;
+        public byte ServiceID { get; } = 102;
+
+        /// <summary>Which battle of the sigil it is for, so a late timer of an ended battle does nothing.</summary>
+        public int Battle;
+
+    }
+
+    /// <summary>
+    /// Sent by ZoneObjects to a loaded <see cref="Zone"/> when a spiraldb-extra/ZoneObjects file or the Customs tab's
+    /// Placements.json changed: the added objects of this copy that moved or turned (by global id, with their new
+    /// placement), the ones added and the ones removed. The zone passes it to its supervisors and their entities.
+    /// </summary>
+    public sealed class MSG_ZONEOBJECTSCHANGED : IServerMessage {
+
+        public byte MessageOrder { get; } = 96;
+        public byte ServiceID { get; } = 102;
+
+        public Dictionary<ulong, CoreObjectInfo> Moved = [];
+        public List<CoreObjectInfo> Added = [];
+        public HashSet<ulong> Removed = [];
+
+        // The files' standing creatures (Niduus, 2026-10-23: a battle added in the Customs tab counts at once): each
+        // added one as the one-node path, node and spawner ZoneObjects makes for it, and the ids of the paths of the
+        // removed ones. A creature that moved or changed is removed and added again.
+        public List<(PathObjectTemplate Path, List<NodeObject> Nodes, SpawnObject Spawner)> AddedCreatures = [];
+        public HashSet<ulong> RemovedCreatures = [];
+
+    }
+
+    /// <summary>
+    /// Sent by a <see cref="Imlight.CoreLib.Game.Zone.Components.CombatDuelComponent"/> to a creature in its battle when a
+    /// wizard comes into the battle: the creature's object is sent to that wizard's game if it does not have it yet (a
+    /// wizard who came into the zone while the battle ran saw an empty enemy side), and it is not taken away by distance
+    /// while the battle lasts.
+    /// </summary>
+    public sealed class MSG_SHOWDUELPARTICIPANT : IServerMessage {
+
+        public byte MessageOrder { get; } = 99;
+        public byte ServiceID { get; } = 102;
+
+        public IActorRef PlayerActor;
+
+    }
+
+    /// <summary>
+    /// Timer-fired message: an object that moved is sent to the players again, at its new place.
+    /// </summary>
+    public sealed class MSG_ZONEOBJECTSHOWAGAIN : IServerMessage {
+
+        public byte MessageOrder { get; } = 97;
+        public byte ServiceID { get; } = 102;
+
+    }
+
+    /// <summary>
+    /// Timer-fired message: a dungeon sigil pad sends its look again, to one player (Player set) or to every player in
+    /// the zone (Player null, after the Customs tab changed the pad while the zone runs). LastOnly sends only the look's
+    /// final state, a second time, for a game that was still busy with the first.
+    /// </summary>
+    public sealed class MSG_DUNGEONSIGILRELIGHT : IServerMessage {
+
+        public byte MessageOrder { get; } = 100;
+        public byte ServiceID { get; } = 102;
+
+        public IActorRef Player;
+        public bool LastOnly;
+        public string Why = "";
 
     }
 
@@ -1075,11 +1345,71 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// <summary>The pad's detection radius (m_radius); the player must stay within it to enter.</summary>
         public float Radius;
 
+        /// <summary>The pad's size (m_fScale): its face slots stand that much nearer its centre. 0 is 1.</summary>
+        public float SigilScale;
+
         /// <summary>The instance zone the sigil leads to.</summary>
         public string DestinationZone;
 
         /// <summary>The arrival position inside the instance, "X,Y,Z,heading".</summary>
         public string DestinationLoc;
+
+        /// <summary>
+        /// The owner of the instance to enter; 0 is the player's own. Two players who name the same owner share one
+        /// instance (the hatching sigils' pair).
+        /// </summary>
+        public ulong InstanceOwnerCharId;
+
+        /// <summary>True when the instance must not be rebuilt for this entry (the second player of a pair).</summary>
+        public bool KeepInstance;
+
+        /// <summary>Which of the sigil's player circles the player is put on, from 0.</summary>
+        public int FaceSlot;
+
+        /// <summary>
+        /// True to leave the player where they stand instead of sliding them onto the sigil's circle. The small hatchery
+        /// pads are only 100 across, so the slide took players off them and the game cancelled the countdown.
+        /// </summary>
+        public bool NoSnap;
+
+        /// <summary>
+        /// With NoSnap: put the player in the middle of the pad (keeping their facing) instead of on a sigil circle, so a
+        /// small hatchery pad holds them like the duo pad does (Niduus, 2026-10-20: "It doesn't put me on it").
+        /// </summary>
+        public bool SnapToCentre;
+
+        /// <summary>Seconds of countdown before the trip; 0 for the usual sigil countdown.</summary>
+        public float CountdownSeconds;
+
+        /// <summary>No sigil: no countdown on screen and no snap, the trip starts after CountdownSeconds.</summary>
+        public bool NoSigil;
+        // The zone already shows this pad's countdown (another player started it); sending it again restarts its numbers.
+        public bool NoTimerBroadcast;
+
+        /// <summary>
+        /// Replaces a countdown already running for this player without ending it on screen; the new one starts now.
+        /// Used once, when a second player joins a duo sigil (Niduus, 2026-10-21: the countdown should always show and
+        /// only reset when the other player joins).
+        /// </summary>
+        public bool Restart;
+
+        /// <summary>
+        /// Replaces the destination of a countdown already running and leaves the countdown itself alone (Niduus,
+        /// 2026-10-21: the countdown goes on until every player has left the sigil).
+        /// </summary>
+        public bool ContinueCountdown;
+
+        /// <summary>
+        /// Told to the session's services when the countdown is cancelled or the transfer does not go through; null
+        /// for none.
+        /// </summary>
+        public IServerMessage OnFailed;
+
+        /// <summary>A name for the log, "Dungeon sigil" when empty.</summary>
+        public string LogName;
+
+        /// <summary>The ZoneObjects variant the instance loads with (an added sigil's Variant), or empty.</summary>
+        public string Variant;
 
     }
 
@@ -1090,6 +1420,17 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     public sealed class MSG_SIGILENTER : IServerMessage {
 
         public byte MessageOrder { get; } = 61;
+        public byte ServiceID { get; } = 102;
+
+    }
+
+    /// <summary>
+    /// Stops the session's sigil countdown without telling anyone it failed: a player counting down alone on a duo
+    /// hatchery pad is being paired with the player who just joined them.
+    /// </summary>
+    public sealed class MSG_CANCELSIGILENTRY : IServerMessage {
+
+        public byte MessageOrder { get; } = 91;
         public byte ServiceID { get; } = 102;
 
     }
@@ -1226,6 +1567,127 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public IActorRef Origin;
         public string QuestName;
         public string GoalName;
+
+    }
+
+    /// <summary>
+    /// Sent to an NPC when a player closes its dialog or shop: the NPC sends its options again, so the
+    /// player can talk to it again without walking away and back.
+    /// </summary>
+    public sealed class MSG_REFRESHSERVICEOPTIONS : IServerMessage {
+
+        public byte MessageOrder { get; } = 89;
+        public byte ServiceID { get; } = 102;
+
+        public IActorRef PlayerActor;
+
+    }
+
+    /// <summary>
+    /// Sent to a silver chest by the minigame process when its player is in the chest game.
+    /// </summary>
+    public sealed class MSG_CHEST_GAME_STARTED : IServerMessage {
+
+        public byte MessageOrder { get; } = 85;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharId;
+
+    }
+
+    /// <summary>
+    /// Sent to a silver chest by the minigame process when the chest game was played to the end. The chest is
+    /// used up, won or lost.
+    /// </summary>
+    public sealed class MSG_CHEST_GAME_RESULT : IServerMessage {
+
+        public byte MessageOrder { get; } = 86;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharId;
+        public bool Won;
+
+    }
+
+    /// <summary>
+    /// Sent to a silver chest when its chest game did not start or ended without a result, so the player's
+    /// hold on the chest ends.
+    /// </summary>
+    public sealed class MSG_CHEST_GAME_ABORTED : IServerMessage {
+
+        public byte MessageOrder { get; } = 87;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharId;
+
+    }
+
+    /// <summary>
+    /// Sent to a player's session by a house door the player walked up to: the session works out the house on the
+    /// other side and starts the zone transfer.
+    /// </summary>
+    public sealed class MSG_HOUSEDOOR : IServerMessage {
+
+        public byte MessageOrder { get; } = 80;
+        public byte ServiceID { get; } = 102;
+
+        public ulong DoorGid;
+        public string LocationName;
+
+    }
+
+    /// <summary>
+    /// Sent by a duel to its <see cref="Zone"/> when a battle against a ZoneObjects encounter's boss ends. A battle the
+    /// creatures won (everyone fled or was defeated) puts the room's minions that fought in it back: ResetIds are their
+    /// global ids, and their spawn points spawn them again. A ZoneObjects distinct spawner that waited during the battle
+    /// fills up again.
+    /// </summary>
+    public sealed class MSG_ENCOUNTERBATTLEENDED : IServerMessage {
+
+        public byte MessageOrder { get; } = 98;
+        public byte ServiceID { get; } = 102;
+
+        public HashSet<ulong> ResetIds = [];
+
+    }
+
+    /// <summary>
+    /// A duel circle's own timer: each second of the countdown before its duel, and (Go) the duel's start once the
+    /// teleport effect has played.
+    /// </summary>
+    public sealed class MSG_DUELCIRCLETICK : IServerMessage {
+
+        public byte MessageOrder { get; } = 102;
+        public byte ServiceID { get; } = 102;
+
+        // Shows the duel circle again after a duel here.
+        public bool Show;
+
+    }
+
+    /// <summary>
+    /// A raid's script (Game/Raids) tells its <see cref="Zone"/>: start or stop the raid timer, the raid is won, the raid
+    /// is over (everyone goes back to the guild grounds a little later), or a message for every player in it. The zone's
+    /// own timers send it too (TimeUp, SendHome), and `.raid status` asks with Status.
+    /// </summary>
+    public sealed class MSG_RAIDCONTROL : IServerMessage {
+
+        public byte MessageOrder { get; } = 104;
+        public byte ServiceID { get; } = 102;
+
+        public RaidControlKind Kind;
+
+        // Timer: the seconds the raid has left (0 stops the timer).
+        public int Seconds;
+
+        // ToPlayers: told to every player in the zone.
+        public object Message;
+
+        // SigilSpell: the spells cast into the raid's battles.
+        public string[] Spells = [];
+
+        // Status: the answer.
+        public string Text;
 
     }
 

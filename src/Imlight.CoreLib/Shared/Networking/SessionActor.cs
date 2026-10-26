@@ -37,7 +37,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/10/2026
+ * Last Updated: 10/20/2026
  */
 
 using System;
@@ -79,8 +79,17 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     public IMessage CachedDequeueMessage                     { get; set; }
     public long Ping                                         { get; private set; }
 
+    /// <summary>
+    /// When set, every message the game sends this session is logged with all its fields, each line starting with
+    /// this text. The HatchService sets it while the player is in the pet morph zone, where what the game sends is
+    /// not known yet.
+    /// </summary>
+    public volatile string ClientMessageLogPrefix;
+
     public string Ip;
     public string RemoteIp;
+    /// <summary>This computer's own address on the player's connection (the address they reached us at).</summary>
+    public System.Net.IPAddress LocalIp;
 
     private readonly IActorRef _actorFactoryRef;
     private readonly Dictionary<IActorRef, MessageService> _services;
@@ -99,6 +108,9 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
         this._socket = socket;
         this.Ip = socket.RemoteEndPoint.ToString();
         this.RemoteIp = socket.RemoteEndPoint.ToString().Split(':')[0];
+        this.LocalIp = (socket.LocalEndPoint as System.Net.IPEndPoint)?.Address is { } localIp
+            ? (localIp.IsIPv4MappedToIPv6 ? localIp.MapToIPv4() : localIp)
+            : null;
         this.SessionID = sessionId;
         this._services = new Dictionary<IActorRef, MessageService>();
         this.ServerRef = server;
@@ -122,7 +134,14 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
 
     // Akka.NET ctor
     public static Props Props(Socket socket, ushort sessionId, IActorRef server, IActorRef actorFactoryRef = null)
-        => Akka.Actor.Props.Create(() => new SessionActor(socket, sessionId, server, actorFactoryRef));
+        => Akka.Actor.Props.Create(() => new SessionActor(socket, sessionId, server, actorFactoryRef))
+            .WithDispatcher(SESSION_DISPATCHER);
+
+    /// <summary>
+    /// The thread pool of the players' connections and their services (Director's AkkaConfiguration defines it).
+    /// Zone loads after a start kept the default threads busy for minutes, so logins waited until the game gave up.
+    /// </summary>
+    public const string SESSION_DISPATCHER = "session-dispatcher";
 
     /// <summary>
     /// Places the session in the queue.
@@ -203,7 +222,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     /// <param name="msg"></param>
     /// <typeparam name="T"></typeparam>
     /// <returns></returns>
-    public T HandleInternalAsk<T>(IServerMessage msg)
+    public T HandleInternalAsk<T>(IServerMessage msg, TimeSpan? timeout = null)
         where T : IServerMessage {
         if (_dispatchTable.TryGetValue(msg.GetType(), out var handlers)) {
             foreach (var handler in handlers) {
@@ -212,7 +231,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
                 }
 
                 try {
-                    return handler.Ask<T>(msg, timeout: s_askTimeout).Result;
+                    return handler.Ask<T>(msg, timeout: timeout ?? s_askTimeout).Result;
                 }
                 catch (Exception ex) {
                     Logger.Error("SessionActor service attempted to ask another service with {0}, but the timeout " +
@@ -403,11 +422,11 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
 
     private void CreateSocketActors(Socket socket) {
         // Create the socket receiver actor.
-        var props = Akka.Actor.Props.Create(() => new SocketListener(Self, socket, SessionID));
+        var props = Akka.Actor.Props.Create(() => new SocketListener(Self, socket, SessionID)).WithDispatcher(SESSION_DISPATCHER);
         _socketListenerRef = Context.ActorOf(props, $"SocketListener-{SessionID}");
 
         // Create the socket sender actor.
-        var senderProps = Akka.Actor.Props.Create(() => new SocketSender(Self, socket, SessionID));
+        var senderProps = Akka.Actor.Props.Create(() => new SocketSender(Self, socket, SessionID)).WithDispatcher(SESSION_DISPATCHER);
         _socketSenderRef = Context.ActorOf(senderProps, $"SocketSender-{SessionID}");
     }
 
@@ -438,7 +457,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
         // blocking identity Asks in this loop. See IHandshakeService.
         foreach (var service in services.OrderByDescending(t => typeof(IHandshakeService).IsAssignableFrom(t))) {
             var serviceName = $"{service}";
-            var props = Akka.Actor.Props.Create(service, this);
+            var props = Akka.Actor.Props.Create(service, this).WithDispatcher(SESSION_DISPATCHER);
             var childRef = Context.ActorOf(props, serviceName);
 
             Logger.Verbose("New actor created for session {Id}: {Name}",
@@ -497,6 +516,11 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
             return;
         }
 
+        var logPrefix = ClientMessageLogPrefix;
+        if (logPrefix is not null) {
+            LogClientMessage(logPrefix, packet);
+        }
+
         if (_dispatchTable.TryGetValue(packet.GetType(), out var handlers)) {
             foreach (var handler in handlers) {
                 handler.Forward(packet);
@@ -504,7 +528,51 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
             return;
         }
 
+        // Logged once per kind per session, so the log shows what the game asks for that the server can't do yet.
+        if (_unhandledClientMessages.Add(packet.GetType())) {
+            Logger.Information("SessionActor {0}: the game sent {1}, which the server does not handle yet.",
+                Logger.Args(SessionID, packet.GetType().Name));
+        }
+
         Unhandled(packet);
+    }
+
+    private readonly HashSet<Type> _unhandledClientMessages = [];
+
+    private void LogClientMessage(string prefix, IMessage packet) {
+        try {
+            var fields = packet.GetType()
+                .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                .Where(p => p.CanRead && p.CanWrite && p.GetIndexParameters().Length == 0)
+                .Select(p => $"{p.Name}={DescribeField(p.GetValue(packet))}");
+            Logger.Information("{0}: the game sent {1} (service {2}, order {3}) {4}.",
+                Logger.Args(prefix, packet.GetType().Name, packet.ServiceId, packet.MessageOrder, string.Join(" ", fields)));
+        }
+        catch (Exception ex) {
+            Logger.Information("{0}: the game sent {1}; its fields could not be read ({2}).",
+                Logger.Args(prefix, packet.GetType().Name, ex.Message));
+        }
+    }
+
+    // Text as text, anything else (a serialized object) as hex, so the log shows the bytes.
+    private static string DescribeField(object value) {
+        if (value is Imcodec.IO.ByteString text) {
+            byte[] bytes = text;
+            if (bytes is null || bytes.Length == 0) {
+                return "\"\"";
+            }
+
+            if (bytes.All(b => b >= 0x20 && b < 0x7F)) {
+                return $"\"{System.Text.Encoding.ASCII.GetString(bytes)}\"";
+            }
+
+            const int MAX_BYTES = 1024;
+            var hex = Convert.ToHexString(bytes, 0, Math.Min(bytes.Length, MAX_BYTES));
+
+            return bytes.Length > MAX_BYTES ? $"{hex}...({bytes.Length} bytes)" : $"{hex} ({bytes.Length} bytes)";
+        }
+
+        return value?.ToString() ?? "null";
     }
 
     private void SendPreDisposeToServices() {

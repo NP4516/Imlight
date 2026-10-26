@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
@@ -53,6 +54,15 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
                 continue;
             }
 
+            // The same NPC is often placed twice in one spot, once per quest stage (each copy has its own spawn
+            // requirements). Nothing here shows a copy to only some players, so keep just the first one.
+            if (IsDuplicatePlacement(objectInfo)) {
+                Logger.Debug("Skipped a second copy of {0} (template {1}) placed in the same spot.",
+                    Logger.Args(objectInfo.m_zoneTag, objectInfo.m_templateID.Full));
+
+                continue;
+            }
+
             var template = (GameObjectTemplate) CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID);
             if (template is null) {
                 Logger.Warning("Could not create {0} because template ID {1} was not found.",
@@ -80,6 +90,21 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
         }
 
         ReportLoadedWhenEntitiesLoad();
+    }
+
+    private const float DUPLICATE_DISTANCE = 15.0f;
+
+    private bool IsDuplicatePlacement(CoreObjectInfo objectInfo)
+        => objectInfo.m_spawnRequirements is not null
+           && _placed.Any(p => p.Info.m_templateID.Full == objectInfo.m_templateID.Full
+                               && Distance(p.Info.m_location, objectInfo.m_location) < DUPLICATE_DISTANCE);
+
+    private static float Distance(Vector3 a, Vector3 b) {
+        var x = a.X - b.X;
+        var y = a.Y - b.Y;
+        var z = a.Z - b.Z;
+
+        return MathF.Sqrt((x * x) + (y * y) + (z * z));
     }
 
     private static bool IsObjectEligibleForSpawn(CoreObjectInfo objectInfo) {
@@ -133,6 +158,41 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
         Sender.Tell(rsp);
     }
 
+    // An object a spiraldb-extra/ZoneObjects file (or the Customs tab's placements) added or removed while the zone runs.
+    private int _addedWhileRunning;
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED))]
+    public override void ReceiveZoneObjectsChanged(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED message) {
+        base.ReceiveZoneObjectsChanged(message);
+
+        foreach (var placed in _placed.Where(p => message.Removed.Contains(p.Object.m_globalID.Full)).ToList()) {
+            if (placed.Actor is not null) {
+                RemoveEntity(placed.Actor, placed.Object);
+            }
+
+            _placed.Remove(placed);
+        }
+
+        foreach (var objectInfo in message.Added) {
+            // Sigil pads and battle circles are ZoneSigilSupervisor's (round 8 logged every gauntlet pad here as not made,
+            // though ZoneSigilSupervisor made it).
+            if (!IsObjectEligibleForSpawn(objectInfo)) {
+                continue;
+            }
+
+            if (CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID) is not GameObjectTemplate template
+                || CoreObjectFactory.FinalizeCoreObject(objectInfo, template) is not { } coreObject) {
+                Logger.Warning("Zone {0}: the added object {1} (template {2}) could not be made.",
+                    Logger.Args(Zone.ZoneName, objectInfo?.m_zoneTag, objectInfo?.m_templateID.Full));
+
+                continue;
+            }
+
+            var actor = CreateEntityActor(coreObject, template, objectInfo, $"_{++_addedWhileRunning}");
+            _placed.Add(new PlacedObject(objectInfo, template, coreObject, actor));
+        }
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REMOVETRIGGEROBJECT))]
     private void ReceiveRemoveTriggerObject(ZONE_102_PROTOCOL.MSG_REMOVETRIGGEROBJECT message) {
         foreach (var placed in _placed.Where(p => p.Actor is not null && IsNamed(p, message.ObjectName))) {
@@ -175,6 +235,25 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
                     Targets = ZoneBroadcastTarget.Objects,
                 });
             }
+        }
+    }
+
+    [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_SPAWNHOUSETRAINER))]
+    private void ReceiveSpawnHouseTrainer(SERVICE_101_PROTOCOL.MSG_SPAWNHOUSETRAINER message) {
+        // Every visitor entering asks for the house's trainers; one already standing is kept.
+        if (_placed.Any(p => p.Actor is not null && IsNamed(p, message.Tag))) {
+            return;
+        }
+
+        // The same message brings the sellers of seller furniture (HouseVendors).
+        // The same message brings the banks of bank chests (HouseBanks).
+        var created = Imlight.CoreLib.Game.Bank.HouseBanks.IsBankTag(message.Tag)
+            ? Imlight.CoreLib.Game.Bank.HouseBanks.TryCreate(message, out var info, out var trainer, out var template)
+            : Imlight.CoreLib.Game.World.HouseVendors.IsVendorTag(message.Tag)
+            ? Imlight.CoreLib.Game.World.HouseVendors.TryCreate(message, out info, out trainer, out template)
+            : Imlight.CoreLib.Game.World.HouseTrainers.TryCreate(message, out info, out trainer, out template);
+        if (created) {
+            _placed.Add(new PlacedObject(info, template, trainer, CreateEntityActor(trainer, template, info)));
         }
     }
 

@@ -38,6 +38,7 @@
  */
 
 using System.Collections.Generic;
+using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Shared.Cryptography;
 
@@ -86,7 +87,8 @@ internal static class BuddyStatsCrc {
         return publicItems is null || publicItems.Count == 0;
     }
 
-    internal static uint ForWishlist(byte[] wishlistData)
-        => Compute(wishlistData);
+    // A wizard with no wishlist has a ByteString with no bytes behind it (null): checksum it as empty data.
+    internal static uint ForWishlist(ByteString wishlistData)
+        => Compute(wishlistData.IsEmpty ? [] : (byte[]) wishlistData);
 
 }

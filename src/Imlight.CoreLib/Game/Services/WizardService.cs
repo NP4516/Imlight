@@ -57,7 +57,14 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class WizardService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private const float ORIENTATION_TOLERANCE = 1.035f;
+    private const float DIRECTION_STEPS = 250f;
+    private static readonly TimeSpan s_locationSaveEvery = TimeSpan.FromSeconds(5);
+    private DateTime _lastLocationSave;
+
+    // [Trainers] TrainingPointPerLevel: every level gained also gives TrainingPointsPerLevel training points.
+    private static int s_trainingPointsPerLevel => ConfigurationManager.GetValue("Trainers.TrainingPointPerLevel", false)
+            ? Math.Clamp(ConfigurationManager.GetValue("Trainers.TrainingPointsPerLevel", 1), 0, 100)
+            : 0;
 
     private Wizard _activeWizard;
     private CoreObject _activeWizardGameObject;
@@ -88,6 +95,8 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
     private void ReceiveSetActiveWizard(CHARACTER_103_PROTOCOL.MSG_SETACTIVEWIZARD message) {
         _activeWizard = message.Wizard;
         _activeWizard.UpdateLastLoginTime((uint) DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        // Player cheats (PlayerCheats.cs) are only for the wizard played on the server's own PC.
+        Imlight.CoreLib.Game.Combat.PlayerCheats.NoteWizard(_activeWizard.CharId, CommandService.IsThisPcCached(SessionActor.RemoteIp));
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD))]
@@ -100,10 +109,13 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_LEVELUP))]
     private void ReceiveSetLevel(CHARACTER_103_PROTOCOL.MSG_LEVELUP message) {
         // This is the internal level up message. It most likely happened due to a developer command.
+        var beforeLevel = _activeWizard.MagicSchoolBehavior.Level;
         var levelUpSuccess = _activeWizard.SetLevel(message.NewLevel);
         if (!levelUpSuccess) {
             return;
         }
+
+        GiveLevelTrainingPoints(_activeWizard.MagicSchoolBehavior.Level - beforeLevel);
 
         var levelUpMessage = new WIZARD_12_PROTOCOL.MSG_LEVELUP {
             GlobalID = _activeWizard.GameObjectID,
@@ -150,6 +162,21 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         AnnounceLevelChange();
     }
 
+    /// <summary>
+    /// Gives the training points [Trainers] TrainingPointPerLevel grants for the levels just gained.
+    /// </summary>
+    private void GiveLevelTrainingPoints(int levelsGained) {
+        if (s_trainingPointsPerLevel <= 0 || levelsGained <= 0) {
+            return;
+        }
+
+        var newTrainingPoints = _activeWizard.MagicSchoolBehavior.TrainingPoints + (levelsGained * s_trainingPointsPerLevel);
+        _activeWizard.UpdateTrainingPoints(newTrainingPoints);
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATETRAINING() {
+            TrainingPoints = newTrainingPoints
+        });
+    }
+
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_GAINXP))]
     private void ReceiveGainXP(CHARACTER_103_PROTOCOL.MSG_GAINXP message) {
         var beforeLevel = _activeWizard.MagicSchoolBehavior.Level;
@@ -160,6 +187,8 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         var afterLevel = _activeWizard.MagicSchoolBehavior.Level;
 
         if (beforeLevel != afterLevel) {
+            GiveLevelTrainingPoints(afterLevel - beforeLevel);
+
             // The player leveled up. AddExperiencePoints already called SetLevel internally,
             // so we just need to broadcast the level-up and send stat updates to the client.
             var levelUpMessage = new WIZARD_12_PROTOCOL.MSG_LEVELUP {
@@ -226,6 +255,12 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVE))]
     private void ReceiveClientMove(GAME_5_PROTOCOL.MSG_CLIENTMOVE message) {
+        // A game coming back after a disconnect (Reattach=1) sends moves before its wizard is loaded here; those threw
+        // a NullReferenceException ("service null L:lambda_method"). The first move after the load is saved.
+        if (_activeWizard is null) {
+            return;
+        }
+
         // Save the player's location and direction on interval.
         // Restore actual location information, as it is compressed by a factor of 4 and unsigned.
         // Yaw is represented in radians in the client, but transmitted to the server as degrees.
@@ -235,11 +270,22 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
             unchecked((short) message.LocationZ * 4));
         _activeWizard.Location = position;
 
-        // Direction is a byte and it's packed. Unpack it and convert it to radians.
-        var initDir = message.Direction;
-        var degrees = initDir * (360f / byte.MaxValue) * ORIENTATION_TOLERANCE;
-        var radians = degrees * (System.MathF.PI / 180f);
+        // Direction is a byte: 250 steps make a full turn, as the server packs it for MSG_SERVERTELEPORT.
+        var radians = message.Direction / DIRECTION_STEPS * (2 * System.MathF.PI);
         _activeWizard.Orientation = new Vector3(0, 0, radians);
+        _activeWizard.NoteWalkedTo(position, radians);
+
+        // Saved every few seconds as well as at logout, so a crash or a stopped server still puts the wizard back
+        // where they stood and facing the same way (Niduus, 2026-10-23).
+        var now = DateTime.UtcNow;
+        if (now - _lastLocationSave >= s_locationSaveEvery) {
+            _lastLocationSave = now;
+            _activeWizard.SaveLocation();
+        }
+
+        // For the Position card in ImlightManager.
+        Imlight.CoreLib.Game.Tools.PlayerPositions.Update(_activeWizard.CharId, _activeWizard.PlayerNameBehavior?.GetWizardName(),
+            _activeWizard.Zone, position.X, position.Y, position.Z, radians, CommandService.IsThisPcCached(SessionActor.RemoteIp));
     }
 
     #endregion

@@ -1,0 +1,213 @@
+/*
+ * Imlight
+ * Copyright (C) 2025 Revive101
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * ========================================================================
+ * BANK SERVICE
+ * ========================================================================
+ *
+ * PURPOSE:
+ * Receives the bank window's requests (moves between the backpack, the bank and the shared bank, deletes)
+ * and the bank streams other windows ask for. It knows whether the player has the bank open and hands the
+ * rest to BankRequests.
+ *
+ * USAGE EXAMPLE:
+ * The client sends MSG_MOVEINVTOBANK and its siblings from the bank window. Each one is answered with the
+ * messages of its flow, see BankRequests.
+ *
+ * NOTE:
+ * The bank counts as open from the moment the bank NPC lets the player in until the window is closed,
+ * the zone changes or the session attaches again. A request outside that time is refused and logged.
+ *
+ * TODO:
+ *
+ * Created by: Jay
+ * Version: KALI 1.0
+ * Last Updated: 10/14/2026
+ */
+
+using System;
+using Akka.Actor;
+using Imcodec.MessageLayer.Generated;
+using Imlight.Common;
+using Imlight.CoreLib.Game.Bank;
+using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.Zone.Components;
+using Imlight.CoreLib.Shared.Networking;
+using Imlight.CoreLib.Shared.Packets;
+
+namespace Imlight.CoreLib.Game.Services;
+
+internal class BankService(SessionActor sessionActor) : MessageService(sessionActor) {
+
+    private ulong _openBankEntityId;
+
+    // When the Item Finder last got the bank with its opening, so a request of the window right after is not sent it twice.
+    private static readonly TimeSpan ItemFinderBankReuse = TimeSpan.FromSeconds(10);
+    private DateTime _itemFinderOpenedUtc = DateTime.MinValue;
+
+    protected static Props Props(SessionActor parentActor)
+        => Akka.Actor.Props.Create(() => new BankService(parentActor));
+
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_BEGINBANKSESSION))]
+    private void ReceiveBeginBankSession(CHARACTER_103_PROTOCOL.MSG_BEGINBANKSESSION message) {
+        _openBankEntityId = message.EntityId;
+        Logger.Information("Bank: session begins for {CharId} at bank object {ObjectId}.",
+            Logger.Args(GetActiveWizard()?.CharId, message.EntityId));
+        CreateRequests().Open(message.EntityId);
+    }
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_REQUESTTOGGLELOCKITEM))]
+    private void ReceiveToggleLockItem(WIZARD_12_PROTOCOL.MSG_REQUESTTOGGLELOCKITEM message)
+        => CreateRequests().ToggleLock(message);
+
+    // "Client request to server to set item lock flag" (WIZARD 75). It names no item, so it sets the item lock flag of
+    // the game stats (WizGameStats.m_showItemLock), which goes to the client with the character. The padlock of an item
+    // is MSG_REQUESTTOGGLELOCKITEM above.
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_ITEMLOCK))]
+    private void ReceiveItemLock(WIZARD_12_PROTOCOL.MSG_ITEMLOCK message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        try {
+            wizard.SetShowItemLock(message.ItemLock != 0);
+            Logger.Information("Item lock: the item lock flag of {Wizard} ({CharId}) is now {Flag}.",
+                Logger.Args(wizard.PlayerNameBehavior?.GetWizardName(), wizard.CharId, message.ItemLock != 0 ? "on" : "off"));
+        }
+        catch (System.Exception exception) {
+            Logger.Error("Item lock: the item lock flag of {CharId} could not be set: {Error}", Logger.Args(wizard.CharId, exception));
+        }
+    }
+
+    [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTHOUSETRANSFERLIST))]
+    private void ReceiveRequestHouseTransferList(WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTHOUSETRANSFERLIST message)
+        => CreateRequests().SendHouseTransferList();
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_MOVEINVTOBANK))]
+    private void ReceiveMoveInventoryToBank(WIZARD_12_PROTOCOL.MSG_MOVEINVTOBANK message)
+        => CreateRequests().InventoryToBank(message);
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_MOVEBANKTOINV))]
+    private void ReceiveMoveBankToInventory(WIZARD_12_PROTOCOL.MSG_MOVEBANKTOINV message)
+        => CreateRequests().BankToInventory(message);
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_MOVEBANKTOBANK))]
+    private void ReceiveMoveBankToBank(WIZARD_12_PROTOCOL.MSG_MOVEBANKTOBANK message)
+        => CreateRequests().BankToBank(message);
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_BANKDELETE))]
+    private void ReceiveBankDelete(WIZARD_12_PROTOCOL.MSG_BANKDELETE message)
+        => CreateRequests().Delete(message);
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_SHAREDBANKDELETEREAGENTORPETSNACK))]
+    private void ReceiveSharedBankDeleteStack(WIZARD_12_PROTOCOL.MSG_SHAREDBANKDELETEREAGENTORPETSNACK message)
+        => CreateRequests().DeleteSharedStack(message);
+
+    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_BANKCOUNT))]
+    private void ReceiveBankCount(WIZARD2_53_PROTOCOL.MSG_BANKCOUNT message)
+        => CreateRequests().SendBankCount();
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_AUCTIONREQUESTBANK))]
+    private void ReceiveAuctionRequestBank(WIZARD_12_PROTOCOL.MSG_AUCTIONREQUESTBANK message)
+        => CreateRequests().StreamBankFor(new WIZARD_12_PROTOCOL.MSG_AUCTIONREQUESTBANK());
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_QUICKSELLREQUESTBANK))]
+    private void ReceiveQuickSellRequestBank(WIZARD_12_PROTOCOL.MSG_QUICKSELLREQUESTBANK message)
+        => CreateRequests().StreamBankFor(new WIZARD_12_PROTOCOL.MSG_QUICKSELLREQUESTBANK());
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_DELIVERYINVOICEREQUESTBANK))]
+    private void ReceiveDeliveryInvoiceRequestBank(WIZARD_12_PROTOCOL.MSG_DELIVERYINVOICEREQUESTBANK message)
+        => CreateRequests().StreamBankFor(new WIZARD_12_PROTOCOL.MSG_DELIVERYINVOICEREQUESTBANK(), includeShared: true);
+
+    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_ITEMFINDERREQUESTBANK))]
+    private void ReceiveItemFinderRequestBank(WIZARD2_53_PROTOCOL.MSG_ITEMFINDERREQUESTBANK message) {
+        // The window was just given the bank when it opened (ReceiveBeginItemFinder); only the end marker again.
+        if (DateTime.UtcNow - _itemFinderOpenedUtc < ItemFinderBankReuse) {
+            SessionActor.ActorRef.Tell(new WIZARD2_53_PROTOCOL.MSG_ITEMFINDERREQUESTBANK());
+
+            return;
+        }
+
+        CreateRequests().StreamBankFor(new WIZARD2_53_PROTOCOL.MSG_ITEMFINDERREQUESTBANK(), includeShared: true);
+    }
+
+    /// <summary>
+    /// Opens the game's Item Finder window (a Backpack Butler, a bank or the itemfinder command asked) and fills it:
+    /// the bank and shared bank, then the attic and every house, then the end of the houses, which closes the
+    /// window's "please wait" (Game/Housing/HouseItemFinder). The backpack the client has already.
+    /// </summary>
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_BEGINITEMFINDER))]
+    private void ReceiveBeginItemFinder(CHARACTER_103_PROTOCOL.MSG_BEGINITEMFINDER message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        Logger.Information("Item Finder: opening the window for {CharId} (object {ObjectId}).", Logger.Args(wizard.CharId, message.EntityId));
+        SessionActor.ActorRef.Tell(new WIZARD2_53_PROTOCOL.MSG_OPENITEMFINDER { GlobalID = message.EntityId });
+        try {
+            CreateRequests().StreamBankFor(new WIZARD2_53_PROTOCOL.MSG_ITEMFINDERREQUESTBANK(), includeShared: true);
+            _itemFinderOpenedUtc = DateTime.UtcNow;
+        }
+        catch (Exception exception) {
+            Logger.Error("Item Finder: the bank of {CharId} could not be sent: {Error}", Logger.Args(wizard.CharId, exception));
+        }
+
+        foreach (var housing in HouseItemFinder.Messages(wizard)) {
+            SessionActor.ActorRef.Tell(housing);
+        }
+    }
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_DONESHOPPING))]
+    private void ReceiveDoneShopping() {
+        // The bank window sends this when it closes (BankingWindow::HandleExitBank).
+        if (_openBankEntityId == 0) {
+            return;
+        }
+
+        var bankId = _openBankEntityId;
+        _openBankEntityId = 0;
+        Logger.Information("Bank: {CharId} closed the bank window.", Logger.Args(GetActiveWizard()?.CharId));
+
+        // The client drops the bank's option once it is used; offer it again so the bank opens again without walking away.
+        GetZoneObject(bankId)?.GetComponentOfType<InteractServiceMementoComponent>()?.ActorRef.Tell(
+            new ZONE_102_PROTOCOL.MSG_REFRESHSERVICEOPTIONS { PlayerActor = SessionActor.ActorRef });
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
+    private void ReceiveZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message)
+        => _openBankEntityId = 0;
+
+    [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
+    private void ReceiveAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message)
+        => _openBankEntityId = 0;
+
+    private BankRequests CreateRequests()
+        => new(GetActiveWizard(), SessionActor.ActorRef, IsBankOpen, UnequipItem);
+
+    private bool IsBankOpen() {
+        if (_openBankEntityId == 0) {
+            return false;
+        }
+
+        var bank = GetZoneObject(_openBankEntityId)?.GetComponentOfType<InteractBankComponent>();
+
+        return bank is not null && bank.IsInServiceRange(GetActiveGameObject());
+    }
+
+}

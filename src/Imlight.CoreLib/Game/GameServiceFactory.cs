@@ -15,10 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
- * ========================================================================
- * GAME SERVICE FACTORY 
- * ========================================================================
- * 
+ * ================================================================= * GAME SERVICE FACTORY 
+ * ================================================================= * 
  * PURPOSE:
  * Defines and registers the service types required for game operations,
  * providing a centralized factory for creating game-related services.
@@ -33,7 +31,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -68,6 +66,8 @@ public class GameServiceFactory : ServiceFactory {
         typeof(CantripService),
         typeof(TrainService),
         typeof(PetService),
+        typeof(MonstrologyService),
+        typeof(EventButtonService),
         typeof(MinigameService),
         typeof(FriendsService),
         typeof(GroupService),
@@ -76,6 +76,35 @@ public class GameServiceFactory : ServiceFactory {
         typeof(CinematicService),
         typeof(PotionService),
         typeof(TreasureShopService),
+        typeof(BadgeService),
+        typeof(CrownShopService),
+        typeof(PrivacyOptionsService),
+        typeof(TradeService),
+        typeof(HatchService),
+        typeof(SeamstressService),
+        typeof(BankService),
+        typeof(PvPService),
+        typeof(PvPRatingService),
+        typeof(HousingService),
+        typeof(HousingVisitService),
+        typeof(AtticService),
+        typeof(RentalService),
+        typeof(GiftingService),
+        typeof(PromoCodeService),
+        typeof(PhotomancyService),
+        typeof(GuildMuseumService),
+        typeof(GuildGroundsService),
+        typeof(RenameService),
+        typeof(MagicMirrorService),
+        typeof(LoyaltyStoreService),
+        typeof(DailyAssignmentService),
+        typeof(PixiePostService),
+        typeof(TeamUpService),
+        typeof(TieredSpellService),
+        typeof(EmoteService),
+        typeof(FishingService),
+        typeof(CraftingService),
+        typeof(CastleToursService),
     ];
 
     public static Props Props() 

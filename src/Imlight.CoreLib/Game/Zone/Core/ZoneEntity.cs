@@ -42,6 +42,7 @@
  */
 
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
@@ -84,6 +85,12 @@ public class ZoneEntity(
     public IActorRef SupervisorRef { get; protected set; } = Context.Parent;
 
     public virtual bool IsCombatOnlyMinion => false;
+
+    // Set by the battle a wandering monster joins late ([Battle] MobsJoinLate), so a second battle next to it that saw
+    // the same step does not take it too. The battles are other actors, hence the interlocked flag.
+    private int _lateDuelClaim;
+    internal bool TryClaimLateDuelJoin() => System.Threading.Interlocked.CompareExchange(ref _lateDuelClaim, 1, 0) == 0;
+    internal void ReleaseLateDuelJoin() => System.Threading.Volatile.Write(ref _lateDuelClaim, 0);
     public IActorRef ZoneRef { get; protected set; } = zoneRef;
     public bool NoTransfer { get; set; } = false;
     public ushort MobileID { 
@@ -245,7 +252,9 @@ public class ZoneEntity(
     /// </summary>
     internal void ExecuteResults(ResultList results, IActorRef playerActor, CoreObject playerObject, string triggerName = null)
         => Imlight.CoreLib.Game.Results.ResultDispatcher.ExecuteResults(
-            Context, results, playerActor, playerObject, zoneActor: ZoneRef, triggerName: triggerName);
+            Context, results, playerActor, playerObject, zoneActor: ZoneRef, triggerName: triggerName,
+            sourceRef: Self, sourceTemplateId: (Template as GameObjectTemplate)?.m_templateID ?? 0, sourceIsInstance: Zone.IsInstance,
+            scriptState: Zone.ScriptState, zonePath: Zone.ZonePath);
 
     #region Message Handlers
 
@@ -257,7 +266,9 @@ public class ZoneEntity(
             MobileID = ReserveMobileId();
         }
 
+        var stopwatch = Stopwatch.StartNew();
         AutoAttachComponents();
+        var attachMs = stopwatch.ElapsedMilliseconds;
 
         // Two passes: every component is awoken (OnAwake) before any is started (OnStart), so OnStart
         // may rely on every other component being configured.
@@ -270,6 +281,12 @@ public class ZoneEntity(
         }
 
         Sender.Tell(new ZONE_102_PROTOCOL.MSG_ZONEOBJECTLOADRESULTS());
+
+        // Zone loads after a start took a minute (Niduus's log of 2026-10-26): name the slow part.
+        if (stopwatch.ElapsedMilliseconds >= SLOW_LOAD_MS) {
+            Logger.Warning("Slow load: {0} took {1} ms (choosing its parts {2} ms).",
+                Logger.Args(DescribeForLog(), stopwatch.ElapsedMilliseconds, attachMs));
+        }
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYZONEENTITY))]
@@ -309,12 +326,27 @@ public class ZoneEntity(
     protected virtual void AutoAttachComponents() {
         var template = Template;
 
+        // A vendor or trainer of the Customs tab only borrows its template's look: it gets the shop or the trainer
+        // and none of the template's own services, quests or battle parts (CustomNpcs).
+        var customNpc = Imlight.CoreLib.Game.World.CustomNpcs.For(Info?.m_zoneTag);
+        // A stone of the Customs tab's teleporter hubs likewise only borrows its look (CustomTeleporters).
+        var customTeleporter = Imlight.CoreLib.Game.World.CustomTeleporters.For(Info?.m_zoneTag);
         foreach (var (componentType, shouldAttachToEntity) in ZoneEntityComponentRegistry.GetRegisteredComponents()) {
+            if ((customNpc is not null || customTeleporter is not null) && !KeptForCustomNpc(componentType)) {
+                continue;
+            }
+
             // One component's ShouldAttachToEntity (or constructor) throwing must never abort the rest of
             // this entity's components or wedge the zone load. Activator wraps a constructor's error in a
             // TargetInvocationException; log the inner message and skip only that one component.
             try {
-                if (shouldAttachToEntity(template)) {
+                var stopwatch = Stopwatch.StartNew();
+                var attach = shouldAttachToEntity(template);
+                if (stopwatch.ElapsedMilliseconds >= SLOW_LOAD_MS) {
+                    Logger.Warning("Slow load: deciding {0} for {1} took {2} ms.",
+                        Logger.Args(componentType.Name, DescribeForLog(), stopwatch.ElapsedMilliseconds));
+                }
+                if (attach) {
                     AddComponent(componentType);
                 }
             } catch (Exception ex) {
@@ -322,7 +354,33 @@ public class ZoneEntity(
                     Logger.Args(componentType.Name, template?.GetType().Name ?? "?", (ex.InnerException ?? ex).Message));
             }
         }
+
+        if (customTeleporter is not null) {
+            AddComponent(typeof(CustomTeleporterComponent));
+        }
+
+        if (customNpc is not null) {
+            AddComponent(customNpc.IsTrainer ? typeof(InteractTrainerComponent) : typeof(InteractVendorComponent));
+            // Its treasure cards are sold in the game's treasure card shop, a service of its own.
+            // A Deckathalon TC NPC sells the Deckathalon's cards there (DeckathalonShopCards).
+            if (!customNpc.IsTrainer && (customNpc.TreasureCards.Count > 0
+                || string.Equals(customNpc.Window, Imlight.CoreLib.Game.Events.DeckathalonShopCards.WINDOW, StringComparison.OrdinalIgnoreCase))) {
+                AddComponent(typeof(InteractTreasureVendorComponent));
+            }
+            Logger.Information("Custom NPC {0} ({1}, {2}) spawned in {3} at {4}, {5}, {6} with look {7}{8}.",
+                Logger.Args(customNpc.Id, customNpc.Name, customNpc.IsTrainer ? "trainer" : "vendor", customNpc.Zone,
+                    customNpc.X, customNpc.Y, customNpc.Z, customNpc.TemplateID,
+                    Components.Keys.OfType<NpcComponent>().Any() ? "" : " (not an NPC template: no name over its head)"));
+        }
     }
+
+    // What a custom vendor or trainer keeps of its template's components: everything but the services, quests and
+    // battle parts (the shop or trainer it is given is added after).
+    private static bool KeptForCustomNpc(System.Type componentType)
+        => componentType == typeof(InteractServiceMementoComponent)
+           || !(componentType.Name.StartsWith("Interact", StringComparison.Ordinal)
+                || componentType.Name.StartsWith("Combat", StringComparison.Ordinal)
+                || componentType == typeof(BattleDropComponent));
 
     /// <summary>
     /// Spawns a creature entity actor as a child of this entity, used for combat minions. Mirrors
@@ -368,9 +426,16 @@ public class ZoneEntity(
         _componentOrder.Add(component);
     }
 
+    private const long SLOW_LOAD_MS = 250;
+
     private void RunLifecycleStep(ZoneEntityComponent component) {
+        var stopwatch = Stopwatch.StartNew();
         try {
             component.RunLifecycleStep();
+            if (stopwatch.ElapsedMilliseconds >= SLOW_LOAD_MS) {
+                Logger.Warning("Slow load: {0} of {1} took {2} ms to start.",
+                    Logger.Args(component.GetType().Name, DescribeForLog(), stopwatch.ElapsedMilliseconds));
+            }
         } catch (Exception ex) {
             Logger.Error("Component {Component} of {Entity} failed to initialize: {Exception}",
                 Logger.Args(component.GetType().Name, DescribeForLog(), ex));
@@ -451,7 +516,6 @@ public class ZoneEntity(
 
         return petCopy;
     }
-
     private T BuildClientObject<T>() where T : ClientObject, new() {
         var gameObj = new T() {
             m_debugName = ActiveGameObject.m_debugName,

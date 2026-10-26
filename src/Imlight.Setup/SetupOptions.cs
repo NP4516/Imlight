@@ -1,0 +1,198 @@
+/*
+ * Imlight
+ * Copyright (C) 2025 Revive101
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+using System;
+using System.IO;
+
+namespace Imlight.Setup;
+
+/// <summary>
+/// What the program was asked to do. Install also updates an existing install.
+/// </summary>
+internal enum SetupMode { Install, Start, Play, Uninstall, Panel, PrepareUpdate, ApplyUpdate }
+
+/// <summary>
+/// What setup installs and where, from the command line. The defaults install original Imlight.
+/// </summary>
+internal sealed class SetupOptions {
+
+    /// <summary>What to do. The shortcuts pass --start, --update or --uninstall; the installed Imlight.exe opens the app by default.</summary>
+    public SetupMode Mode { get; private set; } = IsInstalledCopy() ? SetupMode.Panel : SetupMode.Install;
+
+    /// <summary>The GitHub repository (owner/repo) to build Imlight from.</summary>
+    public string Repository { get; private set; } = Edition.DEFAULT_REPOSITORY;
+
+    /// <summary>The branch to build.</summary>
+    public string Branch { get; private set; } = ServerSource.DEFAULT_BRANCH;
+
+    /// <summary>An Imlight source folder on this PC to build instead of downloading one. It is copied, never changed.</summary>
+    public string? LocalCheckout { get; private set; }
+
+    /// <summary>A server already built on this PC, run where it is: setup has nothing to download or build.</summary>
+    public string? BuiltServer { get; private set; }
+
+    /// <summary>Where the server comes from, in a few words for the setup window.</summary>
+    public string SourceName => SourceProblem is not null ? "the folder chosen in the app, which can't be used"
+        : LocalCheckout is { } checkout ? $"your folder {checkout}"
+        : BuiltServer is { } built ? $"the server already built in {built}"
+        : $"github.com/{Repository} ({Branch})";
+
+    /// <summary>Why the saved Server source cannot be used (its folder is gone), for setup to say instead of building.</summary>
+    public string? SourceProblem { get; private set; }
+
+    /// <summary>Where the server is installed: <see cref="BuiltServer"/>, or the install's own Server folder.</summary>
+    public string ServerFolder => BuiltServer ?? Path.Combine(InstallFolder, "Server");
+
+    /// <summary>Where Imlight is installed.</summary>
+    public string InstallFolder { get; private set; } = DefaultInstallFolder();
+
+    /// <summary>The Wizard101 folder, when the person names it.</summary>
+    public string? GameFolder { get; private set; }
+
+    /// <summary>A wiztype type dump to use instead of the one Imcodec ships.</summary>
+    public string? TypeDump { get; private set; }
+
+    /// <summary>The admin password, for unattended installs.</summary>
+    public string? AdminPassword { get; private set; }
+
+    /// <summary>If true, Start closes as soon as the server stops instead of waiting for a key.</summary>
+    public bool NoWait { get; private set; }
+
+    /// <summary>The app that has to close before --apply-update replaces its files.</summary>
+    public int? WaitForProcess { get; private set; }
+
+    /// <summary>If true, the app starts the server as soon as it opens (after an update that stopped it).</summary>
+    public bool StartServer { get; private set; }
+
+    /// <summary>If true, setup never stops to ask anything.</summary>
+    public bool Unattended { get; private set; }
+
+    internal const string USAGE = """
+        Usage: ImlightSetup [options]
+
+          --dir <folder>             Where to install. Default: %LOCALAPPDATA%\ImlightServer
+          --game <folder>            Your Wizard101 folder, if setup cannot find it.
+          --type-dump <file>         A wiztype type dump to use instead of the bundled one.
+          --repo <owner/repo>        Build from another GitHub repository. Default: Revive101/Imlight (Niduus/Imlight for Ahziael)
+          --branch <name>            Build another branch. Default: quality-assurance
+          --source-folder <folder>   Build an Imlight source folder on this PC, or run a server already built there.
+                                     Without --repo or this, the app's Server source choice (Tools tab) is used.
+          --admin-password <text>    The admin password, for --yes installs.
+          --yes                      Do not ask anything; use the defaults.
+
+        The installed Imlight.exe also takes:
+          (nothing)                  Open the app: run the server, play, change settings and manage accounts.
+          --update                   Update Imlight, the same as running the setup again.
+          --start                    Start the server in a window, with game files from your Wizard101 folder.
+          --play                     Start Wizard101 connected to the server on this computer.
+          --uninstall                Remove Imlight from this computer.
+          --panel                    Open the app (the same as no option).
+          --prepare-update           Download and build the newest Imlight in the background, ready to install.
+          --apply-update             Install the update --prepare-update made, then open the app again.
+        """;
+
+    internal static SetupOptions Parse(string[] args) {
+        var options = new SetupOptions();
+        var sourceGiven = false;
+        var branchGiven = false;
+        for (var i = 0; i < args.Length; i++) {
+            string Next() => i + 1 < args.Length
+                ? args[++i]
+                : throw new SetupException($"{args[i]} needs a value.\n\n{USAGE}");
+
+            switch (args[i].ToLowerInvariant()) {
+                case "--dir": options.InstallFolder = Path.GetFullPath(Next()); break;
+                case "--game": options.GameFolder = Next(); break;
+                case "--type-dump": options.TypeDump = Path.GetFullPath(Next()); break;
+                case "--repo": options.Repository = Next(); sourceGiven = true; break;
+                case "--branch": options.Branch = Next(); branchGiven = true; break;
+                case "--source-folder": options.UseFolder(Path.GetFullPath(Next())); sourceGiven = true; break;
+                case "--admin-password": options.AdminPassword = Next(); break;
+                case "--yes": options.Unattended = true; break;
+                case "--start": options.Mode = SetupMode.Start; break;
+                case "--play": options.Mode = SetupMode.Play; break;
+                case "--uninstall": options.Mode = SetupMode.Uninstall; break;
+                case "--panel": options.Mode = SetupMode.Panel; break;
+                case "--update": options.Mode = SetupMode.Install; break;
+                case "--no-wait": options.NoWait = true; break;
+                case "--prepare-update": options.Mode = SetupMode.PrepareUpdate; options.Unattended = true; break;
+                case "--apply-update": options.Mode = SetupMode.ApplyUpdate; options.Unattended = true; break;
+                case "--wait-pid": options.WaitForProcess = int.TryParse(Next(), out var pid) ? pid : null; break;
+                case "--start-server": options.StartServer = true; break;
+                default: throw new SetupException($"Unknown option {args[i]}.\n\n{USAGE}");
+            }
+        }
+
+        // The choice saved in the app, unless the command line names another source.
+        if (!sourceGiven) {
+            var saved = ServerSource.Load(options.InstallFolder);
+            if (saved.Kind == ServerSourceKind.GitHub) {
+                options.Repository = saved.Repository;
+                options.Branch = branchGiven ? options.Branch : saved.Branch;
+            }
+            else if (saved.Kind == ServerSourceKind.Folder && saved.Folder is { } folder) {
+                // Only installing needs the folder; the app still opens when it was moved or deleted.
+                try {
+                    options.UseFolder(folder);
+                }
+                catch (SetupException ex) {
+                    options.SourceProblem = ex.Message;
+                }
+            }
+        }
+
+        return options;
+    }
+
+    private void UseFolder(string folder) {
+        if (ServerSource.IsCheckout(folder)) {
+            LocalCheckout = Path.GetFullPath(folder);
+        }
+        else if (ServerSource.IsBuiltServer(folder)) {
+            BuiltServer = Path.GetFullPath(folder);
+        }
+        else {
+            throw new SetupException($"{folder} is not an Imlight folder. Pick the folder with src\\Imlight.Director in it, " +
+                "or a built server's folder (the one with Imlight.Director.exe and Config\\Imlight.ini).");
+        }
+    }
+
+    /// <summary>
+    /// True when this program is the Imlight.exe that setup installed, rather than the setup download.
+    /// </summary>
+    private static bool IsInstalledCopy() {
+        var self = Environment.ProcessPath;
+
+        return self is not null
+            && string.Equals(Path.GetFileName(self), InstalledCommands.INSTALLED_EXE, StringComparison.OrdinalIgnoreCase)
+            && File.Exists(Path.Combine(Path.GetDirectoryName(self)!, InstallInfo.FILE_NAME));
+    }
+
+    /// <summary>
+    /// The folder this program runs from when it is an installed Imlight.exe, otherwise %LOCALAPPDATA%\ImlightServer.
+    /// </summary>
+    private static string DefaultInstallFolder() {
+        var ownFolder = Environment.ProcessPath is { } self ? Path.GetDirectoryName(self) : null;
+        if (ownFolder is not null && File.Exists(Path.Combine(ownFolder, InstallInfo.FILE_NAME))) {
+            return ownFolder;
+        }
+
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Edition.INSTALL_FOLDER_NAME);
+    }
+
+}

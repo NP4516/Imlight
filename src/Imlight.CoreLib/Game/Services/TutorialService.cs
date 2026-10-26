@@ -70,7 +70,7 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
         m_tutorialStage = 0,
     };
 
-    private static bool IsTutorialZone(string zoneName)
+    internal static bool IsTutorialZone(string zoneName)
         => zoneName.Contains(TUTORIAL_EXTERIOR_ZONE_NAME_CONTENTS)
             || zoneName.Contains(TUTORIAL_INTERIOR_ZONE_NAME_CONTENTS);
 
@@ -268,6 +268,7 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
         wizard.RemoveQuest(questName);
 
         if (questId != 0) {
+            QuestService.ForgetHelperQuest(wizard.CharId, questId);
             SendToSocket(new QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST {
                 QuestID = questId,
             });
@@ -388,6 +389,7 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
             // the starter wand and deck must be equipped in both.
             if (goalInstance.quest.QuestName == TUTORIAL_INTRO_QUEST_NAME) {
                 EquipStarterWandAndDeck(wizard);
+                FinishTutorialIntroQuest(wizard);
             }
 
             return removeSuccess;
@@ -474,8 +476,22 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
             goalName: TUTORIAL_INTRO_GOAL_NAME,
             zoneActor: SessionActor.GetZoneActor()
         );
+        FinishTutorialIntroQuest(wizard);
 
         return removeSuccess;
+    }
+
+    /// <summary>
+    /// Tutorial_Intro has one goal and no goal logic, so nothing completed the quest itself: it stayed among
+    /// the current quests after the tutorial and showed in the quest book as a blank card. Complete it once
+    /// its goal is done.
+    /// </summary>
+    private static void FinishTutorialIntroQuest(Wizard wizard) {
+        var instance = wizard.QuestBehavior.CurrentQuestInstances
+            .FirstOrDefault(q => q.QuestName == TUTORIAL_INTRO_QUEST_NAME);
+        if (instance is not null && instance.GoalProgress.All(g => g.IsGoalCompleted())) {
+            wizard.CompleteQuest(TUTORIAL_INTRO_QUEST_NAME);
+        }
     }
 
     private void EquipStarterWandAndDeck(Wizard wizard) {
@@ -611,6 +627,7 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
         }
 
         var grantedItems = wizard.GrantStarterItems(templateIds);
+        Randomization.Randomizer.PutStartingSpellsInDeck(wizard, grantedItems);
         Logger.Information("Granted starter kit ({0} items) to {1}.",
             Logger.Args(grantedItems.Count, wizard.PlayerNameBehavior.GetWizardName()));
 

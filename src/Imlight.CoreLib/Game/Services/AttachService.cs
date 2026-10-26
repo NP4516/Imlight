@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Imlight
  * Copyright (C) 2025 Revive101
  *
@@ -36,7 +36,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/10/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
@@ -51,6 +51,8 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing;
+using Imlight.CoreLib.Game.World;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -65,6 +67,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
     // The official server sends MSG_LOGINCOMPLETE a median 390 ms after MSG_ATTACH.
     private const int PreLoginGapMs = 390;
+    private const string COMMONS_ZONE = "WizardCity/WC_Hub";
 
     // The services that answer MSG_PRELOGIN are other actors, and their messages have to reach the socket first.
     private const int PreLoginMinimumDelayMs = 100;
@@ -76,8 +79,117 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
     private bool _attachReceived;
     private readonly Stopwatch _sessionAge = Stopwatch.StartNew();
 
+
+    [Flags]
+    public enum AccountPermissions : uint {
+        None = 0,
+
+        /// <summary>
+        /// Allows the player to type in chat using KingsIsle's strict whitelist dictionary.
+        /// Numbers, unwhitelisted words, and personal information are blocked.
+        /// </summary>
+        FilteredChat = 1 << 0,
+
+        /// <summary>
+        /// Unlocks adult text chat. Allows players to freely type numbers (e.g., stats, spell counts)
+        /// and words outside the strict whitelist, using only a basic profanity blacklist.
+        /// </summary>
+        OpenChat = 1 << 2,
+
+        /// <summary>
+        /// Enables the "btnSecureChatSetup" button on the Friends List to generate
+        /// and redeem one-time True Friend Codes for direct cross-tier communication.
+        /// </summary>
+        TrueFriendCodes = 1 << 4,
+
+        /// <summary>
+        /// Allows the player to purchase items as gifts for friends in the Crowns Shop.
+        /// If missing, the client disables the gift button with "Gifting is turned off for this account."
+        /// </summary>
+        Gifting = 1 << 5,
+
+        /// <summary>
+        /// Shows the bug report button (btnFeedback in HUDWindow.gui) on the player HUD.
+        /// The client shows it when TestServer == 1 or this bit is set; live realms leave it off.
+        /// </summary>
+        BugReporting = 1 << 6,
+
+        /// <summary>
+        /// Controls access to Player vs. Player (PvP) matches, tournaments,
+        /// and ranked arena queues.
+        /// </summary>
+        PvPAllowed = 1 << 7,
+
+        /// <summary>
+        /// Allows participating in group/team, raid, and guild chat channels.
+        /// </summary>
+        GroupChatAllowed = 1 << 8,
+
+        /// <summary>
+        /// Enables the "Whisper" / private messaging button on friend cards.
+        /// When disabled, the player can only speak in public proximity chat.
+        /// </summary>
+        WhisperChat = 1 << 9,
+
+        /// <summary>
+        /// Set dynamically when entering the Master Password, or granted by the server.
+        /// Enables the Parental Controls button on the Character Selection screen and
+        /// the "Mute" button in the Player Report window.
+        /// </summary>
+        ParentalControlsUnlocked = 1 << 10,
+
+        /// <summary>
+        /// Authorizes the client to play sponsored video ads and open offerwalls.
+        /// If disabled while EarnCrownsVisible is on, clicking the kiosk pops up
+        /// the "Earn Crowns is disabled by Parental Controls" notification.
+        /// </summary>
+        EarnCrownsAllowed = 1 << 11,
+
+        /// <summary>
+        /// Toggles the visibility of the "Earn Crowns" icon on the main HUD
+        /// and the corresponding toggle in the Gameplay Options menu.
+        /// </summary>
+        EarnCrownsVisible = 1 << 12,
+
+        /// <summary>
+        /// Allows the in-game web browser to open external URLs (help articles,
+        /// account management, community event web pages).
+        /// </summary>
+        ExternalWebLinks = 1 << 13,
+
+        /// <summary>
+        /// Permits sending MSG_ADCLICKTHROUGH to credit the player account
+        /// for completing third-party sponsor promotions.
+        /// </summary>
+        AdClickThrough = 1 << 14,
+
+        /// <summary>
+        /// Master toggle for friend networking (teleporting, sending friend invites,
+        /// visiting castles, and private messaging).
+        /// </summary>
+        FriendSocialActions = 1 << 16,
+
+        All = uint.MaxValue,
+
+        /// <summary>
+        /// Everything a live realm player gets: all bits except the test realm bug report button.
+        /// </summary>
+        Live = All & ~BugReporting
+    }
+
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new AttachService(parentActor));
+
+    /// <summary>
+    /// The permissions for an account's chat level. The game reads bit 2 as open chat, else bit 0 as text chat, else
+    /// menu chat only (WizardGraphicalClient r806919: test [client+0x21dc4], 4 -> 2; test 1 -> 1; else 0), and shows its
+    /// chat box to match.
+    /// </summary>
+    internal static AccountPermissions ChatPermissionsFor(ChatMode chatMode) => chatMode switch {
+        ChatMode.Closed => AccountPermissions.Live & ~(AccountPermissions.FilteredChat | AccountPermissions.OpenChat),
+        ChatMode.Filtered => AccountPermissions.Live & ~AccountPermissions.OpenChat,
+        _ => AccountPermissions.Live,
+    };
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_ATTACH))]
     private void ReceiveAttach(GAME_5_PROTOCOL.MSG_ATTACH message) {
@@ -101,9 +213,21 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             CloseStaleSession();
         }
 
+        // The client chooses the zone and the lot, so a house zone has to be one the character may enter before it is loaded.
+        if (!HouseAttach.TryAuthorize(_wizard, zoneName, message.ZoneID, out var house, out _)) {
+            Logger.Information("Session {SessionId} MSG_ATTACH refused: house zone {Zone} is not available to character {CharId}",
+                Logger.Args(SessionActor.SessionID, zoneName, _wizard.CharId));
+
+            SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED {
+                Error = 1
+            });
+
+            return;
+        }
+
         // Tell the game server that the user has attached, and now we need to find a zone process for their
         // zone, or create a new one. This is an internal zone transfer that does not involve the client.
-        var zoneDetails = InternalZoneTransfer(zoneName, location);
+        var zoneDetails = InternalZoneTransfer(zoneName, location, house?.OwnerCharId ?? 0);
         if (zoneDetails is null || zoneDetails.ErrorCode != 0) {
             Logger.Information("Session {SessionId} MSG_ATTACH failed: zone {Zone} transfer error {ErrorCode}",
                 Logger.Args(SessionActor.SessionID, zoneName, zoneDetails?.ErrorCode ?? 1));
@@ -119,6 +243,12 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         _wizard.SetZone(zoneName, zoneDetails.ZoneDisplayName);
         _wizard.SetPersistentLocation(zoneDetails.Location);
         _wizard.SetPersistentOrientation(zoneDetails.Orientation);
+        _wizard.SetZoneIsInstance(zoneDetails.IsInstance);
+
+        // The services that answer MSG_PRELOGIN read the lot, and the client's owner check reads it from the deed.
+        _wizard.AttachedLotGid = house?.LotGid ?? 0;
+        HouseDeeds.ApplyLots(_wizard);
+        AtticRegistry.Describe(_wizard);
 
         // Tiny anti-cheat measure. When the character object is created, we recalculate the game stats.
         CharacterHelper.RecalculateGameStats(_wizard);
@@ -153,7 +283,11 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         var serializer = new ObjectSerializer(
             Versionable: false
         );
-        var criticalObjects = GetCriticalObjects(zoneDetails.CriticalObjects);
+        // The game holds its loading screen until every listed object's MSG_NEWOBJECT arrives, or 30 s. Objects are now
+        // held back per player (quest-only NPCs, dynamods, spawn requirements), and each one held back from a list cost
+        // the full 30 s: "Failed to load 5 critical objects in 30.00 seconds" in Unicorn Way, 1 porting from the house
+        // to a friend in Ravenwood (Niduus's game log of 2026-10-25). The list is left empty unless asked for.
+        var criticalObjects = GetCriticalObjects(s_waitForCriticalObjects ? zoneDetails.CriticalObjects : []);
         if (!serializer.Serialize(criticalObjects, flags, out var criticalObjectData)) {
             Logger.Error($"User {message.UserID} failed to serialize their critical object list.");
 
@@ -171,22 +305,29 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             Data = Compression.CompressWithLength(localGameObjectData),
             IsCSR = _account.AuthLevel > AuthLevel.None ? 1 : 0, // todo: Change this back before prod!
 
-            Permissions = 0b1100_1111,
+            Permissions = (uint) ChatPermissionsFor(Imlight.CoreLib.Game.Social.ChatFilter.CurrentChatMode(account)),
 
             // Set zone data.
             ZoneName = zoneName,
-            ZoneID = message.ZoneID,
+            ZoneID = house is null ? message.ZoneID : house.LotGid,
             DynamicZoneID = zoneDetails.DynamicZoneId,
             DynamicServerProcID = zoneDetails.DynamicZoneId,
             CriticalObjects = criticalObjectData,
+            SubscriberCrownsPricePercent = 100,
 
             // Misc
             ShowSubscriberIcon = 0,
-            TestServer = 1
+            // 1 made the game block the gift button ("This is not accessible on the Test Realm", Niduus 2026-10-21).
+            TestServer = 0,
+
+            // Every captured login sends 1, in every zone; the client hides its Pick Up All button while it is 0.
+            PickUpAllEnabled = 1
         };
 
         // Send MSG_PRELOGIN so other services may do their work before we send the final login complete message.
-        var preLoginMsg = new ZONE_102_PROTOCOL.MSG_PRELOGIN();
+        var preLoginMsg = new ZONE_102_PROTOCOL.MSG_PRELOGIN {
+            ClientKeptState = message.Reattach == 1 || message.Retry == 1,
+        };
         TellOtherServices(preLoginMsg);
 
         // Send the same message to ourselves after a short delay to allow other services to prepare.
@@ -238,9 +379,81 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             RemoteIp = SessionActor.RemoteIp
         });
 
+        // [Battle] UnlimitedMana: arriving in the Commons fills mana back up.
+        if (Combat.CombatDuelSubCircle.UnlimitedMana && _wizard.Zone == COMMONS_ZONE
+                && _wizard.GameStats.m_currentMana < _wizard.GameStats.m_baseMana) {
+            _wizard.UpdateMana(_wizard.GameStats.m_baseMana);
+        }
+
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEMANA {
             Mana = _wizard.GameStats.m_currentMana,
             MaxMana = _wizard.GameStats.GetClientTypeAlternative().m_baseMana,
+        });
+
+        GiveStartingPotions();
+        GiveCrowns();
+        TellMemberBenefits();
+    }
+
+    // Once per login, the member benefits that are on (and their time left), a moment after the wizard arrives so the
+    // chat is up to show them.
+    private void TellMemberBenefits() {
+        var lines = Tools.MemberBenefits.GreetingFor(_wizard.AccountId);
+        lines.AddRange(Events.GameEvents.GreetingFor(_wizard.AccountId));
+        if (lines.Count == 0) {
+            return;
+        }
+
+        var session = SessionActor.ActorRef;
+        _ = System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(_ => {
+            foreach (var line in lines) {
+                session.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE { Message = line, Modal = 0 });
+            }
+        });
+    }
+
+    // [Character] StartingCrowns: crowns every wizard starts with. RefillCrowns: crowns go back up to that
+    // amount every time the wizard arrives somewhere.
+    private static bool s_waitForCriticalObjects => ConfigurationManager.GetValue("Game Server.WaitForCriticalObjects", false);
+    private static int s_startingCrowns => Math.Max(0, ConfigurationManager.GetValue("Character.StartingCrowns", 100_000_000));
+    private static bool s_refillCrowns => ConfigurationManager.GetValue("Character.RefillCrowns", true);
+
+    private void GiveCrowns() {
+        // The crown shop, seamstress and packs spend the account's crowns, so that is the one balance. A wizard
+        // from before kept their own; the larger of the two carries over.
+        var account = _wizard.Account;
+        var crowns = Math.Max(account?.Crowns ?? 0, _wizard.Crowns);
+        if (!_wizard.StartingCrownsGiven || (s_refillCrowns && crowns < s_startingCrowns)) {
+            crowns = Math.Max(crowns, s_startingCrowns);
+        }
+
+        if (account is not null && account.Crowns != crowns) {
+            account.SetCrowns(crowns);
+        }
+
+        if (_wizard.Crowns != crowns || !_wizard.StartingCrownsGiven) {
+            _wizard.SetCrowns(crowns);
+        }
+
+        if (CrownsMessage.Create(crowns) is { } crownsMsg) {
+            SendToSocket(crownsMsg);
+        }
+    }
+
+    // [Character] StartingPotions: every wizard has at least this many potion bottles. New bottles come full,
+    // and potion vendors refill them.
+    private static int s_startingPotions => Math.Clamp(ConfigurationManager.GetValue("Character.StartingPotions", 1), 0, 20);
+
+    private void GiveStartingPotions() {
+        var stats = _wizard.GameStats;
+        if (stats.m_potionMax < s_startingPotions) {
+            var added = s_startingPotions - stats.m_potionMax;
+            _wizard.UpdatePotions(Math.Min(s_startingPotions, stats.m_potionCharge + added), s_startingPotions);
+        }
+
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEPOTIONS {
+            PotionMax = stats.m_potionMax,
+            PotionCharge = stats.m_potionCharge,
         });
     }
 
@@ -282,7 +495,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
     }
 
     private void ValidateAttach(GAME_5_PROTOCOL.MSG_ATTACH message) {
-        if (!ValidateLoginKey(message.LoginKey, message.UserID, out var account)) {
+        if (!ValidateLoginKey(message.LoginKey, message.UserID, message.CharID, out var account)) {
             SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED() {
                 Error = 1,
                 Rejected = 1,
@@ -308,12 +521,13 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         SetCharacterInternally(wizard);
     }
 
-    private bool ValidateLoginKey(ByteString key, ulong userId, out Account account) {
+    private bool ValidateLoginKey(ByteString key, ulong userId, ulong charId, out Account account) {
         account = null;
 
         var msg = new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEY() {
             Key = key,
             UserID = userId,
+            CharID = charId,
             SessionActor = SessionActor
         };
         var rsp = AskServer<SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP>(msg);
@@ -346,12 +560,18 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         this._wizard = character;
     }
 
-    private ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP InternalZoneTransfer(string zoneName, string location) {
+    private ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP InternalZoneTransfer(string zoneName, string location, ulong houseOwnerCharId = 0) {
+        var (ownerCharId, isPrivate) = ZoneInstanceOwners.Resolve(_wizard.CharId, zoneName, houseOwnerCharId);
+        // A copy loaded with a variant (such as the Ravenwood sigil's Malistaire room) is made again with it when the
+        // server no longer has it, such as after a restart; it is always a private copy.
+        var variant = houseOwnerCharId != 0 ? "" : ZoneVariants.ForAttach(_wizard.CharId, zoneName);
         var zoneMsg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
             DestinationZone = zoneName,
             DestinationLocation = location,
             SendToClient = false,
-            OwnerCharId = _wizard.CharId,
+            OwnerCharId = ownerCharId,
+            IsPrivate = isPrivate || variant.Length > 0,
+            Variant = variant,
         };
 
         return AskOtherService<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(zoneMsg);
@@ -425,8 +645,9 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             Logger.Information("Session {SessionId} fallback found for {RemoteIp}, redirecting to zone {Zone}.",
                 Logger.Args(SessionActor.SessionID, SessionActor.RemoteIp, rsp.FallbackZone));
 
+            var transferIp = ClientAddress.For(SessionActor, rsp.GameServerIp);
             var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER {
-                IP = rsp.GameServerIp,
+                IP = transferIp,
                 TCPPort = rsp.GameServerPort,
                 UDPPort = rsp.GameServerPort,
                 UserID = rsp.UserId,
@@ -439,7 +660,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
                 SessionID = 0,
                 TargetPlayerID = rsp.CharId,
                 TransitionID = 1,
-                FallbackIP = rsp.GameServerIp,
+                FallbackIP = transferIp,
                 FallbackTCPPort = rsp.GameServerPort,
                 FallbackUDPPort = rsp.GameServerPort,
                 FallbackZone = rsp.FallbackZone,

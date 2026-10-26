@@ -34,7 +34,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/14/2026
  */
 
 using Akka.Actor;
@@ -49,7 +49,7 @@ namespace Imlight.CoreLib.Game.World;
 /// <summary>
 /// Manages zone instances for a specific player using Akka.NET actor system.
 /// </summary>
-internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocolDispatcher, IWithTimers {
+internal sealed class InstanceContainer(ulong instanceOwnerId, bool removeWhenEmpty) : ReceiveProtocolDispatcher, IWithTimers {
 
     public ITimerScheduler Timers { get; set; }
 
@@ -58,8 +58,8 @@ internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocol
     private readonly Dictionary<string, IActorRef> _zones = [];
     private readonly Zone.Core.InstanceQuestProgress _questProgress = new();
 
-    public static Props Props(ulong instanceOwnerId) 
-        => Akka.Actor.Props.Create(() => new InstanceContainer(instanceOwnerId));
+    public static Props Props(ulong instanceOwnerId, bool removeWhenEmpty)
+        => Akka.Actor.Props.Create(() => new InstanceContainer(instanceOwnerId, removeWhenEmpty));
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
     public void ReceiveZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
@@ -84,6 +84,10 @@ internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocol
         _zones[zoneName] = zoneActor;
         _questProgress.AddZone(zoneName);
     }
+
+    // Only the game world waits on this (zone preloads); an instance has nothing to do with it.
+    [MessageHandler(typeof(GameWorld.ZoneReady))]
+    private void ReceiveZoneReady() { }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_INSTANCECONTAINERHASZONE))]
     public void ReceiveInstanceContainerHasZone(ZONE_102_PROTOCOL.MSG_INSTANCECONTAINERHASZONE message) 
@@ -121,6 +125,11 @@ internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocol
             Logger.Args(message.ZoneName, _instanceOwnerId));
 
         Context.Stop(zoneActor);
+
+        // A match container serves one match only, so nothing will ever transfer into it again.
+        if (_zones.Count == 0 && removeWhenEmpty) {
+            Context.Parent.Tell(new ZONE_102_PROTOCOL.MSG_INSTANCECONTAINEREMPTY { OwnerId = _instanceOwnerId });
+        }
     }
 
     private IActorRef CreateZone(string zoneName) {

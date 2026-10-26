@@ -49,6 +49,7 @@ using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 
 namespace Imlight.CoreLib.Game.Zone.Components;
 
@@ -61,9 +62,20 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
 
     public ITimerScheduler Timers { get; set; }
 
-    private readonly float _healingThreshold     = ConfigurationManager.Settings["Combat.HealingThreshold"].AsFloat();
-    private readonly float _healingPercentChance = ConfigurationManager.Settings["Combat.HealingPercentChance"].AsFloat();
-    private readonly float _preparePassChance    = ConfigurationManager.Settings["Combat.PreparePassChance"].AsFloat();
+    // Imlight.ini long spelled it "HealingThreshhold", so a creature never counted anyone as hurt and never healed.
+    private float _healingThreshold => ConfigurationManager.GetValue("Combat.HealingThreshold",
+        ConfigurationManager.GetValue("Combat.HealingThreshhold", 0.75f));
+    private float _healingPercentChance => ConfigurationManager.Settings["Combat.HealingPercentChance"].AsFloat();
+    private float _preparePassChance => ConfigurationManager.Settings["Combat.PreparePassChance"].AsFloat();
+    // [Combat] NaturalAttackChance: how often a natural attack (the "NA ..." melee cards) is picked while a real
+    // attack spell can be paid for too. Picked like any other card, Skeletal Pirates swung almost every round.
+    private static float s_naturalAttackChance => ConfigurationManager.GetValue("Combat.NaturalAttackChance", 0.25f);
+    // [Combat] SaveUpChance: how often a creature that can only pay for its natural attack keeps its pips for the
+    // bigger attack spell in its hand instead.
+    private static float s_saveUpChance => ConfigurationManager.GetValue("Combat.SaveUpChance", 0.35f);
+    // [Combat] AvoidRepeatChance: how often a creature leaves out the spell it cast last round when it has another
+    // card it can cast, so it does not chain the same attack round after round.
+    private static float s_avoidRepeatChance => ConfigurationManager.GetValue("Combat.AvoidRepeatChance", 0.75f);
     private readonly int _damagedAggroIncrease   = ConfigurationManager.Settings["Combat.DamagedAggroIncrease"].AsInt();
     private readonly int _healingAggroIncrease   = ConfigurationManager.Settings["Combat.HealingAggroIncrease"].AsInt();
     private readonly int _provokeAggroIncrease   = ConfigurationManager.Settings["Combat.ProvokeAggroIncrease"].AsInt();
@@ -89,13 +101,22 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
     private float _selfishnessFactor;
     private bool _determinedSelfishThisTurn;
 
+    // The spell cast last round (0 for none), and whether it is left out this round.
+    private uint _lastCastSpellId;
+    private bool _avoidRepeatThisTurn;
+
     private Hand _roundHand;
     private CombatDuelSubCircle[] _friendlySubcircles
         => [.. _currentDuelComponent.ActiveSubCircles.Where(x => x.OccupiedTeam == _currentSubCircle.OccupiedTeam)];
     private bool _isHealingViable
-        => _friendlySubcircles.Any(x => x.ParticipantGameStats.m_currentHitpoints / x.ParticipantGameStats.m_baseHitpoints < _healingThreshold);
+        => _friendlySubcircles.Any(x => HealthFraction(x) < _healingThreshold);
+    // Whole numbers divided gave 0 or 1, never the fraction in between.
+    private static float HealthFraction(CombatDuelSubCircle circle)
+        => (float) circle.ParticipantGameStats.m_currentHitpoints / Math.Max(1, circle.ParticipantGameStats.m_baseHitpoints);
     private bool _sentFinalKill;
     private bool _isInDuel;
+    // Read by a sigil's battle (another actor) to see whether this monster may still join one late.
+    internal bool IsInDuel => _isInDuel || _sentFinalKill;
 
     public static bool ShouldAttachToEntity(CoreTemplate template)
         => template is GameObjectTemplate gameObjectTemplate
@@ -162,6 +183,29 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         InitiatizeHateTable();
     }
 
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYENCOUNTERMINIONS))]
+    private void ReceiveQueryEncounterMinions(ZONE_102_PROTOCOL.MSG_QUERYENCOUNTERMINIONS message) {
+        // Only a creature of the zone's own that is not fighting (or dying) answers: a battle's minion stays in it.
+        var creature = Entity.ActiveGameObject;
+        if (_isInDuel || _sentFinalKill || Entity.IsCombatOnlyMinion || creature is null
+            || message.TemplateIds is null || !message.TemplateIds.Contains(creature.m_templateID.Full)) {
+            return;
+        }
+
+        if (message.Radius > 0) {
+            var dx = creature.m_location.X - message.Center.X;
+            var dy = creature.m_location.Y - message.Center.Y;
+            if ((dx * dx) + (dy * dy) > message.Radius * message.Radius) {
+                return;
+            }
+        }
+
+        Sender.Tell(new ZONE_102_PROTOCOL.MSG_QUERYENCOUNTERMINIONSRSP {
+            CreatureActor = Entity.SelfRef,
+            CreatureObject = creature,
+        });
+    }
+
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_NEWROUND))]
     private void ReceiveNewCombatRound(COMBAT_106_PROTOCOL.MSG_NEWROUND message) {
         if (_sentFinalKill) {
@@ -172,10 +216,13 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
             return;
         }
 
-        _roundHand = _currentSubCircle.DrawHand();
+        _roundHand = _currentSubCircle.DrawFreshHand();
 
         DetermineAttitude();
-        var action = DetermineTurnAction();
+        var action = WithPicks(DetermineTurnAction());
+        _lastCastSpellId = action.MoveType == (byte) CombatMoveType.Attack
+            ? _currentSubCircle.GetSpellFromLastHand((byte) action.SpellSelection)?.m_templateID ?? 0
+            : 0;
 
         // Send the action to the duel actor.
         _currentDuelComponent.ActorRef.Tell(action, Self);
@@ -183,7 +230,7 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATEFFECT))]
     private void ReceiveCombatEffect(COMBAT_106_PROTOCOL.MSG_COMBATEFFECT message) {
-        if (_sentFinalKill) {
+        if (_sentFinalKill || _currentSubCircle is null || message.Caster is null || message.Targets is null) {
             return;
         }
 
@@ -229,6 +276,17 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
             return;
         }
 
+        // An encounter minion can die before its duel slot is fully set up: nothing to remove from, just go.
+        if (_currentDuelComponent is null || _currentSubCircle?.ParticipantObject is null) {
+            _sentFinalKill = true;
+            Entity.DeleteObject();
+            if (_currentSubCircle?.IsSummonedMinion == true) {
+                CombatDuelComponent.OnMinionRemoved(_currentSubCircle);
+            }
+
+            return;
+        }
+
         // A minion has no world to return to: remove and delete now, no death-animation timer.
         if (_currentSubCircle?.IsSummonedMinion == true) {
             _currentDuelComponent.DuelBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATREMOVE {
@@ -261,6 +319,7 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         _determinedSmartThisTurn = _random.NextDouble() < _intelligenceFactor;
         _determinedAggressiveThisTurn = _random.NextDouble() < _aggressivenessFactor;
         _determinedSelfishThisTurn = _random.NextDouble() < _selfishnessFactor;
+        _avoidRepeatThisTurn = _lastCastSpellId != 0 && _random.NextDouble() < s_avoidRepeatChance;
 
         Logger.Debug("Duel {0} | Slot {1} | Smart: {2} | Aggressive: {3} | Selfish: {4}",
             Logger.Args(_currentDuelComponent.SigilId,
@@ -316,6 +375,20 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
             return msg;
         }
 
+        var realAttacks = castableDamageSpells.Where(x => !IsNaturalAttack(x)).ToList();
+        if (realAttacks.Count > 0 && realAttacks.Count < castableDamageSpells.Count
+            && _random.NextDouble() >= s_naturalAttackChance) {
+            castableDamageSpells = realAttacks;
+        }
+        else if (realAttacks.Count == 0 && _random.NextDouble() < s_saveUpChance
+                 && SpellEffectFilter.FilterSpellsByOutgoingDamage(_roundHand.m_spellList).Any(x => !IsNaturalAttack(x) && !_currentSubCircle.HasPipsForSpell(x))) {
+            Logger.Debug("Duel {0} | Slot {1} | Only the natural attack is affordable. Saving pips for a bigger attack.",
+                Logger.Args(_currentDuelComponent.SigilId, _currentSubCircle.SlotIndex));
+
+            msg.MoveType = (byte) CombatMoveType.Pass;
+            return msg;
+        }
+
         var targetIdx = GetMostHatedTarget();
         msg.SpellTarget = (byte) targetIdx;
 
@@ -346,16 +419,6 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
             SpellTarget = 0,
         };
 
-        // There's a very low chance that we just pass on a prepare turn.
-        if (_random.NextDouble() < _preparePassChance) {
-            Logger.Debug("Duel {0} | Slot {1} | Preparing, but passing.",
-                Logger.Args(_currentDuelComponent.SigilId, _currentSubCircle.SlotIndex));
-
-            msg.MoveType = (byte) CombatMoveType.Pass;
-            
-            return msg;
-        }
-
         // Healing is the highest priority defensive action.
         if (_isHealingViable && _random.NextDouble() < _healingPercentChance) {
             var healingSpells = GetCastableHealingSpells(_roundHand.m_spellList);
@@ -371,7 +434,9 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         // If we have nothing to prepare with, fall back to attacking.
         // Otherwise damage-only creatures pass every time the aggressiveness RNG fails.
         if (buffSpells.Count == 0 && debuffSpells.Count == 0) {
-            return DetermineAggressiveBehavior();
+            return GetCastableDamageSpells(_roundHand.m_spellList).Count > 0
+                ? DetermineAggressiveBehavior()
+                : DetermineAnyCastableBehavior();
         }
 
         // We have buffs or debuffs available. There's a small chance we pass anyway.
@@ -414,6 +479,40 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         return msg;
     }
 
+    // Nothing to attack, buff or debuff with: cast any other card it can pay for (a shield, a stun, a spell the
+    // filters do not know) before passing. A monster only passes when it cannot pay for anything.
+    private COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE DetermineAnyCastableBehavior() {
+        var msg = new COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE {
+            Actor = Entity.SelfRef,
+            MoveType = (byte) CombatMoveType.Pass,
+            SpellSelection = 0,
+            SpellTarget = 0,
+        };
+
+        // Heals wait for someone hurt (the healing roll above).
+        var heals = GetCastableHealingSpells(_roundHand.m_spellList);
+        var castable = GetCastableSpells(_roundHand.m_spellList)
+            .Where(x => !heals.Contains(x) && CoreObjectFactory.GetCoreTemplate(x.m_templateID) is SpellTemplate)
+            .ToList();
+        if (castable.Count == 0) {
+            var pips = _currentSubCircle.CombatParticipant.m_pipCount;
+            Logger.Debug("Duel {0} | Slot {1} | Nothing castable in a hand of {2} with {3} pips + {4} power. Passing.",
+                Logger.Args(_currentDuelComponent.SigilId, _currentSubCircle.SlotIndex,
+                    _roundHand.m_spellList.Count, pips.m_genericPips, pips.m_powerPips));
+
+            return msg;
+        }
+
+        var selectedSpell = castable[_random.Next(castable.Count)];
+        msg.MoveType = (byte) CombatMoveType.Attack;
+        msg.SpellSelection = (byte) _roundHand.m_spellList.IndexOf(selectedSpell);
+        msg.SpellTarget = SpellEffectFilter.TargetsEnemy(selectedSpell)
+            ? (byte) GetMostHatedTarget()
+            : (uint) _currentSubCircle.SlotIndex;
+
+        return msg;
+    }
+
     private COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE DetermineHealingBehavior() {
         // We've determined that we want to heal. Either us or a teammate.
         var castableHealingSpells = GetCastableHealingSpells(_roundHand.m_spellList);
@@ -440,20 +539,31 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         msg.SpellSelection = (byte) _roundHand.m_spellList.IndexOf(selectedSpell);
 
         // If we're below the healing threshold, and selfish enough, heal ourselves.
-        var selfThresholdMatched = _stats.Stats.m_currentHitpoints / _stats.Stats.m_baseHitpoints < _healingThreshold;
+        // The battle's stats: a boss changed in the app's Bosses tab fights with a copy of the creature's own.
+        var self = _currentSubCircle.ParticipantGameStats ?? _stats.Stats;
+        var selfThresholdMatched = (float) self.m_currentHitpoints / Math.Max(1, self.m_baseHitpoints) < _healingThreshold;
         if (selfThresholdMatched && _determinedSelfishThisTurn) {
             msg.SpellTarget = (uint) _currentSubCircle.SlotIndex;
         }
         else {
             // Otherwise, heal the teammate with the lowest health percentage.
             var lowestHealthTeammate = _friendlySubcircles
-                .OrderBy(x => x.ParticipantGameStats.m_currentHitpoints / x.ParticipantGameStats.m_baseHitpoints)
+                .OrderBy(HealthFraction)
                 .First();
 
             msg.SpellTarget = (byte) (lowestHealthTeammate.SlotIndex + 1);
         }
 
         return msg;
+    }
+
+    // A creature's natural attack: the game names those cards "NA <creature>" (and a few "<name> NA").
+    private static bool IsNaturalAttack(Spell spell) {
+        var name = CoreObjectFactory.GetCoreTemplate(spell.m_templateID) is SpellTemplate template
+            ? (string) template.m_name ?? ""
+            : "";
+
+        return name.StartsWith("NA ", StringComparison.Ordinal) || name.EndsWith(" NA", StringComparison.Ordinal);
     }
 
     private List<Spell> GetCastableSpells(List<Spell> spells) {
@@ -464,6 +574,11 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
             }
 
             castableSpells.Add(spell);
+        }
+
+        // Leave out last round's spell when another card can be cast.
+        if (_avoidRepeatThisTurn && castableSpells.Any(x => x.m_templateID != _lastCastSpellId)) {
+            castableSpells.RemoveAll(x => x.m_templateID == _lastCastSpellId);
         }
 
         return castableSpells;
@@ -494,18 +609,46 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
     }
 
     private void InitiatizeHateTable() {
-        // Create the hate table.
-        int start = (_currentSubCircle.SlotIndex < 3) ? 4 : 0;
-        int end = (_currentSubCircle.SlotIndex < 3) ? _currentDuelComponent.SubCircles.Length : _currentDuelComponent.SubCircles.Length / 2;
+        // Create the hate table from the other side's slots. Monster slots are 0-3, so slot 3 (where an
+        // encounter minion often joins) belongs to the monster side too.
+        var half = _currentDuelComponent.SubCircles.Length / 2;
+        var onMonsterSide = _currentSubCircle.SlotIndex < half;
+        int start = onMonsterSide ? half : 0;
+        int end = onMonsterSide ? _currentDuelComponent.SubCircles.Length : half;
 
+        // Joining a second time (or a late re-add) must not throw on keys already there.
+        _hateTable.Clear();
         for (int i = start; i < end; i++) {
-            _hateTable.Add(i, 0);
+            _hateTable[i] = 0;
         }
 
         // Our initial target will be whomever is across from us. The wrap matters for a summoned
         // minion, which sits in a player slot (4-7): +4 alone would land outside the hate table.
         var targetIdx = (_currentSubCircle.SlotIndex + 4) % _currentDuelComponent.SubCircles.Length;
         UpdateHateTable(targetIdx, 1);
+    }
+
+    /// <summary>
+    /// A "select your targets" spell (Qismah's Curse, the Fusion spells, the tier B AoEs): the monster picks whom it hits,
+    /// as a wizard clicks them (MultiPicks.ForMonster), and sends them as a wizard's game does, one bit for each circle. It
+    /// hit every enemy before (Niduus, 2026-10-26).
+    /// </summary>
+    private COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE WithPicks(COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE move) {
+        if (move.MoveType != (byte) CombatMoveType.Attack
+            || _currentSubCircle.GetSpellFromLastHand((byte) move.SpellSelection) is not { } spell
+            || CoreObjectFactory.GetCoreTemplate(spell.m_templateID) is not SpellTemplate template || !MultiPicks.IsPickSpell(template)) {
+            return move;
+        }
+
+        var picks = MultiPicks.AimMove(move, _currentDuelComponent.SubCircles, _currentSubCircle, template, _determinedSmartThisTurn, _random);
+        if (picks.Count == 0) {
+            return move;
+        }
+
+        Logger.Information("Duel {0} | Slot {1} | Picks {2} for {3}: {4}.", Logger.Args(_currentDuelComponent.SigilId, _currentSubCircle.SlotIndex,
+            picks.Count, (string) template.m_name, string.Join(", ", picks.Select(p => p.SlotIndex))));
+
+        return move;
     }
 
     private int GetMostHatedTarget() {
@@ -528,12 +671,13 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
 
     private void UpdateHateTable(int targetIdx, int hateValue) {
         // Make sure we aren't targeting ourselves.
-        if (targetIdx == _currentSubCircle.SlotIndex) {
+        if (_currentSubCircle is null || targetIdx == _currentSubCircle.SlotIndex) {
             Logger.Error("Creature tried to target itself.");
             return;
         }
 
-        _hateTable[targetIdx] += hateValue;
+        // A caster who joined after the table was built (or a slot we never listed) gets an entry now.
+        _hateTable[targetIdx] = (_hateTable.TryGetValue(targetIdx, out var current) ? current : 0) + hateValue;
     }
 
 }

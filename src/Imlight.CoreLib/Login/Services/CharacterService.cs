@@ -219,6 +219,27 @@ internal class CharacterService(SessionActor parentActor) : MessageService(paren
         return false;
     }
 
+    // The character select rename (m_shouldRename) sends this with an empty name, so it is not used: renaming is the
+    // in-game Change Name or Style window (RenameService). A typed name is still taken if one ever comes.
+    [MessageHandler(typeof(LOGIN_7_PROTOCOL.MSG_CHANGECHARACTERNAME))]
+    private void ReceiveChangeCharacterName(LOGIN_7_PROTOCOL.MSG_CHANGECHARACTERNAME message) {
+        try {
+            var account = GetSocketAccount();
+            var wizard = account.GetCharacter(message.CharID);
+            string newName = message.NewName.ToString();
+            Logger.Information("Rename | Account {0} asks to rename character {1} to \"{2}\" at character select.",
+                Logger.Args(account.Username, message.CharID, newName));
+            if (wizard is not null && !string.IsNullOrWhiteSpace(newName)
+                && WizardRename.TryReadName(wizard, newName, out var nameKeys, out var customName)) {
+                wizard.Rename(nameKeys, customName);
+                ReceiveRequestCharacterList(null);
+            }
+        }
+        catch (Exception ex) {
+            Logger.Error("Rename | Renaming at character select failed. {0}", Logger.Args(ex.Message));
+        }
+    }
+
     [MessageHandler(typeof(LOGIN_7_PROTOCOL.MSG_LOGINLOGCHARACTERCREATION))]
     private void ReceiveLoginLogCharacterCreation(LOGIN_7_PROTOCOL.MSG_LOGINLOGCHARACTERCREATION message) {
         this._characterCreationParameter = message.Parameter;

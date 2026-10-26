@@ -38,19 +38,24 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/09/2026
+ * Last Updated: 10/15/2026
  */
 
 using System;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Housing;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -76,6 +81,40 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
         }
 
         SessionActor.ActorRef.Tell(message);
+    }
+
+    /// <summary>
+    /// Plays a sound on the client using its template ID or sound asset path.
+    /// </summary>
+    /// <param name="soundAsset">The sound asset string.</param>
+    protected void PlaySound(string soundAsset) {
+        if (string.IsNullOrWhiteSpace(soundAsset)) {
+            return;
+        }
+
+        var cleanPath = soundAsset.Contains('|')
+            ? soundAsset.Split('|', StringSplitOptions.RemoveEmptyEntries).Last()
+            : soundAsset;
+
+        if (Path.HasExtension(cleanPath)) {
+            SendToSocket(new GAME_5_PROTOCOL.MSG_PLAYSOUND {
+                SoundFilename = cleanPath
+            });
+            return;
+        }
+
+        if (!uint.TryParse(cleanPath, out var templateId)) {
+            if (!CoreObjectFactory.TryGetCoreTemplateID(x =>
+                x.m_filename.ToString().Contains(cleanPath, StringComparison.OrdinalIgnoreCase), out templateId)) {
+                return;
+            }
+        }
+
+        if (templateId != 0) {
+            SendToSocket(new GAME_5_PROTOCOL.MSG_PLAYSOUND {
+                SoundID = new GID(templateId)
+            });
+        }
     }
 
     /// <summary>
@@ -151,7 +190,7 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
     /// <param name="message"></param>
     /// <typeparam name="T"></typeparam>
     /// <returns></returns>
-    protected T AskOtherService<T>(IServerMessage message)
+    protected T AskOtherService<T>(IServerMessage message, TimeSpan? timeout = null)
         where T : IServerMessage {
         if (SessionActor is null) {
             throw new ActorKilledException($"{this.GetType()} attempted to send message to undefined SessionActor.");
@@ -162,10 +201,20 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
                                 $"Do not do this. Use {nameof(SendToSocket)} instead.");
         }
 
-        var task = SessionActor.HandleInternalAsk<T>(message);
+        var task = SessionActor.HandleInternalAsk<T>(message, timeout);
 
         return task;
     }
+
+    /// <summary>
+    /// Takes an equipped item off the active wizard through the EquipmentService, which also removes its effects
+    /// and dismisses a summoned pet.
+    /// </summary>
+    /// <param name="itemId">The global id of the equipped item.</param>
+    /// <returns>True when the item is no longer equipped.</returns>
+    protected bool UnequipItem(ulong itemId)
+        => AskOtherService<CHARACTER_103_PROTOCOL.MSG_UNEQUIPITEMRSP>(
+            new CHARACTER_103_PROTOCOL.MSG_UNEQUIPITEM { ItemId = itemId }).Success;
 
     /// <summary>
     /// Asks the server the SessionActor is connected to.
@@ -235,6 +284,13 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
 
         var msg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
         var response = AskOtherService<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(msg);
+
+        if (response?.Wizard is null) {
+            Logger.Warning("{0} found no active wizard; skipping the cache.", Logger.Args(GetType().Name));
+
+            return;
+        }
+
         _cachedWizard = response.Wizard;
         _cachedWizardGameObject = response.WizardGameObject;
     }
@@ -258,11 +314,15 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
     /// </summary>
     /// <param name="globalId">The global ID of the WizardZoneObject.</param>
     /// <returns>The WizardZoneObject associated with the specified global ID. Null, if none was found.</returns>
+    private static readonly TimeSpan ZONE_OBJECT_QUERY_TIMEOUT = TimeSpan.FromSeconds(3);
+
     protected ZoneEntity GetZoneObject(ulong globalId) {
         var msg = new ZONE_102_PROTOCOL.MSG_QUERYZONEENTITY {
             GlobalID = globalId
         };
-        var response = AskOtherService<ZONE_102_PROTOCOL.MSG_QUERYZONEENTITYRSP>(msg);
+        // Only the matching object answers, so an unknown id waits for the whole timeout. The session handles nothing
+        // else meanwhile: 20 s of ignored X presses on the hatchery sigils (Niduus, 2026-10-21).
+        var response = AskOtherService<ZONE_102_PROTOCOL.MSG_QUERYZONEENTITYRSP>(msg, ZONE_OBJECT_QUERY_TIMEOUT);
         if (response is null) {
             return null;
         }
@@ -278,14 +338,20 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
     /// <param name="makePrivate">Specifies whether the zone should be private or not. Default is false.</param>
     /// <param name="ownerCharId">The character ID of the owner. Default is self.</param>
     /// <param name="destinationLocation">The location to transfer to. Default is "Start".</param>
+    /// <param name="houseEntry">
+    /// How to ask the client to load the zone when the destination is a house. The transfer is then private to the
+    /// house's owner. A house destination without an entry is refused.
+    /// </param>
     protected void Teleport(string destinationZone,
                             bool doTeleportEffects = true,
                             bool makePrivate = false,
                             ulong ownerCharId = 0,
-                            string destinationLocation = "") {
+                            string destinationLocation = "",
+                            HouseEntry houseEntry = null) {
         // If the destination location is nothing, default it to "Start."
         var location = destinationLocation == "" ? "Start" : destinationLocation;
-        var ownerId = ownerCharId == 0 ? GetActiveWizard().CharId : ownerCharId;
+        var ownerId = houseEntry?.OwnerCharId ?? (ownerCharId == 0 ? GetActiveWizard().CharId : ownerCharId);
+        var isPrivate = makePrivate || houseEntry is not null;
 
         if (doTeleportEffects) {
             var teleportEffectsMsg = new CHARACTER_103_PROTOCOL.MSG_DOTELEPORTEFFECTS();
@@ -297,8 +363,9 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
             var delayMsg = new SERVICE_101_PROTOCOL.MSG_TELEPORT_DELAY {
                 DestinationZone = destinationZone,
                 DestinationLocation = location,
-                MakePrivate = makePrivate,
-                OwnerCharId = ownerId
+                MakePrivate = isPrivate,
+                OwnerCharId = ownerId,
+                HouseEntry = houseEntry
             };
             Timers.StartSingleTimer("teleport-delay", delayMsg, TimeSpan.FromSeconds(2));
 
@@ -306,22 +373,23 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
         }
 
         // No effects — transfer immediately.
-        DoTeleport(destinationZone, location, makePrivate, ownerId);
+        DoTeleport(destinationZone, location, isPrivate, ownerId, houseEntry);
     }
 
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_TELEPORT_DELAY))]
     protected void OnTeleportDelay(SERVICE_101_PROTOCOL.MSG_TELEPORT_DELAY msg) {
-        DoTeleport(msg.DestinationZone, msg.DestinationLocation, msg.MakePrivate, msg.OwnerCharId);
+        DoTeleport(msg.DestinationZone, msg.DestinationLocation, msg.MakePrivate, msg.OwnerCharId, msg.HouseEntry);
     }
 
     private void DoTeleport(string destinationZone, string destinationLocation,
-                            bool makePrivate, ulong ownerCharId) {
+                            bool makePrivate, ulong ownerCharId, HouseEntry houseEntry) {
         var zoneTransfer = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
             DestinationLocation = destinationLocation,
             DestinationZone = destinationZone,
             SendToClient = true,
             IsPrivate = makePrivate,
-            OwnerCharId = ownerCharId
+            OwnerCharId = ownerCharId,
+            HouseEntry = houseEntry
         };
         TellOtherServices(zoneTransfer);
     }
@@ -355,6 +423,19 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
             Message = reason,
             Modal = (byte) (isImportant ? 1 : 0)
         });
+
+    /// <summary>
+    /// Tells a player why they cannot teleport to a friend or group mate, in a box: "Your friend is busy right now."
+    /// and the reason (Niduus, 2026-10-26). The words are on the Manager's Announcements tab (group "Teleport to a
+    /// friend"). No MSG_GOTOPLAYERRESP with an error is sent: the game shows that as an empty box.
+    /// </summary>
+    /// <param name="reasonKey">The reason's line, such as "friend.busy.dungeon".</param>
+    protected void RefuseGoTo(string reasonKey) {
+        var reason = Game.Tools.Announcements.Text(reasonKey) ?? "";
+        if (Game.Tools.Announcements.Text("friend.busy", ("reason", reason)) is { } box) {
+            InformGameClient(box.Trim(), isImportant: true);
+        }
+    }
 
     protected override void PreRestart(Exception reason, object message) {
         Logger.Error("MessageService {ServiceName} restarting due to {Reason}",

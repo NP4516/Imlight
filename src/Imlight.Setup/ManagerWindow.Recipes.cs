@@ -1,0 +1,734 @@
+/*
+ * Imlight
+ * Copyright (C) 2025 Revive101
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
+
+namespace Imlight.Setup;
+
+/// <summary>
+/// The Recipes tab (Niduus, 2026-10-24: "make a recipe vendor and recipe browser in manager"): every recipe of the
+/// game, searchable and filtered by crafting station and school. Clicking one shows what it needs, what it makes, where
+/// it is crafted and its cooldown, with buttons that teach it to the wizard playing here, and that put it (or every
+/// recipe shown) in a recipe vendor of the Customs tab.
+/// </summary>
+internal sealed partial class ManagerWindow {
+
+    private DetailsPopup? _recipePopup;
+
+    private const string ALL_STATIONS = "All stations";
+    private const string ANY_RECIPE_SCHOOL = "Any school";
+
+    /// <summary>The most recipes one vendor gets from Make a recipe vendor, as the server's presets split them.</summary>
+    private const int RECIPE_VENDOR_SIZE = 100;
+
+    private readonly TextBox _recipeSearch = new() { Watermark = "Search a recipe, what it makes or needs, such as Elixir, Amber or 12345" };
+    private readonly ComboBox _recipeStation = new() { MinWidth = 220 };
+    private readonly ComboBox _recipeSchool = new() { MinWidth = 140 };
+    private readonly CheckBox _recipeNoStation = new() { Content = "Recipes of no crafting station" };
+    private readonly CheckBox _recipeChangedOnly = new() { Content = "Only recipes I changed" };
+    // Niduus, 2026-10-25: every detail of a recipe to filter by, like the Gear tab's filters.
+    private static readonly string[] s_recipeMakes = [ANY_FILTER, "Treasure card", "Gear", "Other item", "Nothing"];
+    private static readonly string[] s_recipeSorts = [
+        "Best match", "Name", "Cooldown (short first)", "Cooldown (long first)", "Gold cost (low first)", "Gold cost (high first)",
+        "Fewest ingredients", "Most ingredients", "Template ID",
+    ];
+    private readonly ComboBox _recipeCategory = FilterCombo([ANY_FILTER], 160);
+    private readonly ComboBox _recipeMakes = FilterCombo(s_recipeMakes, 140);
+    private readonly ComboBox _recipeMakesSlot = FilterCombo([ANY_FILTER], 130);
+    private readonly ComboBox _recipeNeedsKind = FilterCombo([ANY_FILTER], 150);
+    private readonly TextBox _recipeNeedsName = new() { Watermark = "Such as Amber", Width = 160 };
+    private readonly NumericUpDown _recipeIngredientsMin = FilterNumber(1);
+    private readonly NumericUpDown _recipeIngredientsMax = FilterNumber(1);
+    private readonly NumericUpDown _recipeCooldownMin = FilterNumber(5, 120);
+    private readonly NumericUpDown _recipeCooldownMax = FilterNumber(5, 120);
+    private readonly NumericUpDown _recipeGoldMin = FilterNumber(100, 130);
+    private readonly NumericUpDown _recipeGoldMax = FilterNumber(100, 130);
+    private readonly CheckBox _recipeCrowns = new() { Content = "Costs Crowns" };
+    private readonly ComboBox _recipeSort = FilterCombo(s_recipeSorts, 170);
+    private HashSet<uint> _recipeChanged = [];
+    private readonly TextBlock _recipeCount = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly ListBox _recipeList = new() { Background = Brushes.Transparent };
+    private readonly StackPanel _recipeDetails = new() { Spacing = 6 };
+    private readonly DispatcherTimer _recipeDelay = new() { Interval = TimeSpan.FromMilliseconds(220) };
+
+    private RecipeBook? _recipeBook;
+    private string? _recipeProblem;
+    private Task? _recipeLoading;
+    private Recipe? _recipePicked;
+    private List<Recipe> _recipesShown = [];
+    private bool _recipeFiltersFilled;
+
+    private Control RecipesTab() {
+        _recipeDelay.Tick += (_, _) => {
+            _recipeDelay.Stop();
+            RenderRecipesTab();
+        };
+        _recipeSearch.TextChanged += (_, _) => {
+            _recipeDelay.Stop();
+            _recipeDelay.Start();
+        };
+        foreach (var box in new[] { _recipeStation, _recipeSchool }) {
+            box.SelectionChanged += (_, e) => {
+                if (e.Source == box) {
+                    RenderRecipesTab();
+                }
+            };
+        }
+
+        _recipeNoStation.IsCheckedChanged += (_, _) => RenderRecipesTab();
+        _recipeChangedOnly.IsCheckedChanged += (_, _) => RenderRecipesTab();
+        _recipeList.ItemTemplate = new FuncDataTemplate<Recipe>((recipe, _) => recipe is null ? new Panel() : RecipeRow(recipe));
+        _recipeList.SelectionChanged += (_, e) => {
+            if (e.Source == _recipeList && _recipeList.SelectedItem is Recipe recipe && recipe != _recipePicked) {
+                ShowRecipe(recipe);
+            }
+        };
+
+        Control Labelled(string label, Control box) => new StackPanel {
+            Spacing = 2, Margin = new Thickness(0, 0, 10, 6),
+            Children = { new TextBlock { Text = label, Foreground = MUTED, FontSize = 12 }, box },
+        };
+
+        WhenFiltersChange(RenderRecipesTab, _recipeCategory, _recipeMakes, _recipeMakesSlot, _recipeNeedsKind, _recipeNeedsName,
+            _recipeIngredientsMin, _recipeIngredientsMax, _recipeCooldownMin, _recipeCooldownMax, _recipeGoldMin, _recipeGoldMax,
+            _recipeCrowns, _recipeSort);
+        var filters = SearchFilters(
+                Labelled("Crafting station", _recipeStation),
+                Labelled("School", _recipeSchool),
+                Labelled("Category", _recipeCategory),
+                Labelled("Makes", _recipeMakes),
+                Labelled("Gear slot it makes", _recipeMakesSlot),
+                Labelled("Needs an ingredient", _recipeNeedsName),
+                Labelled("Needs a kind of ingredient", _recipeNeedsKind),
+                Labelled("Ingredients from", _recipeIngredientsMin),
+                Labelled("Ingredients to", _recipeIngredientsMax),
+                Labelled("Cooldown from (minutes)", _recipeCooldownMin),
+                Labelled("Cooldown to (minutes)", _recipeCooldownMax),
+                Labelled("Gold cost from", _recipeGoldMin),
+                Labelled("Gold cost to", _recipeGoldMax),
+                Labelled("Sort by", _recipeSort),
+                WithMargin(_recipeCrowns, new Thickness(4, 18, 0, 6)),
+                WithMargin(_recipeNoStation, new Thickness(14, 18, 0, 6)),
+                WithMargin(_recipeChangedOnly, new Thickness(14, 18, 0, 6)));
+        var vendor = WithHint(Row(
+                Action(Primary("Make a recipe vendor here"), MakeRecipeVendorAsync),
+                Action(Plain("Open my crafting window"), () => {
+                    _manager.SendCommand(".craft");
+                    Say("Sent .craft. The crafting window opens in the game with every recipe your wizard knows.");
+
+                    return Task.CompletedTask;
+                })),
+            $"Stand where the vendor should go in the game, then press Make a recipe vendor here: it sells the recipes the list " +
+            $"shows (the first {RECIPE_VENDOR_SIZE}), each for its usual gold. It is a vendor of the Customs tab, so you can rename it, " +
+            "move it, change prices or delete it there. Players press X near it and buy a recipe to learn it.");
+        var details = new ScrollViewer { Width = 600, Content = _recipeDetails };
+        _recipePopup = new DetailsPopup("Recipe details", details, () => { _recipeList.SelectedItem = null; ShowRecipe(null); }, by => StepList(_recipeList, by));
+        var root = new Panel {
+            Children = {
+                new DockPanel {
+                    Margin = new Thickness(18, 10, 18, 14),
+                    Children = {
+                        WithDock(Card(new StackPanel {
+                            Spacing = 10,
+                            Children = {
+                                MissingNote("the .recipe and .craft commands are " + ServerSource.DefaultName + "'s.", () => !_manager.HasRecipeCommands),
+                                WithHint(_recipeSearch, "Search by the recipe's name, what it makes, an ingredient, or its template ID. Click a recipe to see " +
+                                    "its ingredients, the station it is crafted at and its cooldown. Learn on my wizard teaches it to the wizard you play here."),
+                                filters, vendor, _recipeCount,
+                            },
+                        }), Dock.Top),
+                        WithMargin(_recipeList, new Thickness(0, 12, 0, 0)),
+                    },
+                },
+                _recipePopup,
+            },
+        };
+        ShowRecipe(null);
+
+        // The tab reads the game's recipes the first time it is opened.
+        root.AttachedToVisualTree += (_, _) => _ = Guard(LoadRecipesTabAsync);
+
+        return root;
+    }
+
+    private Task LoadRecipesTabAsync() {
+        if (_recipeBook is not null || _recipeProblem is not null) {
+            RenderRecipesTab();
+
+            return Task.CompletedTask;
+        }
+
+        return _recipeLoading ??= LoadAsync();
+
+        async Task LoadAsync() {
+            _recipeCount.Text = "Reading the recipes from your game files…";
+            try {
+                // The spells come first: treasure card recipes are named from them.
+                if (_spellBook is null) {
+                    await LoadSpellsTabAsync();
+                }
+
+                if (_spellBook is not { } book) {
+                    throw new PanelException(_spellBookProblem ?? "Wizard101's game files could not be found, so the recipes can't be shown.");
+                }
+
+                var recipes = await Task.Run(() => RecipeBook.Load(book));
+                _recipeBook ??= recipes;
+                RenderRecipesTab();
+
+                // The gear, for what a recipe makes as the game's item tooltip (the Gear tab's).
+                if (_gearBook is null) {
+                    try {
+                        _gearBook ??= await Task.Run(() => GearBook.Load(book));
+                    }
+                    catch (Exception) {
+                        // The recipe shows without the tooltip.
+                    }
+                }
+
+                if (_recipePicked is { } picked) {
+                    ShowRecipe(picked);
+                }
+            }
+            catch (Exception ex) {
+                _recipeProblem ??= ex is PanelException ? ex.Message : $"The recipes could not be read from the game files: {ex.Message}";
+            }
+            finally {
+                _recipeLoading = null;
+            }
+
+            RenderRecipesTab();
+        }
+    }
+
+    private void FillRecipeFilters(RecipeBook book) {
+        if (_recipeFiltersFilled) {
+            return;
+        }
+
+        _recipeFiltersFilled = true;
+        var stations = RecipeBook.STATIONS.Values.Where(s => book.Recipes.Any(r => r.Stations.Contains(s))).ToList();
+        _recipeStation.ItemsSource = new[] { ALL_STATIONS }.Concat(stations).ToList();
+        _recipeStation.SelectedIndex = 0;
+        string[] mainSchools = ["Fire", "Ice", "Storm", "Myth", "Life", "Death", "Balance"];
+        var schools = book.Recipes.Select(r => r.School).Where(s => s.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => Array.IndexOf(mainSchools, s) is var i and >= 0 ? i : 100).ThenBy(s => s, StringComparer.OrdinalIgnoreCase);
+        _recipeSchool.ItemsSource = new[] { ANY_RECIPE_SCHOOL }.Concat(schools).ToList();
+        _recipeSchool.SelectedIndex = 0;
+        FillFilterCombo(_recipeCategory, book.Recipes.Select(r => r.Category).OrderBy(c => c, StringComparer.OrdinalIgnoreCase));
+        FillFilterCombo(_recipeNeedsKind, book.Recipes.SelectMany(r => r.Ingredients).Select(i => i.Kind).OrderBy(k => k, StringComparer.OrdinalIgnoreCase));
+        FillFilterCombo(_recipeMakesSlot, GearBook.SLOTS);
+    }
+
+    /// <summary>What a recipe makes, as the Makes filter names it.</summary>
+    private string RecipeMakes(Recipe recipe)
+        => recipe.MakesSpell.Length > 0 ? "Treasure card"
+            : recipe.MakesId == 0 ? "Nothing"
+            : _gearBook?.Item(recipe.MakesId) is not null ? "Gear" : "Other item";
+
+    private void RenderRecipesTab() {
+        if (_recipeBook is not { } book) {
+            _recipeCount.Text = _recipeProblem ?? "Reading the recipes from your game files…";
+            _recipeList.ItemsSource = null;
+
+            return;
+        }
+
+        FillRecipeFilters(book);
+        var query = (_recipeSearch.Text ?? "").Trim();
+        var words = SearchText.Words(query);
+        var id = uint.TryParse(query, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : (uint?) null;
+        var station = _recipeStation.SelectedItem as string ?? ALL_STATIONS;
+        var school = _recipeSchool.SelectedItem as string ?? ANY_RECIPE_SCHOOL;
+        var noStation = _recipeNoStation.IsChecked == true;
+        var changedOnly = _recipeChangedOnly.IsChecked == true;
+        var category = FilterPick(_recipeCategory);
+        var makes = FilterPick(_recipeMakes);
+        var slot = FilterPick(_recipeMakesSlot);
+        var needsKind = FilterPick(_recipeNeedsKind);
+        var needsName = SearchText.Words(_recipeNeedsName.Text);
+        var crowns = _recipeCrowns.IsChecked == true;
+        _recipeChanged = [.. SafeRecipeChanges().Select(c => c.Id)];
+
+        _recipesShown = [.. book.Recipes.Where(r =>
+                (r.Id == id || words.All(r.Haystack.Contains))
+                // The game's other recipes (spellements, idols, jewel trades) are no station's; they show when asked for.
+                // A search finds them too (Niduus, 2026-10-25: the Fortune Coin Gold Skeleton Key is no station's).
+                && (noStation || changedOnly || words.Length > 0 || r.Stations.Count > 0 || r.Id == id)
+                && (!changedOnly || _recipeChanged.Contains(r.Id))
+                && (station == ALL_STATIONS || r.Stations.Contains(station))
+                && (school == ANY_RECIPE_SCHOOL || r.School.Equals(school, StringComparison.OrdinalIgnoreCase))
+                && (category is null || r.Category.Equals(category, StringComparison.OrdinalIgnoreCase))
+                && (makes is null || RecipeMakes(r) == makes)
+                && (slot is null || (_gearBook?.Item(r.MakesId) is { } made && made.Slot == slot))
+                && (needsKind is null || r.Ingredients.Any(i => i.Kind == needsKind))
+                && (needsName.Length == 0 || r.Ingredients.Any(i => needsName.All(SearchText.Normalize(i.Name).Contains)))
+                && InFilterRange(r.Ingredients.Count, _recipeIngredientsMin, _recipeIngredientsMax)
+                && (_recipeCooldownMin.Value is not { } least || r.Cooldown >= least * 60)
+                && (_recipeCooldownMax.Value is not { } most || r.Cooldown <= most * 60)
+                && InFilterRange(r.GoldCost, _recipeGoldMin, _recipeGoldMax)
+                && (!crowns || r.CrownsCost > 0))
+            .OrderBy(r => _recipeSort.SelectedIndex switch {
+                2 => r.Cooldown,
+                3 => -r.Cooldown,
+                4 => r.GoldCost,
+                5 => -r.GoldCost,
+                6 => r.Ingredients.Count,
+                7 => -r.Ingredients.Count,
+                8 => r.Id,
+                _ => 0L,
+            })
+            .ThenBy(r => _recipeSort.SelectedIndex == 0 && !(r.Name.Equals(query, StringComparison.OrdinalIgnoreCase) || r.Id == id))
+            .ThenBy(r => _recipeSort.SelectedIndex == 0 && query.Length > 0 && !r.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.Id)];
+
+        _recipeList.ItemsSource = _recipesShown;
+        _recipeCount.Text = book.Recipes.Count == 0
+            ? $"No recipes could be read from your game files ({book.FileCount:N0} recipe files of {book.TemplateCount:N0} templates). " +
+              (book.Problems.Length > 0 ? $"What went wrong: {book.Problems}. " : "") + "Send Claude a screenshot of this."
+            : _recipesShown.Count == 0
+            ? "Nothing matches. Clear the search or pick \"All\" in the filters."
+            : $"{_recipesShown.Count:N0} of {book.Recipes.Count:N0} recipes. Click one to see what it needs and makes.";
+        if (_recipePicked is not null && _recipesShown.Contains(_recipePicked)) {
+            _recipeList.SelectedItem = _recipePicked;
+        }
+        else if (_recipesShown.Count > 0 && query.Length > 0) {
+            _recipeList.SelectedItem = _recipesShown[0];
+        }
+    }
+
+    /// <summary>One recipe in the list: its picture, its name, and its station, cooldown and ID underneath.</summary>
+    private Control RecipeRow(Recipe recipe) {
+        var line = $"{recipe.Station}  ·  {RecipeBook.Time(recipe.Cooldown)}  ·  ID {recipe.Id}" + (_recipeChanged.Contains(recipe.Id) ? "  ·  Changed" : "");
+
+        return new DockPanel {
+            Margin = new Thickness(2, 3),
+            Children = {
+                WithDock(WithMargin(RecipeIcon(recipe.MakesId, recipe.MakesFile, recipe.MakesSpell, 30), new Thickness(0, 0, 10, 0)), Dock.Left),
+                new StackPanel {
+                    Children = {
+                        new TextBlock { Text = recipe.Name, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis },
+                        new TextBlock { Text = line, FontSize = 12, Foreground = MUTED, TextTrimming = TextTrimming.CharacterEllipsis },
+                    },
+                },
+            },
+        };
+    }
+
+    /// <summary>The game's picture of what a recipe makes or needs: an item's icon or a card, or a flask until it is found.</summary>
+    private Control RecipeIcon(uint id, string file, string spell, double size) {
+        if (spell.Length > 0 && _recipeBook?.Spell(spell) is { } card) {
+            return new Border { Width = size, Height = size, Child = SpellThumb(card.Id, card.School, size * 0.72) };
+        }
+
+        var host = new Border { Width = size, Height = size, CornerRadius = new CornerRadius(6), ClipToBounds = true };
+        host.Child = ManagerTheme.Tile("flask", ManagerTheme.Accent("Recipes"), size);
+        if (id == 0 || file.Length == 0 || _spellBook is not { } book) {
+            return host;
+        }
+
+        var key = id.ToString(CultureInfo.InvariantCulture);
+        if (_itemIcons.TryGetValue(key, out var cached)) {
+            if (cached is not null) {
+                host.Child = new Image { Source = cached, Stretch = Stretch.Uniform };
+            }
+
+            return host;
+        }
+
+        _ = Task.Run(() => book.ItemIcon(file)).ContinueWith(t => Dispatcher.UIThread.Post(() => {
+            var bitmap = t.Status == TaskStatus.RanToCompletion && t.Result is { } image ? ToBitmap(image) : null;
+            _itemIcons[key] = bitmap;
+            if (bitmap is not null) {
+                host.Child = new Image { Source = bitmap, Stretch = Stretch.Uniform };
+            }
+        }), TaskScheduler.Default);
+
+        return host;
+    }
+
+    // ---------------------------------------------------------------------
+    // One recipe
+    // ---------------------------------------------------------------------
+
+    private void ShowRecipe(Recipe? recipe) {
+        _recipePopup?.ShowFor(_recipeList, recipe);
+
+        _recipePicked = recipe;
+        _recipeDetails.Children.Clear();
+        if (recipe is null || _recipeBook is null) {
+            _recipeDetails.Children.Add(Sub(_recipeProblem ?? "Click a recipe to see what it needs, what it makes and where it is crafted."));
+
+            return;
+        }
+
+        _recipeDetails.Children.Add(new DockPanel {
+            Children = {
+                WithDock(WithMargin(RecipeIcon(recipe.MakesId, recipe.MakesFile, recipe.MakesSpell, 48), new Thickness(0, 0, 12, 0)), Dock.Left),
+                new StackPanel {
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Children = {
+                        new SelectableTextBlock { Text = recipe.Name, FontSize = 18, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap },
+                        Sub(recipe.Makes.Length > 0 ? $"Makes {recipe.Makes}" : "Makes nothing the app can name"),
+                    },
+                },
+            },
+        });
+
+        // What it makes as the game shows it: the item's tooltip (as on the Gear tab) or the card (as on the Spells tab).
+        if (recipe.MakesId > 0 && _gearBook?.Item(recipe.MakesId) is { } made && _spellBook is { } spells) {
+            var tooltip = GearTooltip(_gearBook, spells, made);
+            tooltip.HorizontalAlignment = HorizontalAlignment.Center;
+            _recipeDetails.Children.Add(tooltip);
+        }
+        else if (_recipeBook.Spell(recipe.MakesSpell) is { } card) {
+            _recipeDetails.Children.Add(CardRow([card], 118));
+        }
+
+        var id = recipe.Id.ToString(CultureInfo.InvariantCulture);
+        _recipeDetails.Children.Add(new DockPanel {
+            Children = {
+                WithDock(WithCenter(Action(Plain("Copy"), () => CopyAsync(id))), Dock.Right),
+                WithCenter(new SelectableTextBlock { Text = $"Template ID {id}", FontFamily = MONO, Foreground = GOOD }),
+            },
+        });
+        _recipeDetails.Children.Add(new WrapPanel {
+            Children = {
+                Spaced(Action(Primary("Learn on my wizard"), () => {
+                    _manager.SendCommand(recipe.LearnCommand);
+                    Say($"Sent {recipe.LearnCommand} ({recipe.Name}). It is in your spellbook's Recipes page in the game now; type .craft to craft it anywhere.");
+
+                    return Task.CompletedTask;
+                })),
+                Spaced(Action(Plain("Copy command"), () => CopyAsync(recipe.LearnCommand))),
+            },
+        });
+        _recipeDetails.Children.Add(AddToVendorRow(recipe));
+        _recipeDetails.Children.Add(WithMargin(new Border { Height = 1, Background = LINE }, new Thickness(0, 4, 0, 6)));
+
+        _recipeDetails.Children.Add(new TextBlock { Text = "Needs", FontWeight = FontWeight.SemiBold });
+        if (recipe.Ingredients.Count == 0) {
+            _recipeDetails.Children.Add(Sub("Nothing."));
+        }
+
+        // Niduus (2026-10-25): "add config/section for crafting recipes". Each amount, the cooldown and the price can be
+        // changed here; empty keeps the game's (RecipeChanges.json, read by the server at once).
+        var change = SafeRecipeChanges().FirstOrDefault(c => c.Id == recipe.Id) ?? new RecipeChange { Id = recipe.Id };
+        var amountBoxes = new List<(RecipeIngredient Ingredient, TextBox Box, TextBox Swap)>();
+        foreach (var ingredient in recipe.Ingredients) {
+            var set = ingredient.Index < change.Amounts.Count ? change.Amounts[ingredient.Index] : null;
+            var amount = new TextBox {
+                Width = 70, Watermark = ingredient.Quantity.ToString(CultureInfo.InvariantCulture),
+                Text = set?.ToString(CultureInfo.InvariantCulture) ?? "",
+            };
+            ToolTip.SetTip(amount, $"How many one craft takes. The game's is {ingredient.Quantity}; leave it empty to keep that, 0 takes it out.");
+            var swapped = ingredient.Index < change.Swaps.Count ? change.Swaps[ingredient.Index] : null;
+            var swap = IdBox("same", swapped);
+            ToolTip.SetTip(swap, "Another item, reagent, snack or treasure card (its ID) to take in this one's place. Empty keeps this one.");
+            amountBoxes.Add((ingredient, amount, swap));
+            _recipeDetails.Children.Add(new DockPanel {
+                Children = {
+                    WithDock(WithMargin(RecipeIcon(ingredient.Id, ingredient.File, ingredient.Spell, 28), new Thickness(0, 0, 10, 0)), Dock.Left),
+                    WithDock(Row(WithCenter(new TextBlock { Text = "or", Foreground = MUTED }), swap, FindIdButton(swap),
+                        WithCenter(new TextBlock { Text = "x", Foreground = MUTED }), amount), Dock.Right),
+                    new StackPanel {
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Children = {
+                            new SelectableTextBlock { Text = ingredient.Name, TextWrapping = TextWrapping.Wrap },
+                            new TextBlock { Text = (ingredient.Id > 0 ? $"{ingredient.Kind}  ·  ID {ingredient.Id}" : ingredient.Kind)
+                                + (swapped is { } other ? $"  ·  now {_recipeBook?.NameOf(other) ?? other.ToString(CultureInfo.InvariantCulture)}" : ""), FontSize = 12, Foreground = MUTED,
+                                TextWrapping = TextWrapping.Wrap },
+                        },
+                    },
+                },
+            });
+        }
+
+        var cooldown = new TextBox {
+            Width = 90, Watermark = (recipe.Cooldown / 60.0).ToString("0.##", CultureInfo.InvariantCulture),
+            Text = change.Cooldown is { } seconds ? (seconds / 60.0).ToString("0.##", CultureInfo.InvariantCulture) : "",
+        };
+        var gold = new TextBox {
+            Width = 90, Watermark = recipe.GoldCost.ToString(CultureInfo.InvariantCulture),
+            Text = change.GoldCost?.ToString(CultureInfo.InvariantCulture) ?? "",
+        };
+        _recipeDetails.Children.Add(Row(WithCenter(new TextBlock { Text = "Cooldown (minutes)", Width = 150, Foreground = MUTED }), cooldown));
+        _recipeDetails.Children.Add(Row(WithCenter(new TextBlock { Text = "Shop price (gold)", Width = 150, Foreground = MUTED }), gold));
+
+        // Ingredients the game's recipe does not have.
+        var extraRows = new StackPanel { Spacing = 4 };
+        var extras = new List<(TextBox Id, TextBox Amount, Control Row)>();
+        void AddExtra(RecipeChangeExtra? extra) {
+            var idBox = IdBox("item or card ID", extra?.Id);
+            var amountBox = new TextBox { Width = 70, Watermark = "1", Text = extra?.Amount.ToString(CultureInfo.InvariantCulture) ?? "" };
+            var label = new TextBlock { Foreground = MUTED, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 140,
+                Text = extra is null ? "" : _recipeBook?.NameOf(extra.Id) ?? "" };
+            Control row = null!;
+            row = Row(idBox, FindIdButton(idBox), WithCenter(new TextBlock { Text = "x", Foreground = MUTED }), amountBox, label,
+                Danger(Action(Plain("Remove"), () => {
+                    extraRows.Children.Remove(row);
+                    extras.RemoveAll(e => e.Row == row);
+
+                    return Task.CompletedTask;
+                })));
+            extras.Add((idBox, amountBox, row));
+            extraRows.Children.Add(row);
+        }
+
+        foreach (var extra in change.Extras) {
+            AddExtra(extra);
+        }
+
+        _recipeDetails.Children.Add(new TextBlock { Text = "Added ingredients", Foreground = MUTED });
+        _recipeDetails.Children.Add(extraRows);
+        _recipeDetails.Children.Add(Action(Plain("Add an ingredient"), () => {
+            AddExtra(null);
+
+            return Task.CompletedTask;
+        }));
+
+        var makesId = IdBox(recipe.MakesId > 0 ? recipe.MakesId.ToString(CultureInfo.InvariantCulture) : "the game's", change.MakesId);
+        var makesCount = new TextBox { Width = 90, Watermark = "1", Text = change.MakesCount?.ToString(CultureInfo.InvariantCulture) ?? "" };
+        var level = new TextBox { Width = 90, Watermark = "any", Text = change.LevelNeeded?.ToString(CultureInfo.InvariantCulture) ?? "" };
+        var disabled = new CheckBox { Content = "Turned off: nobody can craft or buy it", IsChecked = change.Disabled };
+        _recipeDetails.Children.Add(Row(WithCenter(new TextBlock { Text = "Makes instead (ID)", Width = 150, Foreground = MUTED }), makesId, FindIdButton(makesId),
+            WithCenter(new TextBlock { Text = change.MakesId is { } makesNow ? _recipeBook?.NameOf(makesNow) ?? "" : "", Foreground = MUTED })));
+        _recipeDetails.Children.Add(Row(WithCenter(new TextBlock { Text = "How many per craft", Width = 150, Foreground = MUTED }), makesCount));
+        _recipeDetails.Children.Add(Row(WithCenter(new TextBlock { Text = "Level needed", Width = 150, Foreground = MUTED }), level));
+        _recipeDetails.Children.Add(disabled);
+        _recipeDetails.Children.Add(Sub("Type a new value to change it; an empty box keeps the game's (shown faintly). An amount of 0 takes " +
+            "an ingredient out, and an ID in its \"or\" box takes another item or card in its place. Find looks an ID up by name. " +
+            "The server uses every change at once. The game's crafting window still shows the game's own recipe and may grey out " +
+            "Create; Craft one now (or .recipe make in chat) crafts with yours."));
+        _recipeDetails.Children.Add(new WrapPanel {
+            Children = {
+                Spaced(Action(Primary("Save changes"), () => {
+                    static uint? Id(TextBox box, string what) {
+                        var text = (box.Text ?? "").Trim();
+                        if (text.Length == 0) {
+                            return null;
+                        }
+
+                        return uint.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n > 0
+                            ? n : throw new PanelException($"{what} must be a template ID (a number, the Lookup tab finds it), or empty.");
+                    }
+
+                    static int? Number(TextBox box, string what) {
+                        var text = (box.Text ?? "").Trim();
+                        if (text.Length == 0) {
+                            return null;
+                        }
+
+                        return int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n >= 0
+                            ? n : throw new PanelException($"{what} must be a whole number, or empty to keep the game's.");
+                    }
+
+                    var saved = new RecipeChange { Id = recipe.Id, Name = recipe.Name };
+                    var count = recipe.Ingredients.Count == 0 ? 0 : recipe.Ingredients.Max(i => i.Index) + 1;
+                    saved.Amounts = [.. Enumerable.Repeat<int?>(null, count)];
+                    saved.Swaps = [.. Enumerable.Repeat<uint?>(null, count)];
+                    foreach (var (ingredient, box, swapBox) in amountBoxes) {
+                        saved.Amounts[ingredient.Index] = Number(box, $"The amount of {ingredient.Name}");
+                        saved.Swaps[ingredient.Index] = Id(swapBox, $"The ID in place of {ingredient.Name}");
+                    }
+
+                    if (saved.Swaps.All(x => x is null)) {
+                        saved.Swaps = [];
+                    }
+
+                    foreach (var (idBox, amountBox, _) in extras) {
+                        if (Id(idBox, "An added ingredient's ID") is { } extraId) {
+                            saved.Extras.Add(new RecipeChangeExtra { Id = extraId, Amount = Math.Max(1, Number(amountBox, "An added ingredient's amount") ?? 1) });
+                        }
+                    }
+
+                    saved.MakesId = Id(makesId, "Makes instead");
+                    saved.MakesCount = Number(makesCount, "How many per craft") is { } per ? Math.Max(1, per) : null;
+                    saved.LevelNeeded = Number(level, "Level needed");
+                    saved.Disabled = disabled.IsChecked == true;
+
+                    var minutes = (cooldown.Text ?? "").Trim();
+                    if (minutes.Length > 0) {
+                        saved.Cooldown = double.TryParse(minutes, NumberStyles.Float, CultureInfo.InvariantCulture, out var m) && m >= 0
+                            ? (int) Math.Round(m * 60) : throw new PanelException("The cooldown must be a number of minutes, or empty to keep the game's.");
+                    }
+
+                    saved.GoldCost = Number(gold, "The shop price");
+                    RecipeChange.Set(_manager.CustomsFolder, saved);
+                    RenderRecipesTab();
+                    ShowRecipe(recipe);
+                    Say(saved.Empty ? $"{recipe.Name} is back to the game's amounts." : $"Saved {recipe.Name}'s changes. The server uses them at once.");
+
+                    return Task.CompletedTask;
+                })),
+                Spaced(Action(Plain("Use the game's amounts"), () => {
+                    RecipeChange.Set(_manager.CustomsFolder, new RecipeChange { Id = recipe.Id });
+                    RenderRecipesTab();
+                    ShowRecipe(recipe);
+                    Say($"{recipe.Name} is back to the game's amounts, cooldown and price.");
+
+                    return Task.CompletedTask;
+                })),
+                Spaced(Action(Plain("Craft one now"), () => {
+                    var command = $".recipe make {recipe.Id}";
+                    _manager.SendCommand(command);
+                    Say($"Sent {command}. The game says in chat what was made, or what is missing.");
+
+                    return Task.CompletedTask;
+                })),
+            },
+        });
+
+        _recipeDetails.Children.Add(WithMargin(new Border { Height = 1, Background = LINE }, new Thickness(0, 6, 0, 6)));
+
+        void Fact(string label, string value) {
+            if (value.Length > 0) {
+                _recipeDetails.Children.Add(new DockPanel {
+                    Children = {
+                        WithDock(new TextBlock { Text = label, Width = 110, Foreground = MUTED }, Dock.Left),
+                        new SelectableTextBlock { Text = value, TextWrapping = TextWrapping.Wrap },
+                    },
+                });
+            }
+        }
+
+        Fact("Crafted at", recipe.Station);
+        Fact("Cooldown", RecipeBook.Time(change.Cooldown ?? recipe.Cooldown) + (change.Cooldown is not null ? " (changed)" : "") +
+            ((change.Cooldown ?? recipe.Cooldown) > 0 ? " before the server's [Crafting] CooldownMultiplier" : ""));
+        Fact("Makes", recipe.MakesId > 0 ? $"{recipe.Makes} (ID {recipe.MakesId})" : recipe.Makes);
+        Fact("School", recipe.School);
+        Fact("Category", recipe.Category);
+        Fact("Shop price", string.Join("  ·  ", new[] {
+            recipe.GoldCost > 0 ? $"{recipe.GoldCost:N0} gold" : "", recipe.CrownsCost > 0 ? $"{recipe.CrownsCost:N0} Crowns" : "",
+        }.Where(p => p.Length > 0)) is { Length: > 0 } price ? price : "Free");
+        Fact("Game's name", recipe.Code);
+        Fact("File", recipe.File);
+    }
+
+    private static TextBox IdBox(string watermark, uint? id)
+        => new() { Width = 100, Watermark = watermark, Text = id?.ToString(CultureInfo.InvariantCulture) ?? "" };
+
+    // A button that finds an item, reagent, snack or card by name and puts its ID in the box (the Lookup tab's lists).
+    private Button FindIdButton(TextBox box) {
+        if (_lookup is null && !_npcListsLoading) {
+            _npcListsLoading = true;
+            _ = Guard(async () => {
+                await LoadLookupAsync();
+                _npcListsLoading = false;
+            });
+        }
+
+        return new Button {
+            Content = "Find",
+            Flyout = SearchFlyout("Search items and cards by name or ID", q => [.. LookupResults("Item", q), .. LookupResults("Spell", q).Take(10)],
+                picked => box.Text = picked.ToString(CultureInfo.InvariantCulture)),
+        };
+    }
+
+    private List<RecipeChange> SafeRecipeChanges() {
+        try {
+            return RecipeChange.Load(_manager.CustomsFolder);
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or System.Text.Json.JsonException) {
+            return [];
+        }
+    }
+
+    // The custom vendors (Customs tab) a recipe can be added to.
+    private Control AddToVendorRow(Recipe recipe) {
+        var vendors = SafeNpcs().Where(n => !n.IsTrainer).ToList();
+        if (vendors.Count == 0) {
+            return Sub("No vendors of your own yet. Make a recipe vendor here (on the left) makes one.");
+        }
+
+        var box = new ComboBox { Width = 250, ItemsSource = vendors.Select(v => $"{v.Id}. {v.Shown}").ToList() };
+        box.SelectedIndex = Math.Max(0, vendors.FindIndex(v => string.Equals(v.Window, "Recipe", StringComparison.OrdinalIgnoreCase)));
+
+        return Row(box, Action(Plain("Add to this vendor"), () => {
+            if (box.SelectedIndex < 0 || box.SelectedIndex >= vendors.Count) {
+                throw new PanelException("Pick a vendor first.");
+            }
+
+            // Read again: the Customs tab may have changed it since this recipe was opened.
+            var vendor = SafeNpcs().FirstOrDefault(n => n.Id == vendors[box.SelectedIndex].Id)
+                         ?? throw new PanelException("That vendor is gone. Click the recipe again.");
+            if (vendor.Items.Any(e => e.ID == recipe.Id)) {
+                Say($"{vendor.Shown} sells {recipe.Name} already.");
+
+                return Task.CompletedTask;
+            }
+
+            vendor.Items.Add(new CustomNpcEntry { ID = recipe.Id, Price = recipe.GoldCost });
+            var window = vendor.Window;
+            vendor.Window = "Recipe";
+            CustomNpcs.Set(_manager.CustomsFolder, vendor.Id, vendor);
+            if (_npcEdit?.Id == vendor.Id) {
+                OpenNpc(vendor);
+            }
+
+            Say($"{vendor.Shown} now sells {recipe.Name} for {recipe.GoldCost:N0} gold" +
+                (string.Equals(window, "Recipe", StringComparison.OrdinalIgnoreCase) ? "." : ", and opens the recipe shop window now.") +
+                " A player standing at it walks away and back to see it.");
+
+            return Task.CompletedTask;
+        }));
+    }
+
+    private async Task MakeRecipeVendorAsync() {
+        if (_recipeBook is null) {
+            throw new PanelException("The recipes are still being read. Wait a moment and press again.");
+        }
+
+        if (_recipesShown.Count == 0) {
+            throw new PanelException("The list is empty. Search or pick a station first; the vendor sells the recipes the list shows.");
+        }
+
+        var recipes = _recipesShown.Take(RECIPE_VENDOR_SIZE).ToList();
+        var (who, zone, x, y, z, yaw) = MySpot();
+        var station = _recipeStation.SelectedItem as string ?? ALL_STATIONS;
+        var query = (_recipeSearch.Text ?? "").Trim();
+        var name = station != ALL_STATIONS ? station.Replace(" Crafting", "") + " Recipes"
+            : query.Length > 0 ? $"{CultureInfo.InvariantCulture.TextInfo.ToTitleCase(query)} Recipes" : "Recipe Vendor";
+        var npc = new CustomNpc {
+            Id = CustomNpcs.NextId(SafeNpcs()), Kind = CustomNpc.VENDOR, Name = name, Window = "Recipe",
+            Zone = zone, X = x, Y = y, Z = z, Yaw = yaw,
+            Items = [.. recipes.Select(r => new CustomNpcEntry { ID = r.Id, Price = r.GoldCost })],
+        };
+        CustomNpcs.Set(_manager.CustomsFolder, npc.Id, npc);
+        if (_recipePicked is { } picked) {
+            ShowRecipe(picked);
+        }
+
+        Say($"Made {npc.Shown} (vendor {npc.Id}) where {who} stands in {ZoneDisplay(zone)}, selling {Plural(recipes.Count, "recipe")}" +
+            (_recipesShown.Count > recipes.Count ? $" (the first {RECIPE_VENDOR_SIZE} of the {_recipesShown.Count:N0} shown; search or filter to make more)" : "") +
+            ". It is in the game now; rename it or change prices on the Customs tab.");
+        await Task.CompletedTask;
+    }
+
+}

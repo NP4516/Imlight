@@ -38,8 +38,12 @@
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace Imlight.CoreLib.Game.Madlibs;
 
@@ -59,6 +63,19 @@ internal static class QuestMadlibs {
         ],
             m_blockToken = "QUEST"
         };
+
+    /// <summary>
+    /// How many kills, items or uses a tallied goal needs. A defeat goal keeps its count in m_bountyTotal:
+    /// its tally counter's m_count is 0 in most quests ("Pesky Pirates" needs 3 Skeletal Pirates, not 0).
+    /// A goal that names no count needs one.
+    /// </summary>
+    internal static int GetGoalTotal(GoalTemplate gTemplate) {
+        var total = gTemplate is BountyGoalTemplate { m_bountyTotal: > 0 } bounty
+            ? bounty.m_bountyTotal
+            : gTemplate.m_tallyCounter?.m_count ?? 0;
+
+        return Math.Max(total, 1);
+    }
 
     internal static MadlibBlock GetAppropriateMadlibBlockForGoal(GoalTemplate gTemplate, GoalInstance gInstance)
         => gTemplate.m_goalType switch {
@@ -120,14 +137,22 @@ internal static class QuestMadlibs {
                 var templateId = completionDialogEntry?.m_dialogEntries
                     ?.FirstOrDefault()?.m_actorTemplateID ?? 0;
 
-                if (templateId != 0) {
-                    var npcTemplate = CoreObjectFactory.GetCoreTemplate(templateId);
-                    if (npcTemplate is GameObjectTemplate npcGameObjectTemplate) {
-                        var npcFullname = npcGameObjectTemplate.m_displayName;
-                        (firstName, lastName) = Locale.GetEnglishNameKeys(npcFullname);
-                    }
-                }
+                (firstName, lastName) = NameKeysOfTemplate(templateId);
             }
+        }
+
+        // No Completion dialog names the NPC ("I'm With the Band" has none, so its "Talk To" showed no name;
+        // Niduus, 2026-10-24): take the NPC the goal itself names, else one of the goal's other dialogs.
+        if (string.IsNullOrEmpty(firstName) && nameFormat is null) {
+            (firstName, lastName) = NameKeysOfTemplate(TemplateOfPersona((gTemplate as PersonaGoalTemplate)?.m_personaName));
+        }
+
+        if (string.IsNullOrEmpty(firstName) && nameFormat is null && gTemplate.m_dialogList is ActorDialogList otherDialogs) {
+            var templateId = otherDialogs.m_dialogs
+                .SelectMany(d => d.m_dialogEntries ?? [])
+                .Select(e => e?.m_actorTemplateID ?? 0)
+                .FirstOrDefault(id => id != 0);
+            (firstName, lastName) = NameKeysOfTemplate(templateId);
         }
 
         var madLibs = new MadlibBlock() {
@@ -166,6 +191,205 @@ internal static class QuestMadlibs {
         };
 
         return madLibs;
+    }
+
+    /// <summary>
+    /// The first and last name keys of an NPC template's display name. A name the game does not split into a first and
+    /// a last name (one word, or parts the name table lacks) is all first name, which the quest book shows whole.
+    /// </summary>
+    private static (string First, string Last) NameKeysOfTemplate(ulong templateId) {
+        if (templateId == 0 || CoreObjectFactory.GetCoreTemplate(templateId) is not GameObjectTemplate npcTemplate) {
+            return (string.Empty, string.Empty);
+        }
+
+        string fullName = npcTemplate.m_displayName;
+        var (first, last) = Locale.GetEnglishNameKeys(fullName);
+
+        return string.IsNullOrEmpty(first) ? (fullName ?? string.Empty, string.Empty) : (first, last);
+    }
+
+    private static readonly ConcurrentDictionary<string, uint> s_personaTemplates = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The NPC who says a dialog line: its persona's NPC, or the line's actor template ID when it names no persona.
+    /// The two can differ: Pesky Pirates' offer is Olivia Dawnwillow's persona with Ceren Nightchant's template.
+    /// </summary>
+    public static ulong SpeakerTemplateOf(string personaName, ulong actorTemplateId) {
+        ulong personaTemplate = TemplateOfPersona(personaName);
+        return personaTemplate != 0 ? personaTemplate : actorTemplateId;
+    }
+
+    /// <summary>The NPC who offers a quest: the speaker of its first "Prep" line, or 0.</summary>
+    public static ulong GiverTemplateOf(QuestTemplate quest) {
+        // The Manager's Quest Editor can name another giver, or none (the quest starts by itself).
+        if (Imlight.CoreLib.Game.Quests.QuestOptions.StartsByItself(quest?.m_questName)) {
+            return 0;
+        }
+
+        if (Imlight.CoreLib.Game.Quests.QuestOptions.GiverOf(quest?.m_questName) is > 0 and var giver) {
+            return giver;
+        }
+
+        return PrepSpeakerOf(quest);
+    }
+
+    /// <summary>The speaker of a quest's first "Prep" line, or 0: the giver as the quest's own data has it.</summary>
+    public static ulong PrepSpeakerOf(QuestTemplate quest) {
+        var entry = (quest?.m_dialogList as ActorDialogList)?.m_dialogs?
+            .FirstOrDefault(d => d.m_dialogTag == "Prep")?.m_dialogEntries?.FirstOrDefault();
+        return entry switch {
+            null => 0,
+            NPCDialogEntry npcEntry => SpeakerTemplateOf(npcEntry.m_personaName, npcEntry.m_actorTemplateID),
+            _ => entry.m_actorTemplateID,
+        };
+    }
+
+    /// <summary>
+    /// The template of the NPC a persona goal names: its object name, or the object name plus "_Persona"
+    /// (GH-HERO-NPC01_Persona is ObjectData/GH/GH-HERO-NPC01.xml). 0 when no template has that name.
+    /// </summary>
+    private static uint TemplateOfPersona(string personaName) {
+        if (string.IsNullOrEmpty(personaName)) {
+            return 0;
+        }
+
+        return s_personaTemplates.GetOrAdd(personaName, name => {
+            const string suffix = "_Persona";
+            var objectName = name.EndsWith(suffix, StringComparison.Ordinal) ? name[..^suffix.Length] : name;
+            var file = "/" + objectName + ".xml";
+
+            return CoreObjectFactory.TryGetCoreTemplateID(
+                location => location is not null && ((string) location.m_filename)?.EndsWith(file, StringComparison.OrdinalIgnoreCase) == true,
+                out var id) ? id : 0;
+        });
+    }
+
+    private static readonly object s_speakerLock = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ActorDialog, object> s_namedDialogs = [];
+
+    /// <summary>
+    /// Gives the speakers of a dialog that names nobody (our built quests, and game quests copied
+    /// without it) what the game's own dialogs carry: the NPC's name format, its portrait, and an NPC madlib block per
+    /// persona, keyed by the persona name's hash. Without them the dialog showed no name and some other NPC's picture
+    /// (Llewella Corey in "About the Astrals"; an Underway line of Olivia Dawnwillow's showed a guard; Niduus, 2026-10-25).
+    /// </summary>
+    internal static void NameDialogSpeakers(ActorDialog dialog) {
+        if (dialog?.m_dialogEntries is null || s_namedDialogs.TryGetValue(dialog, out _)) {
+            return;
+        }
+
+        lock (s_speakerLock) {
+            if (!s_namedDialogs.TryAdd(dialog, null)) {
+                return;
+            }
+
+            if (dialog.m_madlibs is { Count: > 0 }) {
+                return;
+            }
+
+            var madlibs = new System.Collections.Generic.List<ActorMadlib>();
+
+            foreach (var entry in dialog.m_dialogEntries.OfType<NPCDialogEntry>().Where(e => e.m_nameSTKey.IsEmpty)) {
+                // The persona says who speaks; the actor template ID can be another NPC's ("pesky Skeletal Pirates" is
+                // Olivia Dawnwillow's persona with Ceren Nightchant's template; Niduus, 2026-10-25).
+                ulong templateId = SpeakerTemplateOf(entry.m_personaName, entry.m_actorTemplateID);
+
+                // A line whose picture is another NPC's is that NPC's: "Quests marked with a star..." shows Gamma but
+                // names Ceren Nightchant's persona (Niduus, 2026-10-25). The picture's own persona speaks it instead.
+                if (!string.IsNullOrEmpty(entry.m_picture)
+                    && PersonaOfPicture(entry.m_picture) is { } pictured
+                    && pictured != (string) entry.m_personaName
+                    && (templateId == 0 || (CoreObjectFactory.GetCoreTemplate(templateId) as GameObjectTemplate)?.m_sIcon is { IsEmpty: false } icon
+                        && (string) icon != (string) entry.m_picture)) {
+                    entry.m_personaName = pictured;
+                    templateId = TemplateOfPersona(pictured);
+                }
+
+                var (first, last) = NameKeysOfTemplate(templateId);
+                if (string.IsNullOrEmpty(first)) {
+                    continue;
+                }
+
+                string format = string.IsNullOrEmpty(last) ? "NPCFormats_First_Only" : "NPCFormats_First_Last";
+                entry.m_nameSTKey = format;
+
+                if (string.IsNullOrEmpty(entry.m_picture)
+                    && CoreObjectFactory.GetCoreTemplate(templateId) is GameObjectTemplate npc
+                    && !string.IsNullOrEmpty(npc.m_sIcon)) {
+                    entry.m_picture = npc.m_sIcon;
+                }
+
+                string persona = entry.m_personaName;
+                if (string.IsNullOrEmpty(persona)) {
+                    continue;
+                }
+
+                uint index = Imcodec.Cryptography.StringHash.Compute(persona);
+                if (madlibs.Any(m => m?.m_index == index)) {
+                    continue;
+                }
+
+                madlibs.Add(new ActorMadlib {
+                    m_index = index,
+                    m_madlibBlock = new MadlibBlock {
+                        m_madlibs = [
+                            new MadlibArgT_ByteString { m_madlibToken = "FIRSTNAME", m_madlibArgument = first },
+                            new MadlibArgT_ByteString { m_madlibToken = "LASTNAME", m_madlibArgument = last },
+                            new MadlibArgT_ByteString { m_madlibToken = "TITLE", m_madlibArgument = string.Empty },
+                            new MadlibArgT_ByteString { m_madlibToken = "NICKNAME", m_madlibArgument = string.Empty },
+                            new MadlibArgT_ByteString { m_madlibToken = "FULLNAME", m_madlibArgument = format },
+                        ],
+                        m_blockToken = "NPC"
+                    }
+                });
+            }
+
+            if (madlibs.Count > 0) {
+                dialog.m_madlibs = madlibs;
+            }
+        }
+    }
+
+    private static Dictionary<string, string> s_picturePersonas;
+
+    /// <summary>
+    /// The persona whose lines show this picture most of the time across all quests (Art_Portrait_Gamma is
+    /// WC-HUB-NPC07_Persona), or null when no line with a persona shows it.
+    /// </summary>
+    private static string PersonaOfPicture(string picture) {
+        var map = LazyInitializer.EnsureInitialized(ref s_picturePersonas, () => {
+            var counts = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
+            void Count(ActorDialogListBase list) {
+                foreach (var entry in (list as ActorDialogList)?.m_dialogs?.SelectMany(d => d?.m_dialogEntries ?? []).OfType<NPCDialogEntry>() ?? []) {
+                    string pic = entry.m_picture, persona = entry.m_personaName;
+                    if (string.IsNullOrEmpty(pic) || string.IsNullOrEmpty(persona)) {
+                        continue;
+                    }
+
+                    if (!counts.TryGetValue(pic, out var byPersona)) {
+                        counts[pic] = byPersona = new Dictionary<string, int>(StringComparer.Ordinal);
+                    }
+
+                    byPersona[persona] = byPersona.GetValueOrDefault(persona) + 1;
+                }
+            }
+
+            foreach (var quest in QuestTemplateCollection.GetAllQuests().Where(q => q is not null)) {
+                Count(quest.m_dialogList);
+                foreach (var goal in quest.m_goals ?? []) {
+                    Count(goal?.m_dialogList);
+                }
+            }
+
+            // A picture several NPCs share (a plain townsperson's) belongs to none of them: only one persona showing it
+            // at least two times in three counts.
+            return counts
+                .Select(p => (Picture: p.Key, Top: p.Value.MaxBy(c => c.Value), Total: p.Value.Values.Sum()))
+                .Where(p => p.Top.Value * 3 >= p.Total * 2)
+                .ToDictionary(p => p.Picture, p => p.Top.Key, StringComparer.OrdinalIgnoreCase);
+        });
+
+        return map.GetValueOrDefault(picture);
     }
 
     private static MadlibArgT_ByteString[] GetTallyArguments(GoalTemplate gTemplate)
@@ -219,11 +443,11 @@ internal static class QuestMadlibs {
                 },
                 new MadlibArgT_int {
                     m_madlibToken = "TOTAL",
-                    m_madlibArgument = gTemplate.m_tallyCounter?.m_count ?? 0
+                    m_madlibArgument = GetGoalTotal(gTemplate)
                 },
                 new MadlibArgT_int {
                     m_madlibToken = "SUBSCRIBER_TOTAL",
-                    m_madlibArgument = gTemplate.m_tallyCounter?.m_count ?? 0
+                    m_madlibArgument = GetGoalTotal(gTemplate)
                 }
             ],
             m_blockToken = "GOAL"

@@ -25,6 +25,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 
 namespace Imlight.CoreLib.Game.Zone.Supervisors;
@@ -46,6 +47,7 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
     protected readonly List<IActorRef> EntityActors = [];
 
     private readonly Dictionary<IActorRef, string> _loadingEntities = [];
+    private readonly Dictionary<IActorRef, string> _lateEntities = [];
     private readonly Stopwatch _loadTimer = new();
     private bool _awaitingLoadedEntities;
     private int _startedEntityCount;
@@ -76,6 +78,44 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
         }
     }
 
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYENCOUNTERMINIONS))]
+    public virtual void ReceiveQueryEncounterMinions(ZONE_102_PROTOCOL.MSG_QUERYENCOUNTERMINIONS message) {
+        foreach (var entity in EntityActors) {
+            entity?.Forward(message);
+        }
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ENCOUNTERBATTLEENDED))]
+    public virtual void ReceiveEncounterBattleEnded(ZONE_102_PROTOCOL.MSG_ENCOUNTERBATTLEENDED message) {
+        foreach (var entity in EntityActors) {
+            entity?.Forward(message);
+        }
+    }
+
+    // spiraldb-extra/ZoneObjects changed while the zone runs: each entity sees whether it moved (RenderComponent).
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED))]
+    public virtual void ReceiveZoneObjectsChanged(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED message) {
+        if (message.Moved.Count == 0) {
+            return;
+        }
+
+        foreach (var entity in EntityActors) {
+            entity?.Forward(message);
+        }
+    }
+
+    /// <summary>Takes an object away from the zone's players and stops its entity.</summary>
+    protected void RemoveEntity(IActorRef entityActor, CoreObject coreObject) {
+        ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Message = new GAME_5_PROTOCOL.MSG_REMOVEOBJECT { GameObjectID = coreObject.m_globalID },
+            Targets = ZoneBroadcastTarget.Players,
+        });
+        ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_RELEASEMOBILEID { MobileId = coreObject.m_nMobileID });
+        EntityActors.Remove(entityActor);
+        _lateEntities.Remove(entityActor);
+        Context.Stop(entityActor);
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONESTART))]
     public virtual void ReceiveZoneStart(ZONE_102_PROTOCOL.MSG_ZONESTART message) {
         foreach (var entity in EntityActors) {
@@ -101,6 +141,9 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
                     && entity.Path.Name == message.Sender.Path.Name) {
                     continue;
                 }
+                if (message.Except is not null && message.Except.Contains(entity)) {
+                    continue;
+                }
                 entity.Forward(message.Message);
             }
 
@@ -115,20 +158,28 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTLOADRESULTS))]
     protected void ReceiveEntityLoaded() {
+        if (_lateEntities.Remove(Sender, out var lateDescription)) {
+            Logger.Information("{Kind} {Name} finished loading late; it stays in the zone.",
+                Logger.Args(nameof(CoreTemplate), lateDescription));
+
+            return;
+        }
+
         if (_loadingEntities.Remove(Sender) && _awaitingLoadedEntities && _loadingEntities.Count == 0) {
             ReportLoaded();
         }
     }
 
+    // A slow entity is never thrown away: the zone stops waiting for it, but the entity keeps loading and joins
+    // the zone's players once it is done (their joins wait in its mailbox). Stopping it lost NPCs, doors and
+    // sigils for good whenever the server was busy (a zone preloaded right after a server start).
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ENTITYLOADTIMEOUT))]
     protected void ReceiveEntityLoadTimeout() {
         foreach (var (entityActor, description) in _loadingEntities) {
-            Logger.Error("Failed to create entity actor for {Kind} {Name} (no load reply within {Timeout} ms).",
+            Logger.Warning("{Kind} {Name} is still loading after {Timeout} ms; the zone goes on without waiting for it.",
                 Logger.Args(nameof(CoreTemplate), description, OBJECT_CREATION_TIMEOUT_IN_MS));
 
-            EntityActors.Remove(entityActor);
-            OnEntityLoadFailed(entityActor);
-            Context.Stop(entityActor);
+            _lateEntities[entityActor] = description;
         }
 
         _loadingEntities.Clear();
@@ -143,8 +194,10 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
     /// <param name="coreObject">The core object to create an actor for.</param>
     /// <param name="template">The template to use for the core object.</param>
     /// <returns>The newly created entity actor.</returns>
-    protected IActorRef CreateEntityActor(CoreObject coreObject, CoreTemplate template, CoreObjectInfo info) {
-        var actorName = CreateEntityActorName(coreObject);
+    protected IActorRef CreateEntityActor(CoreObject coreObject, CoreTemplate template, CoreObjectInfo info, string nameSuffix = "") {
+        // An object made again with the same global id (added while the zone runs) takes a name its stopping
+        // predecessor does not hold.
+        var actorName = CreateEntityActorName(coreObject) + nameSuffix;
         var objectActor = Context.ActorOf(Props.Create(() => new ZoneEntity(coreObject, template, info, ZoneRef, Zone)), actorName);
         BeginEntityLoad(objectActor, (template as GameObjectTemplate)?.m_objectName);
 
@@ -174,8 +227,6 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
         Timers.StartSingleTimer(EntityLoadTimeoutKey, new ZONE_102_PROTOCOL.MSG_ENTITYLOADTIMEOUT(),
             TimeSpan.FromMilliseconds(OBJECT_CREATION_TIMEOUT_IN_MS));
     }
-
-    protected virtual void OnEntityLoadFailed(IActorRef entityActor) { }
 
     protected static string CreateEntityActorName(CoreObject coreObject) {
         var actorName = $"{coreObject.m_debugName}_{coreObject.m_globalID.Full}";

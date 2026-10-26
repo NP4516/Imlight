@@ -56,6 +56,7 @@ using Imlight.CoreLib.Shared.Resources;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.Types;
+using Imlight.CoreLib.Game.Randomization;
 
 namespace Imlight.CoreLib.Game.Zone.Core;
 
@@ -70,7 +71,6 @@ namespace Imlight.CoreLib.Game.Zone.Core;
 public sealed class ZonePath : ZoneEntity {
 
     private const string CREATURE_SPAWN_INTERVAL_LOCK = "CREATURE_SPAWN_INTERVAL_LOCK";
-    private const uint INITIAL_SPAWN_DELAY_IN_SECONDS = 5;
     private const uint MAX_SPAWNS_ALLOWED = 25;
     private const uint OBJECT_CREATION_TIMEOUT_IN_MS = 5000;
 
@@ -81,16 +81,28 @@ public sealed class ZonePath : ZoneEntity {
     private readonly Dictionary<SpawnObject, byte> _creatureCount = new(ReferenceEqualityComparer.Instance);
     private readonly List<IActorRef> _creatureActors = [];
     private readonly Dictionary<ulong, SpawnObject> _spawnObjectInfo = [];
+    // The spawn list template each living creature was picked as, for a ZoneObjects distinct spawner.
+    private readonly Dictionary<ulong, ulong> _spawnedTemplate = [];
     private readonly Dictionary<IActorRef, (SpawnObject Spawner, GID ObjectId, string Name)> _loadingCreatures = [];
     private readonly HashSet<SpawnObject> _defeatedInInstance = new(ReferenceEqualityComparer.Instance);
+    // Which creature used up each spawn point in _defeatedInInstance (by global id), so a lost battle against an
+    // encounter's boss can give the spawn point back (MSG_ENCOUNTERBATTLEENDED).
+    private readonly Dictionary<ulong, SpawnObject> _defeatedIds = [];
+    // ZoneObjects distinct spawners that wanted to spawn while a battle against the zone's encounter ran.
+    private readonly HashSet<SpawnObject> _heldDistinct = new(ReferenceEqualityComparer.Instance);
+
+    // Creatures that won their battle because everyone fled. They are deleted like defeated ones, but their
+    // spawn point is not used up: it spawns again (a fresh roll with the randomizer) a few seconds later.
+    internal static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, byte> Spared = new();
+    private const int SPARED_RESPAWN_DELAY_IN_SECONDS = 10;
     // Spawners a ResSpawn switched off (m_activate false).
     private readonly HashSet<SpawnObject> _deactivated = new(ReferenceEqualityComparer.Instance);
     // Players that caused a spawn (quest or trigger result); the creature checks aggro against them once loaded.
     private readonly Dictionary<IActorRef, ZONE_102_PROTOCOL.MSG_PLAYERMOVE> _aggroOnLoad = [];
     // Players in the zone, so a creature spawned after they joined is told about them like one that was there.
     private readonly Dictionary<IActorRef, ZONE_102_PROTOCOL.MSG_ADDPLAYER> _players = [];
-    private readonly bool _randomizeCreatures
-        = ConfigurationManager.Settings["April Fools.RandomizeCreatures"].AsBool();
+    private bool _randomizeCreatures
+        => ConfigurationManager.Settings["April Fools.RandomizeCreatures"].AsBool();
 
     // ctor
     public ZonePath(PathObjectTemplate template, List<NodeObject> nodes, List<SpawnObject> creatures, IActorRef zoneRef, Zone zone)
@@ -131,8 +143,19 @@ public sealed class ZonePath : ZoneEntity {
         // Otherwise, start the interval. This still ticks in an instanced zone so a multi-creature
         // spawn point can populate up to its max on load; CanSpawn is what stops a defeated spawn
         // point from ever refilling there (see _defeatedInInstance).
-        var delay = TimeSpan.FromSeconds(INITIAL_SPAWN_DELAY_IN_SECONDS);
+        // The first spawn comes as the zone loads, as a spawner without an interval's does: a housing gauntlet's boss
+        // (Rattlebones, whose spawner has an interval) came 5 seconds after the zone, while the Fairy Queen (none) stood
+        // there from the start (Niduus, 2026-10-24: "Rattlebones does spawn but not immediate"). Later ones keep the interval.
+        var delay = TimeSpan.Zero;
         Timers.StartPeriodicTimer(timerKey, msg, delay, interval);
+
+        // A ZoneObjects distinct spawner (a boss's minions) is full from the first spawn, so they are all there
+        // before anyone reaches the battle.
+        if (Zone.Extras.IsDistinctSpawner(spawnObject.m_name)) {
+            for (var i = 1; i < (int) spawnObject.m_maxNumberOfSpawns; i++) {
+                Timers.StartSingleTimer($"{timerKey}_fill_{i}", msg, delay);
+            }
+        }
     }
 
     private static string SpawnTimerKey(SpawnObject spawnObject, int index) {
@@ -192,20 +215,37 @@ public sealed class ZonePath : ZoneEntity {
         }
     }
 
+    // A slow creature is kept: it still follows the path and meets the players once it has loaded
+    // (ReceiveCreatureLoaded). Stopping it lost the zone's monsters whenever the server was busy.
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ENTITYLOADTIMEOUT))]
     private void ReceiveCreatureLoadTimeout(ZONE_102_PROTOCOL.MSG_ENTITYLOADTIMEOUT message) {
-        if (!_loadingCreatures.Remove(message.Entity, out var creature)) {
+        if (_loadingCreatures.TryGetValue(message.Entity, out var creature)) {
+            Logger.Warning("{Kind} {Name} is still loading after {Timeout} ms; it joins the zone once it is done.",
+                Logger.Args(nameof(CoreTemplate), creature.Name, OBJECT_CREATION_TIMEOUT_IN_MS));
+        }
+    }
+
+    // A ZoneObjects creature (this path is its own) that was removed or changed while the zone runs: its creature
+    // leaves the players and the path stops (ZonePathSupervisor makes the new one).
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED))]
+    private void ReceiveZoneObjectsChanged(ZONE_102_PROTOCOL.MSG_ZONEOBJECTSCHANGED message) {
+        if (!message.RemovedCreatures.Contains(_template.m_id.Full)) {
+            foreach (var actor in _creatureActors) {
+                actor.Forward(message);
+            }
+
             return;
         }
 
-        Logger.Error("Failed to create entity actor for {Kind} {Name} (no load reply within {Timeout} ms).",
-            Logger.Args(nameof(CoreTemplate), creature.Name, OBJECT_CREATION_TIMEOUT_IN_MS));
+        foreach (var id in _spawnedTemplate.Keys) {
+            ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+                Message = new GAME_5_PROTOCOL.MSG_REMOVEOBJECT { GameObjectID = id },
+                Targets = ZoneBroadcastTarget.Players,
+            });
+        }
 
-        _creatureActors.Remove(message.Entity);
-        _aggroOnLoad.Remove(message.Entity);
-        _spawnObjectInfo.Remove(creature.ObjectId);
-        SetCreatureCount(creature.Spawner, CreatureCount(creature.Spawner) - 1);
-        Context.Stop(message.Entity);
+        Logger.Information("Zone {0}: creature {1} taken away ({2} spawned).", Logger.Args(Zone.ZonePath, _template.m_name, _spawnedTemplate.Count));
+        Context.Stop(Self);
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_DELETEOBJECT))]
@@ -216,16 +256,54 @@ public sealed class ZonePath : ZoneEntity {
 
             // Live does not respawn a defeated mob inside an instance: once a spawn point has lost a
             // creature here, CanSpawn refuses it for the rest of this instance's lifetime.
-            if (Zone.IsInstance) {
+            if (Spared.TryRemove(message.GameObjectID, out _)) {
+                Timers.StartSingleTimer($"Spared_{message.GameObjectID}",
+                    new ZONE_102_PROTOCOL.MSG_PATHSPAWNINTERVAL { SpawnObject = spawnObject },
+                    TimeSpan.FromSeconds(SPARED_RESPAWN_DELAY_IN_SECONDS));
+            }
+            else if (Zone.IsInstance) {
                 _defeatedInInstance.Add(spawnObject);
+                _defeatedIds[message.GameObjectID] = spawnObject;
             }
 
             _spawnObjectInfo.Remove(message.GameObjectID);
+            _spawnedTemplate.Remove(message.GameObjectID);
             _creatureActors.RemoveAll(x => x == Sender);
             if (_loadingCreatures.Remove(Sender)) {
                 Timers.Cancel(Sender);
             }
         }
+    }
+
+    // A battle against a ZoneObjects encounter's boss ended. When the creatures won it (everyone fled or was defeated),
+    // the room's minions that were defeated in it come back as the ones that lived do (Spared): the fight starts over,
+    // as on live. Spawners that waited during the battle fill up again; CanSpawn keeps the limits.
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ENCOUNTERBATTLEENDED))]
+    private void ReceiveEncounterBattleEnded(ZONE_102_PROTOCOL.MSG_ENCOUNTERBATTLEENDED message) {
+        foreach (var id in message.ResetIds ?? []) {
+            if (!_defeatedIds.Remove(id, out var spawnObject)) {
+                continue;
+            }
+
+            // Its delete was already counted as a defeat, so the Spared mark the duel gave it is not needed.
+            Spared.TryRemove(id, out _);
+            if (!_defeatedIds.Values.Any(s => ReferenceEquals(s, spawnObject))) {
+                _defeatedInInstance.Remove(spawnObject);
+            }
+
+            _heldDistinct.Add(spawnObject);
+        }
+
+        foreach (var spawnObject in _heldDistinct) {
+            var index = _creatures.FindIndex(x => ReferenceEquals(x, spawnObject));
+            for (var i = 0; i < Math.Max(1, (int) spawnObject.m_maxNumberOfSpawns); i++) {
+                Timers.StartSingleTimer($"EncounterRefill_{index}_{i}",
+                    new ZONE_102_PROTOCOL.MSG_PATHSPAWNINTERVAL { SpawnObject = spawnObject },
+                    TimeSpan.FromSeconds(SPARED_RESPAWN_DELAY_IN_SECONDS));
+            }
+        }
+
+        _heldDistinct.Clear();
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PATHSPAWNINTERVAL))]
@@ -270,30 +348,67 @@ public sealed class ZonePath : ZoneEntity {
             return;
         }
 
-        // We meet the conditions to spawn whatever is within this spawn object.
-        // The name is confusing, but a SpawnObject may contain different creatures to spawn.
-        // Choose a random creature to spawn from the SpawnObject.
-        var spawnItemInfo = PickRandomSpawnObject(spawnObject.m_spawnList).m_objectInfo;
-
-        // Get the node to spawn the creature at.
-        var spawnNode = GetRelevantNode(spawnItemInfo);
-
-        // If creatures are randomized, pick a random template ID.
-        if (_randomizeCreatures) {
-            spawnItemInfo.m_templateID = AprilFools.CreatureList.GetRandomCreatureTemplateID();
-        }
-
-        // Create the creature using the data we have.
-        var template = CoreObjectFactory.GetCoreTemplate(spawnItemInfo.m_templateID);
-        if (template is null) {
-            Logger.Error("Failed to get template for {0}.",
-                Logger.Args(spawnItemInfo.m_templateID));
+        // A boss's minions (a ZoneObjects distinct spawner) wait while a battle against the boss runs: the missing ones
+        // are in that battle already, spawned into its circle. They fill up again once it ends.
+        if (Zone.Extras.IsDistinctSpawner(spawnObject.m_name)
+            && System.Threading.Volatile.Read(ref Zone.EncounterBattles) > 0) {
+            _heldDistinct.Add(spawnObject);
 
             return;
         }
 
+        // We meet the conditions to spawn whatever is within this spawn object.
+        // The name is confusing, but a SpawnObject may contain different creatures to spawn.
+        // Choose a random creature to spawn from the SpawnObject.
+        var spawnItem = PickSpawnItem(spawnObject);
+        if (spawnItem is null) {
+            return;
+        }
+
+        var spawnItemInfo = spawnItem.m_objectInfo;
+
+        // Get the node to spawn the creature at.
+        var spawnNode = GetRelevantNode(spawnItemInfo);
+
+        // If creatures are randomized, pick a random template ID. Wisps always stay wisps. The spawn data is
+        // shared by every spawn of this spawner, so the swap must not stick to it or each spawn swaps the last swap.
+        var originalTemplateId = spawnItemInfo.m_templateID;
+        var isWisp = Supervisors.ZonePathSupervisor.IsWisp(spawnItemInfo);
+        var templateId = originalTemplateId;
+        if (_randomizeCreatures && !isWisp) {
+            templateId = AprilFools.CreatureList.GetRandomCreatureTemplateID();
+        }
+        else if (Randomizer.RandomizeCreatures && !isWisp) {
+            templateId = Randomizer.MapCreature(originalTemplateId);
+        }
+
+        // Create the creature using the data we have.
+        var template = CoreObjectFactory.GetCoreTemplate(templateId);
+        if (template is null) {
+            Logger.Error("Failed to get template for {0}.",
+                Logger.Args(templateId));
+
+            return;
+        }
+
+        spawnItemInfo.m_templateID = templateId;
         var creatureObj = CoreObjectFactory.FinalizeCoreObject(spawnItemInfo, template);
+        spawnItemInfo.m_templateID = originalTemplateId;
         creatureObj = CoreObjectFactory.InitializeCoreObjectBehaviors(creatureObj, template);
+        // A creature this copy of the zone spawns as a custom of the Customs tab (a ZoneObjects creature's own Custom,
+        // ReplaceSpawns, the tab's rooms) is marked before its actor is made, so it has the custom's name and changes.
+        var ownCustom = ZoneObjects.CustomOfSpawner(spawnObject.m_id.Full);
+        if (!isWisp && (ownCustom > 0 ? ownCustom : Zone.Extras.CustomFor(templateId)) is var customId and > 0
+            && Imlight.CoreLib.Game.Combat.Customs.Get(customId)?.BaseTemplateID == templateId) {
+            Imlight.CoreLib.Game.Combat.Customs.Mark(creatureObj.m_globalID.Full, customId);
+        }
+
+        if (templateId != originalTemplateId) {
+            Randomizer.RememberReplacedCreature(creatureObj.m_globalID, originalTemplateId);
+        }
+        if (isWisp) {
+            Logger.Debug("Wisp {0} spawned on path {1}.", Logger.Args((template as GameObjectTemplate)?.m_objectName, _template.m_name));
+        }
         creatureObj.m_location = spawnNode.m_location;
         var Z = (float) (spawnNode.m_direction * (Math.PI / 180));
         creatureObj.m_orientation = new Imcodec.Math.Vector3(
@@ -313,6 +428,7 @@ public sealed class ZonePath : ZoneEntity {
 
         _creatureActors.Add(creatureActor);
         _spawnObjectInfo.Add(creatureObj.m_globalID, spawnObject);
+        _spawnedTemplate[creatureObj.m_globalID] = originalTemplateId;
         if (cause?.PlayerObject is not null && cause.PlayerActor is not null) {
             _aggroOnLoad[creatureActor] = new ZONE_102_PROTOCOL.MSG_PLAYERMOVE {
                 PlayerObject = cause.PlayerObject,
@@ -362,9 +478,24 @@ public sealed class ZonePath : ZoneEntity {
         return true;
     }
 
-    private static SpawnItem PickRandomSpawnObject(List<SpawnItem> spawnItems) {
+    private SpawnItem PickSpawnItem(SpawnObject spawnObject) {
+        // A ZoneObjects distinct spawner (Niduus, 2026-10-22: Malistaire's 3 Draconians are 3 different ones) picks
+        // by chance among the templates it has no living creature of; with none left it spawns nothing.
+        if (!Zone.Extras.IsDistinctSpawner(spawnObject.m_name)) {
+            return PickRandomSpawnObject(spawnObject.m_spawnList);
+        }
+
+        var living = _spawnObjectInfo.Where(x => ReferenceEquals(x.Value, spawnObject))
+            .Select(x => _spawnedTemplate.GetValueOrDefault(x.Key)).ToHashSet();
+        var left = spawnObject.m_spawnList.Where(i => i?.m_objectInfo is not null
+                                                      && !living.Contains(i.m_objectInfo.m_templateID)).ToList();
+
+        return left.Count == 0 ? null : PickRandomSpawnObject(left, Math.Max(1, left.Sum(i => i.m_percentChance)));
+    }
+
+    private static SpawnItem PickRandomSpawnObject(List<SpawnItem> spawnItems, int totalChance = 100) {
         var rng = new Random();
-        var rngNum = rng.Next(0, 100);
+        var rngNum = rng.Next(0, totalChance);
 
         var cumulativePercentage = 0;
         foreach (var t in spawnItems) {

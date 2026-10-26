@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 10/14/2026
  */
 
 using System;
@@ -79,10 +79,16 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     : ZoneEntityComponent(entity), IComponentFactory, IWithTimers {
 
     private const string DEFAULT_NAME_KEY = "NPCFormats_Name";
+    // Guild_Pedestal_GuildTome on the guild grounds (Housing_Guild/GuildStarter_Ext).
+    private const uint GUILD_TOME_TEMPLATE_ID = 1529133;
     private const string DEFAULT_TEXT_KEY = "GUI_NPCInteractText";
+
+    /// <summary>"Press X or click to Interact", for things that are not people.</summary>
+    private const string OBJECT_TEXT_KEY = "GUI_ObjectInteract";
     private const string WIZBANG_UPDATE_TIMER_KEY = "WIZBANG_UPDATE_TIMER";
     private const double WIZBANG_UPDATE_INTERVAL_SECONDS = 1.0;
-    private const float DEFAULT_RENDER_DISTANCE = 5000.0f; // Default wizbang render distance.
+    private static readonly TimeSpan WizBangQueryTimeout = TimeSpan.FromSeconds(3);
+    private bool _wizBangQueryPending;
 
     private readonly float _interactionRadius = 300.0f;
     private readonly Dictionary<ulong, IActorRef> _playersInInteractionRange = [];
@@ -92,7 +98,6 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     private readonly Dictionary<IServiceComponent, int> _componentFirstOption = [];
     private ServiceMementoBase _serviceMemento;
     private MadlibBlock _madlibBlock;
-    private float _renderDistance;
 
     public ITimerScheduler Timers { get; set; }
 
@@ -100,9 +105,6 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         => true;
 
     public override void OnStart() {
-        // Set render distance - use zone far clip if available, otherwise default.
-        _renderDistance = Entity.Zone?.ZoneData?.m_farClip ?? DEFAULT_RENDER_DISTANCE;
-        
         RefreshServiceMomento(null);
 
         // The component set is fixed once loaded, so an entity without services never has a wizbang.
@@ -141,18 +143,10 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             : _interactionRadius;
 
         // Handle interaction range (for service options).
-        // A player who comes back (zone transfer, relog) is a new session actor with the same object id:
-        // replace any stale actor reference rather than keeping the dead one.
         if (IsInHorizontalRadius(playerObj, interactionRadius)
-            && _playersInInteractionRange.TryGetValue(playerId, out var knownInteractionActor)
-            && !knownInteractionActor.Equals(playerActor)) {
-            _playersInInteractionRange[playerId] = playerActor;
-            SendActorServiceOptions(playerActor);
-        }
-        else if (IsInHorizontalRadius(playerObj, interactionRadius)
             && !_playersInInteractionRange.ContainsKey(playerId)) {
             _playersInInteractionRange.Add(playerId, playerActor);
-            SendActorServiceOptions(playerActor);
+            SendActorServiceOptions(playerActor, nextSection: true);
         }
         else if (!IsInHorizontalRadius(playerObj, interactionRadius)
                  && _playersInInteractionRange.ContainsKey(playerId)) {
@@ -160,14 +154,20 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             SendLeaveServiceRange(playerActor);
         }
 
-        // Handle render range (for wizbangs).
-        if (IsInRadius(playerObj, _renderDistance)) {
-            // Always keep the newest actor: a stale one would send every wizbang to a closed session.
-            _playersInRenderRange[playerId] = playerActor;
+        // Wizbangs go to every player in the zone, near or far (Niduus, 2026-10-25: vendors and trainers lost the
+        // symbol over their heads at times). The zone's far clip is no sure measure of what the client draws, and a
+        // player who has not moved yet since arriving was never counted.
+        // The newest session of a wizard replaces an old one (a relog or a trip back into the zone keeps the same
+        // object id): the old session no longer answers, and asking it held up this NPC's symbol for everyone.
+        _playersInRenderRange[playerId] = playerActor;
+    }
+
+    public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        if (_serviceComponents.Count <= 0 || playerObj is null) {
+            return;
         }
-        else if (_playersInRenderRange.ContainsKey(playerId)) {
-            _playersInRenderRange.Remove(playerId);
-        }
+
+        _playersInRenderRange[playerObj.m_globalID.Full] = playerActor;
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEINTERACTION))]
@@ -179,8 +179,23 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         var serviceIndex = message.ServiceIndex;
         var reinteract = message.Reinteract;
 
-        Logger.Debug("Player {0} interacted with NPC {1} using service {2} at index {3} (Reinteract: {4})",
-            Logger.Args(playerActor.Path.Name, Entity.ActiveGameObject.m_globalID.Full, serviceName, serviceIndex, reinteract));
+        Logger.Debug("Player {0} interacted with NPC {1} ({5}, template {6}) using service {2} at index {3} (Reinteract: {4})",
+            Logger.Args(playerActor.Path.Name, Entity.ActiveGameObject.m_globalID.Full, serviceName, serviceIndex, reinteract,
+                Entity.Info?.m_zoneTag is { Length: > 0 } tag ? tag : Entity.ActiveGameObject.m_debugName.ToString(),
+                Entity.ActiveGameObject.m_templateID));
+
+        // The Guild Tome on the guild grounds shows the guild; the live game opens the guild window there.
+        if (Entity.ActiveGameObject.m_templateID == GUILD_TOME_TEMPLATE_ID && playerCharacter is not null) {
+            var guild = Imlight.CoreLib.Game.Social.Guilds.For(playerCharacter.CharId);
+            playerActor.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE {
+                Message = guild is null
+                    ? "You are not in a guild yet. Type .guild create <name> to make one, or ask a guild member to .guild invite you. Type .guild for the guild commands."
+                    : Imlight.CoreLib.Game.Commands.Protocols.CommandGuildProtocol.DescribeGuild(guild),
+                Modal = 1,
+            });
+
+            return;
+        }
 
         if (_serviceComponents.Count <= 0) {
             Logger.Warning("No service components found for NPC {0}",
@@ -198,7 +213,23 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // Route to the component that owns this option index.
         // Using FirstOrDefault by ServiceName is unsafe when multiple components share
         // the same service name (e.g. InteractQuestSelectComponent shadowing WoodenChestComponent).
-        if (!_optionIndexToComponent.TryGetValue((int) serviceIndex, out var serviceComponent)) {
+        _optionIndexToComponent.TryGetValue((int) serviceIndex, out var serviceComponent);
+
+        // The list the game clicked can be older than ours (a quest just finished and its "underway" option took
+        // the offer's place): the click went to a service that showed nothing, and the dialog hung on an empty
+        // Back/More bar (Niduus 2026-10-25, Lady Oriel). Build the list again for this player, and if the index
+        // still names another service, go by the service name the game sent.
+        if (!NameMatches(serviceComponent, serviceName) && playerCharacter is not null) {
+            RefreshServiceMomento(playerCharacter);
+            _optionIndexToComponent.TryGetValue((int) serviceIndex, out serviceComponent);
+            if (!NameMatches(serviceComponent, serviceName)
+                && _componentFirstOption.Keys.FirstOrDefault(c => NameMatches(c, serviceName)) is { } named) {
+                serviceComponent = named;
+                serviceIndex = (uint) _componentFirstOption[named];
+            }
+        }
+
+        if (serviceComponent is null) {
             Logger.Warning("No component owns service index {0} for NPC {1} with service name {2}",
                 Logger.Args(serviceIndex, Entity.ActiveGameObject.m_debugName, serviceName));
 
@@ -212,19 +243,67 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         serviceComponent.OnServiceInteraction(playerActor, playerCharacter, playerObject, localIndex);
     }
 
+    // A click without a service name (or a component without one) is taken as meant for that component.
+    private static bool NameMatches(IServiceComponent component, string serviceName)
+        => component is not null
+           && (string.IsNullOrEmpty(serviceName) || string.IsNullOrEmpty(component.ServiceName)
+               || string.Equals(component.ServiceName, serviceName, StringComparison.OrdinalIgnoreCase));
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REFRESHSERVICEOPTIONS))]
+    private void RefreshServiceOptions(ZONE_102_PROTOCOL.MSG_REFRESHSERVICEOPTIONS message) {
+        // The client drops an NPC's options once they are used. Live sends them again when the dialog
+        // closes; without that the player has to leave the NPC's range and come back to talk again.
+        if (_serviceComponents.Count <= 0 || !_playersInInteractionRange.ContainsValue(message.PlayerActor)) {
+            return;
+        }
+
+        if (AskWizard(message.PlayerActor) is not { } wizard) {
+            return;
+        }
+        foreach (var trainer in Entity.GetComponentsOfType<InteractTrainerComponent>()) {
+            trainer.ResetSpellOptions(wizard);
+        }
+
+        SendLeaveServiceRange(message.PlayerActor);
+        SendActorServiceOptions(message.PlayerActor);
+    }
+
+    // The player's wizard, or null when their session does not answer in time. Every component of an entity runs on
+    // its one actor, so waiting on a session that closed (the game shut while next to the NPC) froze the whole NPC:
+    // no one who came into the zone afterwards was sent it (Niduus 2026-10-25, Majid: "he gone").
+    private Wizard AskWizard(IActorRef playerActor) {
+        try {
+            return playerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD(),
+                WizBangQueryTimeout).Result?.Wizard;
+        }
+        catch (Exception ex) {
+            Logger.Warning("{0} did not answer for {1}'s options: {2}",
+                Logger.Args(playerActor?.Path.Name, Entity.ActiveGameObject?.m_debugName, ex.GetBaseException().Message));
+
+            return null;
+        }
+    }
+
+    internal void ShowServiceOptions(IActorRef playerActor, int reinteract = 0) {
+        SendLeaveServiceRange(playerActor);
+        SendActorServiceOptions(playerActor, reinteract);
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_WIZBANGUPDATEINTERVAL))]
     private void HandleWizBangUpdateInterval(ZONE_102_PROTOCOL.MSG_WIZBANGUPDATEINTERVAL message) {
-        if (_serviceComponents.Count <= 0 || _playersInRenderRange.Count == 0) {
+        if (_serviceComponents.Count <= 0 || _playersInRenderRange.Count == 0 || _wizBangQueryPending) {
             return;
         }
 
         // Query every nearby player's wizard concurrently instead of
-        // blocking on each one sequentially.
+        // blocking on each one sequentially. A player who does not answer in time (a session that is gone) is
+        // dropped, so it cannot hold up the symbol for the others.
+        _wizBangQueryPending = true;
         var playerActors = _playersInRenderRange.Values.ToArray();
         var queryTasks = playerActors.Select(async playerActor => {
             try {
                 var msg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-                var rsp = await playerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(msg);
+                var rsp = await playerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(msg, WizBangQueryTimeout);
                 return rsp.Wizard;
             }
             catch {
@@ -245,20 +324,33 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_WIZBANG_UPDATE_RESULT))]
     private void HandleWizBangUpdateResult(ZONE_102_PROTOCOL.MSG_WIZBANG_UPDATE_RESULT result) {
+        _wizBangQueryPending = false;
         for (int i = 0; i < result.PlayerActors.Length; i++) {
             var wizard = result.Wizards[i];
             if (wizard != null) {
                 SendWizBang(result.PlayerActors[i], wizard);
+
+                continue;
+            }
+
+            var gone = _playersInRenderRange.Where(x => x.Value.Equals(result.PlayerActors[i])).Select(x => x.Key).ToList();
+            foreach (var playerId in gone) {
+                _playersInRenderRange.Remove(playerId);
             }
         }
     }
 
-    private void SendActorServiceOptions(IActorRef playerActor, int reinteract = 0) {
-        var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-        var wizard = playerActor
-            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg)
-            .Result
-            .Wizard;
+    private void SendActorServiceOptions(IActorRef playerActor, int reinteract = 0, bool nextSection = false) {
+        if (AskWizard(playerActor) is not { } wizard) {
+            return;
+        }
+
+        // Each time a player walks up to a test trainer with a long list, it shows the next section of it.
+        if (nextSection) {
+            foreach (var trainer in Entity.GetComponentsOfType<InteractTrainerComponent>()) {
+                trainer.NextSection(wizard);
+            }
+        }
 
         RefreshServiceMomento(wizard);
 
@@ -303,7 +395,9 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     }
 
     private void RefreshServiceMomento(Wizard playerCharacter) {
-        _serviceComponents = [.. Entity.GetComponentsOfType<IServiceComponent>()];
+        // A trainer lists one option per spell. Its options go last so an NPC that also runs a shop (Abner) keeps
+        // the shop's option where the game shows it, instead of after hundreds of spells.
+        _serviceComponents = [.. Entity.GetComponentsOfType<IServiceComponent>().OrderBy(c => c is InteractTrainerComponent ? 1 : 0)];
         if (_serviceComponents.Count <= 0) {
             return;
         }
@@ -316,7 +410,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         var allOptions = new List<ServiceOptionBase>();
         var componentsWithOptions = new List<IServiceComponent>();
         foreach (var component in _serviceComponents) {
-            var componentOptions = component.GetServiceOptions(playerCharacter).ToList();
+            var componentOptions = OptionsFor(component, playerCharacter);
             if (componentOptions.Count > 0) {
                 componentsWithOptions.Add(component);
             }
@@ -326,6 +420,8 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             }
 
             foreach (var option in componentOptions) {
+                // The client echoes this index, so it has to be the flat index used to route it.
+                option.m_serviceIndex = (uint) allOptions.Count;
                 _optionIndexToComponent[allOptions.Count] = component;
                 allOptions.Add(option);
             }
@@ -345,8 +441,10 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         var npcNameKeyOrDefault = string.IsNullOrEmpty(highestPriority?.NpcNameKey)
             ? DEFAULT_NAME_KEY
             : highestPriority.NpcNameKey;
+        // Only a person is talked to: a lever, chest or portal with no text of its own says "to Interact", as live.
+        var isPerson = gameObjTemplate?.m_behaviors?.OfType<NPCBehaviorTemplate>().Any() ?? true;
         var npcTextKeyOrDefault = string.IsNullOrEmpty(highestPriority?.NpcTextKey)
-            ? DEFAULT_TEXT_KEY
+            ? (isPerson ? DEFAULT_TEXT_KEY : OBJECT_TEXT_KEY)
             : highestPriority.NpcTextKey;
 
         _serviceMemento = new ServiceMementoBase {
@@ -373,10 +471,37 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             },
         };
 
+        // A custom vendor or trainer's dialog shows the name it was given, as written (CustomNpcs), and so does a
+        // teleporter hub's stone (CustomTeleporters).
+        if ((Imlight.CoreLib.Game.World.CustomNpcs.NameFor(Entity.Info?.m_zoneTag)
+             ?? Imlight.CoreLib.Game.World.CustomTeleporters.For(Entity.Info?.m_zoneTag)?.Name) is { } customName) {
+            madlibList = [new MadlibArgT_WideByteString { m_madlibArgument = customName, m_madlibToken = "NAME" }];
+        }
+
         _madlibBlock = new MadlibBlock() {
             m_blockToken = "NPC",
             m_madlibs = madlibList
         };
+    }
+
+    private readonly HashSet<string> _failedComponents = [];
+
+    /// <summary>
+    /// A component's options for this player. One component that throws must not take away the NPC's other
+    /// services or its icon, so it counts as having none (and is logged once).
+    /// </summary>
+    private List<ServiceOptionBase> OptionsFor(IServiceComponent component, Wizard wizard) {
+        try {
+            return [.. component.GetServiceOptions(wizard) ?? []];
+        }
+        catch (Exception ex) {
+            if (_failedComponents.Add(component.GetType().Name)) {
+                Logger.Error("{0} on NPC {1} failed to list its services: {2}",
+                    Logger.Args(component.GetType().Name, Entity.ActiveGameObject?.m_debugName, ex));
+            }
+
+            return [];
+        }
     }
 
     private void SendWizBang(IActorRef playerActor, Wizard playerWizard) {
@@ -387,8 +512,8 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // Collect wizbangs from components that have service options for this player.
         var activeWizBangs = new List<WizBangs>();
         foreach (var component in _serviceComponents) {
-            var serviceOptions = component.GetServiceOptions(playerWizard);
-            if (serviceOptions.Any()) {
+            var serviceOptions = OptionsFor(component, playerWizard);
+            if (serviceOptions.Count > 0) {
                 activeWizBangs.Add(component.WizBang);
             }
         }

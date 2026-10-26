@@ -44,7 +44,6 @@ using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Commands;
-using Imlight.CoreLib.WizardData;
 using Imlight.CoreLib.Game.World;
 using Imlight.CoreLib.Game.Processes;
 using Imlight.CoreLib.Shared.Cryptography;
@@ -59,7 +58,7 @@ public class GameServer : Server {
 
     private readonly string _sessionKeyHashInput = ConfigurationManager.Settings["Advanced.SessionKeyHashInput"].AsString();
     private readonly ushort _sessionKeyValidityTime = ConfigurationManager.Settings["Game Server.SessionKeyValidityTime"].AsUShort();
-    private readonly ushort _playerLimit = ConfigurationManager.Settings["Game Server.GameServerPlayerLimit"].AsUShort();
+    private ushort _playerLimit => ConfigurationManager.Settings["Game Server.GameServerPlayerLimit"].AsUShort();
 
     private readonly IActorRef _gameWorldRef;
     private readonly IActorRef _commandDispatcherRef;
@@ -68,13 +67,21 @@ public class GameServer : Server {
     private readonly ListQueue<SessionActor> _playerQueue;
     private readonly ConcurrentDictionary<string, FallbackEntry> _fallbackEntries = [];
 
+    // The login keys outlive a restart of this game server, so a game that lost its connection can still come back.
+    private static readonly ConcurrentDictionary<string, Cache<ByteString, ulong>> s_sessionKeysByServer = new();
+
     public GameServer(string serverName, ushort serverPort, string realmName = null)
         : base(serverName, serverPort, GameServiceFactory.Props(),
               ConfigurationManager.Settings["Game Server.GameServerIP"].AsString(), deferListening: true) {
         RealmName = realmName ?? serverName;
         this._playerQueue = new ListQueue<SessionActor>();
-        this._sessionKeys = new Cache<ByteString, ulong>();
+        this._sessionKeys = s_sessionKeysByServer.GetOrAdd(serverName, _ => new Cache<ByteString, ulong>());
         this.ActiveSessions.CollectionChanged += ActiveSessionsChangedEvent;
+        Tools.ManagerCommands.Start(Context.System);
+        Tools.MemberBenefits.Start(Context.System);
+        Events.GameEvents.Start(Context.System);
+        Loyalty.LoyaltyStore.Start(Context.System);
+        World.HouseTrainers.ForgetOldSpots();
 
         // Create actor children.
         var gameWorldActorName = $"{Name}.{nameof(GameWorld)}";
@@ -156,7 +163,9 @@ public class GameServer : Server {
 
             // Get the account associated with this key.
             var accountId = cachedKey.Value;
-            var account = AccountCollection.GetAccount(accountId);
+            var account = message.CharID != 0
+                ? AccountCollection.GetAccountForPlay(accountId, message.CharID)
+                : AccountCollection.GetAccount(accountId);
 
             // Inform the client that the session key is valid. We'll also send the account associated with it.
             Sender.Tell(new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP() {
@@ -209,13 +218,44 @@ public class GameServer : Server {
             return;
         }
 
-        var kickedMsg = new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE {
-            Message = "You have been kicked from the server.",
-            Modal = 1
-        };
-        session.ActorRef.Tell(kickedMsg);
+        // The words come from the Manager's Announcements tab; turned off there, the player just leaves.
+        if (Tools.Announcements.Text("server.kicked") is { } kicked) {
+            session.ActorRef.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE { Message = kicked, Modal = 1 });
+        }
 
         session.Dispose();
+    }
+
+    [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_DIEDELETE))]
+    private void ReceiveDieDelete(SERVER_100_PROTOCOL.MSG_DIEDELETE message) {
+        var session = ActiveSessions.FirstOrDefault(s => s.GetAssociatedAccount()?.AccountId == message.AccountID);
+        if (session is not null) {
+            if (Tools.Announcements.Text("server.diedelete", ("wizard", message.CharacterName)) is { } gone) {
+                session.ActorRef.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE { Message = gone, Modal = 1 });
+            }
+            session.Dispose();
+        }
+
+        // The session saves the character as it closes. Deleting afterwards keeps those saves from leaving pieces behind.
+        Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromSeconds(3), Self, new SERVER_100_PROTOCOL.MSG_DIEDELETENOW {
+            AccountID = message.AccountID,
+            CharacterID = message.CharacterID,
+            CharacterName = message.CharacterName,
+        }, Self);
+    }
+
+    [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_DIEDELETENOW))]
+    private void ReceiveDieDeleteNow(SERVER_100_PROTOCOL.MSG_DIEDELETENOW message) {
+        try {
+            var deletedCharacter = WizardCollection.DeleteCharacter(message.CharacterID);
+            var removedFromAccount = AccountCollection.DeleteCharacterFromAccount(message.AccountID, message.CharacterID);
+            Logger.Information("Die = Delete: deleted {Name} (character {CharacterId}). Character removed: {Deleted}, account updated: {Updated}.",
+                Logger.Args(message.CharacterName, message.CharacterID, deletedCharacter, removedFromAccount));
+        }
+        catch (Exception ex) {
+            Logger.Error("Die = Delete: could not delete {Name} (character {CharacterId}). {Exception}",
+                Logger.Args(message.CharacterName, message.CharacterID, ex));
+        }
     }
 
     [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_KICKSESSION))]
@@ -351,7 +391,7 @@ public class GameServer : Server {
         public ulong UserId;
         public ulong CharId;
         public string FallbackZone;
-        public uint FallbackZoneId;
+        public ulong FallbackZoneId;
         public string FallbackLocation;
         public string GameServerIp;
         public ushort GameServerPort;

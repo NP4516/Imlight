@@ -59,6 +59,8 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     public int m_buddyListLimit;
     public bool m_dontAllowFriendFinderCodes;
     public bool m_shadowMagicUnlocked;
+    // Shadow pip slots of this wizard's own (.intothedarkness gives 1, .sp slots sets it); 0 follows the settings.
+    public int m_shadowPipSlots;
     public byte m_fishingLevel;
     public int m_fishingXP;
     public uint m_subscriberBenefitFlags;
@@ -72,6 +74,8 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     public int m_pipConversionBaseAllSchools;
     public uint m_purchasedCustomEmotes1;
     public uint m_purchasedCustomTeleportEffects1;
+    // Photomancy filters of this wizard's own (each bit one filter); [Photomancy] AllFilters sends every one.
+    public uint m_photoFilters;
     public uint m_equippedTeleportEffect;
     public uint m_highestWorld1ID;
     public uint m_highestWorld2ID;
@@ -90,9 +94,10 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     public int m_cantripXP;
     public int m_levelScaled;
     public int m_baseGoldPouch;
+    public int m_baseEventCurrency1Pouch;
+
 
     // These are stats that we can calculate from other data, and don't need to be stored in the player's character data.
-    [JsonIgnore] public int m_baseEventCurrency1Pouch;
     [JsonIgnore] public int m_baseEventCurrency2Pouch;
     [JsonIgnore] public int m_basePvPCurrencyPouch;
     [JsonIgnore] public int m_energyMax;
@@ -141,6 +146,8 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     [JsonIgnore] public List<int> m_pipConversionBasePerSchool;
     [JsonIgnore] public float m_archmasteryBase;
     [JsonIgnore] public float m_archmasteryBonus;
+    // Archmastery % from gear, jewels, pets and creature stats (the game's table holds 0.05 for +5%, -0.5 for -50%).
+    [JsonIgnore] public float m_archmasteryBonusPercent;
     [JsonIgnore] public float m_criticalHitPercentAll;
     [JsonIgnore] public float m_blockPercentAll;
     [JsonIgnore] public float m_criticalHitRatingAll;
@@ -170,6 +177,55 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
         Level = level;
 
         m_baseGoldPouch = ConfigurationManager.Settings["Character.BaseGoldPouch"].AsInt();
+        m_baseEventCurrency1Pouch = ConfigurationManager.Settings["Character.BaseLunariPouch"].AsInt();
+    }
+
+    /// <summary>
+    /// Copies the stats of the wizard with full health and mana. A duel that must not change the wizard fights with
+    /// the copy.
+    /// </summary>
+    internal ServerWizGameStats CopyForDuel() {
+        var copy = (ServerWizGameStats) MemberwiseClone();
+        copy.m_currentHitpoints = m_baseHitpoints;
+        copy.m_currentMana = m_baseMana;
+
+        return copy;
+    }
+
+    /// <summary>
+    /// Clears what gear, pets and jewels add, so the stats can be added up again. Without it every rebuild added the
+    /// gear on top of the last one: logging in rebuilt twice, so 67% resist was 134% in battle (immune; Niduus,
+    /// 2026-10-20).
+    /// </summary>
+    internal void ClearEquipmentStats() {
+        m_dmgBonusPercent = null;
+        m_dmgBonusFlat = null;
+        m_accBonusPercent = null;
+        m_apBonusPercent = null;
+        m_dmgReducePercent = null;
+        m_dmgReduceFlat = null;
+        m_criticalHitRatingBySchool = null;
+        m_blockRatingBySchool = null;
+        m_pipConversionRatingPerSchool = null;
+        m_pipConversionRatingAll = 0;
+        m_archmasteryBonus = 0;
+        m_archmasteryBonusPercent = 0;
+        m_dmgBonusPercentAll = 0;
+        m_dmgBonusFlatAll = 0;
+        m_accBonusPercentAll = 0;
+        m_apBonusPercentAll = 0;
+        m_dmgReducePercentAll = 0;
+        m_dmgReduceFlatAll = 0;
+        m_healBonusPercentAll = 0;
+        m_healIncBonusPercentAll = 0;
+        m_powerPipBonusPercentAll = 0;
+        m_stunResistancePercent = 0;
+        m_criticalHitRatingAll = 0;
+        m_blockRatingAll = 0;
+        m_startingPips = 0;
+        m_startingPowerPips = 0;
+        m_balanceMastery = m_deathMastery = m_fireMastery = m_iceMastery = 0;
+        m_lifeMastery = m_mythMastery = m_stormMastery = 0;
     }
 
     internal void SetBaseStats() {
@@ -187,6 +243,7 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     /// <returns></returns>
     public WizGameStats GetCombatGameStats() {
         return new WizGameStats() {
+            m_stunResistancePercent = m_stunResistancePercent,
             m_baseHitpoints = m_baseHitpoints,
             m_currentHitpoints = m_currentHitpoints,
             m_baseMana = m_baseMana,
@@ -248,6 +305,8 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
         var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(MagicSchool, Level);
 
         return new WizGameStats() {
+            // The character sheet shows it (Niduus, 2026-10-23: a friend in The One Ring showed none).
+            m_stunResistancePercent = m_stunResistancePercent,
             // We want *only* base level/magic school stats here.
             // We can't send the character game stats because the EquipmentService will broadcast the equipment effects,
             // causing each stat to duplicate.
@@ -278,13 +337,21 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
             m_gardeningXP = m_gardeningXP,
             m_invisibleToFriends = m_invisibleToFriends,
             m_showItemLock = m_showItemLock,
+            // Castle space; never sent before, while equipping a castle did nothing (Niduus, 2026-10-22).
+            m_maximumNumberOfIslands = Imlight.CoreLib.Game.Housing.HousingSettings.CastleSpace,
             m_questFinderEnabled = m_questFinderEnabled,
             m_buddyListLimit = m_buddyListLimit,
             m_dontAllowFriendFinderCodes = m_dontAllowFriendFinderCodes,
-            m_shadowMagicUnlocked = m_shadowMagicUnlocked,
+            // Shadow pips on ([Battle] ShadowPips) unlock shadow magic, which lays out the shadow pip slots.
+            m_shadowMagicUnlocked = m_shadowMagicUnlocked || CombatDuelSubCircle.ShadowPipsOn,
+            m_shadowPipMax = m_shadowPipSlots > 0 ? m_shadowPipSlots
+                : CombatDuelSubCircle.ShadowPipsOn || m_shadowMagicUnlocked
+                ? CombatDuelSubCircle.ShownPlayerShadowSlots
+                : m_shadowPipMax,
             m_fishingLevel = m_fishingLevel,
             m_fishingXP = m_fishingXP,
-            m_subscriberBenefitFlags = m_subscriberBenefitFlags,
+            // The member benefits switched on in the Imlight app ([Character] MemberBenefits when it has set none).
+            m_subscriberBenefitFlags = Imlight.CoreLib.Game.Tools.MemberBenefits.Flags(m_subscriberBenefitFlags),
             m_elixirBenefitFlags = m_elixirBenefitFlags,
             m_monsterMagicLevel = m_monsterMagicLevel,
             m_monsterMagicXP = m_monsterMagicXP,
@@ -293,8 +360,11 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
             m_rememberLastRealm = m_rememberLastRealm,
             m_newSpellbookLayoutWarning = m_newSpellbookLayoutWarning,
             m_pipConversionBaseAllSchools = m_pipConversionBaseAllSchools,
+            // The level table's Archmastery; the client adds gear and jewels to it for the character sheet.
+            m_archmasteryBase = Imlight.CoreLib.Game.Combat.Archmastery.BaseRating(MagicSchool, Level),
             m_purchasedCustomEmotes1 = m_purchasedCustomEmotes1,
             m_purchasedCustomTeleportEffects1 = m_purchasedCustomTeleportEffects1,
+            m_photoFilters = Imlight.CoreLib.Game.Photomancy.Photomancy.Filters(m_photoFilters),
             m_equippedTeleportEffect = m_equippedTeleportEffect,
             m_highestWorld1ID = m_highestWorld1ID,
             m_highestWorld2ID = m_highestWorld2ID,

@@ -38,7 +38,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 08/13/2026
+ * Last Updated: 10/14/2026
  */
 
 using Akka.Actor;
@@ -47,6 +47,7 @@ using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.PvP.Data;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -76,10 +77,12 @@ internal enum CombatSlotType {
 /// spell effects. Subcircles are assigned to either the player or monster team and positioned within the duel
 /// according to the sigil template.
 /// </remarks>
-public class CombatDuelSubCircle {
+public partial class CombatDuelSubCircle {
     
     private const float AGGRO_TIME_IN_SECONDS = 0.75f;
     internal const byte MAX_PIP_COUNT = 7;
+
+    private static bool s_schoolPips => ConfigurationManager.GetValue("Battle.SchoolPips", true);
     private const byte PLAYER_HAND_SIZE = 7;
 
     internal string SlotName { get; set; }
@@ -90,9 +93,18 @@ public class CombatDuelSubCircle {
     internal IActorRef ParticipantActor { get; private set; }
     internal CoreObject ParticipantObject { get; private set; }
     internal ServerWizGameStats ParticipantGameStats { get; private set; }
+    // The stats the client gets. A duel that scales stats sends them unscaled and lets the client scale them itself.
+    internal WizGameStats ClientGameStats => _clientGameStats ?? ParticipantGameStats?.GetCombatGameStats();
+    internal WizGameStats ResolverGameStats => _resolverGameStats ?? CombatParticipant?.m_pGameStats;
     internal CombatParticipant CombatParticipant { get; private set; }
     internal bool AddedToDuel { get; set;}
     internal bool IsSummonedMinion { get; private set; }
+    // A sandboxed wizard fights with a copy of their stats, so nothing of the duel reaches the saved wizard.
+    internal bool IsSandboxed { get; private set; }
+    // A wizard who fights with a copy of their stats: a sandboxed one, or one in the Deckathalon (its own stats, made by
+    // Deckathalon.StatsFor). The battle changes only the copy's health and mana; a Deckathalon battle still uses up the
+    // treasure cards it casts.
+    internal bool FightsWithCopy { get; private set; }
     internal List<SpellEffect> _hangingEffects { get {
         if (CombatParticipant is null) {
             return null;
@@ -122,22 +134,16 @@ public class CombatDuelSubCircle {
         }
     }
     internal bool Occupied => ParticipantObject is not null;
-    internal CombatTeam OccupiedTeam {
-        get {
-            if (ParticipantObject is null) {
-                return CombatTeam.Player;
-            }
-
-            if (IsSummonedMinion) {
-                return CombatTeam.Player;
-            }
-
-            return ParticipantObject.m_templateID == 1 ? CombatTeam.Player : CombatTeam.Monster;
-        }
-    }
+    internal bool IsHumanPlayer => ParticipantObject?.m_templateID == 1;
+    // A creature of the AI: neither a wizard nor a minion that a wizard or creature summoned.
+    internal bool IsAiCreature => Occupied && !IsHumanPlayer && !IsSummonedMinion;
+    // The side of the circle the participant stands on; a minion stands on the side of its summoner.
+    internal CombatTeam OccupiedTeam => SlotType == CombatSlotType.Creature && Occupied ? CombatTeam.Monster : CombatTeam.Player;
     internal bool IsAlive => ParticipantGameStats?.m_currentHitpoints > 0;
     internal bool CheatNoFizzle;
     internal CombatDeck _combatDeck;
+    private WizGameStats _clientGameStats;
+    private WizGameStats _resolverGameStats;
     internal readonly CombatDuelComponent _duelActor;
     internal Wizard _wizard;
     internal int _usedPipsForExperienceGain = 0;
@@ -161,10 +167,8 @@ public class CombatDuelSubCircle {
         ParticipantObject = participantObject;
         IsSummonedMinion = isSummonedMinion;
 
-        var isHumanPlayer = participantObject.m_templateID == 1;
-
         // Set the CombatParticipant based on what team they are.
-        if (isHumanPlayer) {
+        if (IsHumanPlayer) {
             InitializePlayerSubCircle();
         }
         else {
@@ -194,13 +198,27 @@ public class CombatDuelSubCircle {
         ParticipantObject = null;
         CombatParticipant = null;
         AddedToDuel = false;
+        _bossOverride = null;
     }
 
     internal Hand DrawHand() {
+        // A cheat's hand tricks wait for this hand (CombatDuelSubCircle.Cheats.cs).
+        CheatHandBeforeDraw();
         var newHand = _combatDeck.GetHand();
+        CheatHandAfterDraw();
         CombatParticipant.m_pHand = newHand;
 
         return newHand;
+    }
+
+    /// <summary>
+    /// A monster's hand for the round: the cards it did not play go back into its deck first, so it gets a whole
+    /// new hand. Kept cards piled up into a hand of blades and traps it never played, and it passed every round.
+    /// </summary>
+    internal Hand DrawFreshHand() {
+        _combatDeck.ReturnHandToDeck();
+
+        return DrawHand();
     }
 
     internal Hand GetCurrentHand() {
@@ -223,6 +241,34 @@ public class CombatDuelSubCircle {
             }
         }
     }
+
+    /// <summary>
+    /// Puts copies of a spell that is not in the deck into the current hand, as many as fit (.draw).
+    /// </summary>
+    /// <returns>How many cards were added.</returns>
+    internal int DrawExtraCards(uint spellTemplateId, int amount) {
+        if (_combatDeck is null) {
+            return 0;
+        }
+
+        var added = 0;
+        while (added < amount && _combatDeck.HandRoom > 0) {
+            var spell = SpellFactory.GetSpell(spellTemplateId);
+            if (spell is null) {
+                break;
+            }
+
+            _combatDeck.AddExtraCardToHand(spell);
+            added++;
+        }
+
+        return added;
+    }
+
+    /// <summary>
+    /// How many more cards fit in the current hand.
+    /// </summary>
+    internal int HandRoom => _combatDeck?.HandRoom ?? 0;
 
     /// <summary>
     /// Empties the current hand.
@@ -248,6 +294,10 @@ public class CombatDuelSubCircle {
         _combatDeck.Discard(spell);
     }
 
+    internal void ConsumeCard(Spell spell) {
+        _combatDeck.ConsumeCard(spell);
+    }
+
     internal Spell GetSpellFromLastHand(byte index) {
         if (_combatDeck.LastGivenHand is null || index >= _combatDeck.LastGivenHand.Count) {
             return null;
@@ -256,25 +306,784 @@ public class CombatDuelSubCircle {
         return _combatDeck.LastGivenHand[index];
     }
 
-    internal void DoPipGain() {
-        // If the participant has the maximum amount of pips, do not gain any more.
-        var genericPips = CombatParticipant.m_pipCount.m_genericPips;
-        var powerPips = CombatParticipant.m_pipCount.m_powerPips;
-        if (genericPips + powerPips >= MAX_PIP_COUNT) {
+    // .overdose: the wizard's battles start with Quickening already cast on them.
+    private bool _overdoseApplied;
+    private static readonly Lazy<SpellTemplate> s_quickening = new(() => {
+        var spells = SpellFactory.AllSpellTemplates().Select(t => t.Template).Where(t => t is not null && !t.m_Treasure).ToList();
+
+        bool Named(SpellTemplate t, string word) => ((string) t.m_name ?? "").Contains(word, StringComparison.OrdinalIgnoreCase)
+            || ((string) t.m_displayName ?? "").Contains(word, StringComparison.OrdinalIgnoreCase);
+
+        // The internal name can differ from the card's name, so the ID list (which knows the card names) is asked first.
+        var fromCatalog = IdCatalog.Search(IdCatalogKind.Spell, "Quickening", 20)
+            .Select(e => CoreObjectFactory.GetCoreTemplate((uint) e.Id) as SpellTemplate)
+            .Where(t => t?.m_effects is { Count: > 0 })
+            .OrderBy(t => t.m_Treasure)
+            .FirstOrDefault();
+
+        return fromCatalog
+            ?? spells.FirstOrDefault(t => string.Equals((string) t.m_name, "Quickening", StringComparison.OrdinalIgnoreCase))
+            ?? spells.FirstOrDefault(t => Named(t, "Quickening"))
+            ?? spells.FirstOrDefault(t => Named(t, "Quicken"));
+    });
+
+    private void ApplyOverdoseOnce() {
+        if (_overdoseApplied || _wizard?.Overdose != true) {
             return;
         }
 
-        var gainedPowerPip = DeterminePowerPipGain(CombatParticipant);
-        if (gainedPowerPip) {
-            CombatParticipant.m_pipCount.m_powerPips++;
+        _overdoseApplied = true;
+        try {
+            if (s_quickening.Value is not { } quickening) {
+                Logger.Warning("Overdose: no Quickening spell was found.");
+
+                return;
+            }
+
+            var effects = quickening.m_effects ?? [];
+            Logger.Information("Overdose: {0} starts the battle with {1} ({2}).", Logger.Args(_wizard.CharId,
+                (string) quickening.m_name, string.Join(", ", effects.Select(e => $"{e?.m_effectType} {e?.m_effectParam}"))));
+            foreach (var effect in effects) {
+                // A copy, so nothing changes the shared spell. Effects the battle can't take on are skipped.
+                if (effect is null || effect.m_effectTarget == kEffectTarget.kGlobal) {
+                    continue;
+                }
+
+                CombatEffectApplicator.ApplyEffect(effect with { m_effectTarget = kEffectTarget.kSelf }, [], this, [this]);
+            }
         }
-        else {
-            CombatParticipant.m_pipCount.m_genericPips++;
+        catch (Exception e) {
+            // Never let this take the battle (or the server) down.
+            Logger.Error("Overdose failed for {0}: {1}", Logger.Args(_wizard.CharId, e.ToString()));
         }
     }
 
+    /// <summary>
+    /// The round's pips, then Archmastery. <paramref name="highestArchmastery"/> is the most Archmastery anyone
+    /// in the battle has.
+    /// </summary>
+    internal void DoPipGain(float highestArchmastery) {
+        GainPips();
+        RefillLightAndShadow();
+        if (ArchmasteryActive) {
+            ArchmasteryRound(highestArchmastery);
+        }
+    }
+
+    /// <summary>
+    /// .lightnshadow on: every free or normal pip slot becomes a power pip, shadow pips fill up and mana is full.
+    /// School pips are kept.
+    /// </summary>
+    private void RefillLightAndShadow() {
+        if (_wizard is null || !BattleModes.LightAndShadow.IsOn(_wizard.CharId)) {
+            return;
+        }
+
+        var pips = CombatParticipant.m_pipCount;
+        pips.m_powerPips += pips.m_genericPips;
+        pips.m_genericPips = 0;
+        if (TotalPips(pips) < MAX_PIP_COUNT) {
+            pips.m_powerPips += (byte) (MAX_PIP_COUNT - TotalPips(pips));
+        }
+
+        _cheatShadowMagic = true;
+        var shadow = MaxShadowPips >= NO_SHADOW_LIMIT ? SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT : Math.Max(MaxShadowPips, 1);
+        pips.m_shadowPips = (byte) Math.Max(pips.m_shadowPips, shadow);
+
+        var fullMana = ParticipantGameStats.m_baseMana;
+        if (fullMana > 0 && ParticipantGameStats.m_currentMana < fullMana) {
+            if (FightsWithCopy) {
+                ParticipantGameStats.m_currentMana = fullMana;
+            }
+            else {
+                _wizard.UpdateMana(fullMana);
+            }
+            ParticipantActor.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEMANA {
+                Mana = fullMana,
+                MaxMana = ParticipantGameStats.GetClientTypeAlternative().m_baseMana,
+                DisplayDiff = 1,
+            });
+        }
+    }
+
+    /// <summary>
+    /// How this round's pip came, as the game's CombatParticipant::PipAquiredByEnum (MSG_COMBATPIPS m_acq): 0 none
+    /// (every slot full), 1 a pip, 2 a power pip.
+    /// </summary>
+    internal uint PipAcquired { get; private set; }
+
+    private void GainPips() {
+        PipAcquired = 0;
+        ApplyOverdoseOnce();
+
+        // Shadow pips sit in their own slots, so they roll whether or not the normal slots are full.
+        RollShadowPip();
+
+        // If the participant has the maximum amount of pips, do not gain any more (but maybe convert one).
+        var pipCount = CombatParticipant.m_pipCount;
+        if (TotalPips(pipCount) >= MAX_PIP_COUNT) {
+            if (!ArchmasteryActive) {
+                ConvertToSchoolPip();
+            }
+
+            return;
+        }
+
+        // Randomizer mode rolls how many pips come this round; otherwise it is one.
+        var gains = Randomization.Randomizer.RandomizePips ? Randomization.Randomizer.RollPipGain() : 1;
+
+        // Never leave someone with no pips at all, or nothing in their hand can be cast.
+        if (gains == 0 && TotalPips(pipCount) == 0) {
+            gains = 1;
+        }
+
+        // A cheat's pip gain (0: none, as it says).
+        if (CheatPipGains() is { } cheatGains) {
+            gains = cheatGains;
+        }
+        // GainSchoolPips: the archmastery gauge fills by SchoolPipChance each round; once full, the next pip
+        // comes as a school pip, no stats needed.
+        var schoolGauge = ArchmasterySchool != 0 && !ArchmasteryActive;
+        if (schoolGauge && _schoolGauge < GAUGE_FULL) {
+            _schoolGauge = Math.Min(GAUGE_FULL, _schoolGauge + s_schoolPipChance);
+        }
+
+        for (var i = 0; i < gains; i++) {
+            if (TotalPips(pipCount) >= MAX_PIP_COUNT) {
+                return;
+            }
+
+            if (schoolGauge && _schoolGauge >= GAUGE_FULL && SchoolPipTarget() is { } gainSchool) {
+                SetSchoolPips(pipCount, gainSchool, (byte) (SchoolPips(pipCount, gainSchool)!.Value + 1));
+                _schoolGauge = 0;
+
+                continue;
+            }
+
+            var gainedPowerPip = CheatPowerPip() ?? DeterminePowerPipGain();
+            if (gainedPowerPip) {
+                pipCount.m_powerPips++;
+                PipAcquired = 2;
+            }
+            else {
+                pipCount.m_genericPips++;
+                PipAcquired = Math.Max(PipAcquired, 1u);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every pip slot in use: generic, power and school pips.
+    /// </summary>
+    internal static int TotalPips(PipCount pips)
+        => pips.m_genericPips + pips.m_powerPips + pips.m_balancePips + pips.m_deathPips + pips.m_firePips
+           + pips.m_icePips + pips.m_lifePips + pips.m_mythPips + pips.m_stormPips;
+
+    /// <summary>
+    /// [Battle] SchoolPips: with every pip slot full, a round turns one power pip into a school pip of the
+    /// participant's own school. School pips pay for the school pip cost some spells have.
+    /// </summary>
+    private void ConvertToSchoolPip() {
+        var pipCount = CombatParticipant.m_pipCount;
+        if (!s_schoolPips || pipCount.m_powerPips == 0) {
+            return;
+        }
+
+        if (SchoolPipTarget() is not { } school) {
+            return;
+        }
+
+        pipCount.m_powerPips--;
+        SetSchoolPips(pipCount, school, (byte) (SchoolPips(pipCount, school)!.Value + 1));
+    }
+
+    // [Battle] GainSchoolPips: a wizard's new pip can come as a school pip (SchoolPipChance %), no stats needed.
+    private static bool s_gainSchoolPips => ConfigurationManager.GetValue("Battle.GainSchoolPips", false);
+    private static int s_schoolPipChance => Math.Clamp(ConfigurationManager.GetValue("Battle.SchoolPipChance", 25), 0, 100);
+    // [Battle] RandomSchoolPips: school pips come in a random school instead of the participant's own.
+    private static bool s_randomSchoolPips => ConfigurationManager.GetValue("Battle.RandomSchoolPips", false);
+    // [Battle] NaturalShadowPips: wizards get shadow pips without the shadow pip rating stat.
+    private static bool s_naturalShadowPips => ConfigurationManager.GetValue("Battle.NaturalShadowPips", false);
+    private const int NATURAL_SHADOW_PIP_CHANCE = 25;
+
+    /// <summary>
+    /// The school a new school pip goes to: a random one with RandomSchoolPips, else the participant's own
+    /// (null when they have no primary school).
+    /// </summary>
+    private MagicSchool? SchoolPipTarget() {
+        if (s_randomSchoolPips) {
+            return s_pipSchools[Random.Shared.Next(s_pipSchools.Length)];
+        }
+
+        // The school picked for the gauge in the deck, else the participant's own. The deck's pick counts for the
+        // [Battle] SchoolPips conversion too, when Archmastery is off.
+        foreach (var id in new[] { (uint) (CheatSchoolNow ?? MagicSchool.None), ArchmasterySchool, _deckArchmasterySchool, ParticipantGameStats.m_schoolID }) {
+            var school = (MagicSchool) id;
+            if (id != 0 && SchoolPips(CombatParticipant.m_pipCount, school) is not null) {
+                return school;
+            }
+        }
+
+        return null;
+    }
+
+    // [Battle] ShadowPips: shadow pips, which shadow spells cost, kept in their own slots.
+    private static bool s_shadowPips => ConfigurationManager.GetValue("Battle.ShadowPips", true);
+    // 0 means no limit (up to NO_SHADOW_LIMIT, which keeps the count inside a byte).
+    private const int NO_SHADOW_LIMIT = 50;
+    private static int s_playerMaxShadowPips => ShadowLimit(ConfigurationManager.GetValue("Battle.PlayerShadowPipLimit", 0));
+    private static int s_creatureMaxShadowPips => ShadowLimit(ConfigurationManager.GetValue("Battle.CreatureShadowPipLimit", 0));
+
+    // [Battle] PlayerShadowPipMin: the fewest shadow pips a wizard holds; they top back up each round.
+    private static int s_playerMinShadowPips => Math.Clamp(ConfigurationManager.GetValue("Battle.PlayerShadowPipMin", 0), 0, NO_SHADOW_LIMIT);
+    // [Battle] CreatureShadowPips: creatures can get shadow pips at all.
+    private static bool s_creatureShadowPips => ConfigurationManager.GetValue("Battle.CreatureShadowPips", true);
+    // [Battle] RandomCreatureShadowPips: each creature, each battle, has CreatureShadowMagicChance % to get shadow magic.
+    private static bool s_randomCreatureShadowPips => ConfigurationManager.GetValue("Battle.RandomCreatureShadowPips", false);
+    private static int s_creatureShadowMagicChance => Math.Clamp(ConfigurationManager.GetValue("Battle.CreatureShadowMagicChance", 50), 0, 100);
+    // [Randomizer] RandomizeShadowPips: each wizard's shadow pip limit is rolled (1 to 5) from the seed, and
+    // each creature gets shadow magic at random.
+    private static bool s_randomizeShadowPips => Randomization.Randomizer.Enabled && !Randomization.Randomizer.Tame && ConfigurationManager.GetValue("Randomizer.RandomizeShadowPips", false);
+    private const int RANDOM_SHADOW_LIMIT_MAX = 5;
+    private bool? _creatureRolledShadowMagic;
+
+    // A boss whose cheat file sets ShadowPips (BossCheats.cs) holds that many, whatever the creature settings say.
+    // ShadowPips from the app's Bosses tab (BossOverrides.cs) wins over the cheat file; 0 there means none.
+    private (int Most, int Chance) BossShadowPips {
+        get {
+            if (_wizard is not null || ParticipantObject is null) {
+                return (0, 0);
+            }
+
+            var cheat = BossCheats.ShadowPipsOf(ParticipantObject.m_templateID);
+            if (_bossOverride?.ShadowPips is { } most) {
+                var chance = _bossOverride.ShadowPipChance ?? (cheat.Most > 0 ? cheat.Chance : 25);
+
+                return most > 0 ? (Math.Min(most, NO_SHADOW_LIMIT), Math.Clamp(chance, 0, 100)) : (0, 0);
+            }
+
+            return cheat;
+        }
+    }
+
+    // The app's Bosses tab set ShadowPips to 0: this boss never gets shadow pips.
+    private bool BossHasNoShadowPips => _wizard is null && _bossOverride?.ShadowPips is <= 0;
+
+    /// <summary>
+    /// Whether a beguile (mind control) may take this participant over. The server has no beguile effect yet
+    /// (kMindControl is not handled); this is for when it does: a boss set to Beguilable: No in the Bosses tab says no.
+    /// </summary>
+    internal bool CanBeBeguiled => _wizard is not null || _bossOverride?.Beguilable != false;
+
+    private int MaxShadowPips => _wizard is null ? BossShadowPips.Most > 0 ? BossShadowPips.Most : s_creatureMaxShadowPips
+        : ParticipantGameStats?.m_shadowPipSlots is int slots and > 0 ? Math.Min(slots, NO_SHADOW_LIMIT)
+        : s_randomizeShadowPips ? 1 + Randomization.Randomizer.PickIndex(_wizard, "ShadowPipLimit", 0, RANDOM_SHADOW_LIMIT_MAX)
+        : s_playerMaxShadowPips;
+
+    private bool CreatureHasShadowMagic {
+        get {
+            if (!s_creatureShadowPips && !s_randomizeShadowPips) {
+                return false;
+            }
+
+            if (!s_randomCreatureShadowPips && !s_randomizeShadowPips) {
+                return true;
+            }
+
+            _creatureRolledShadowMagic ??= Random.Shared.Next(100) < s_creatureShadowMagicChance;
+
+            return _creatureRolledShadowMagic.Value;
+        }
+    }
+
+    private static int ShadowLimit(int value) => value <= 0 ? NO_SHADOW_LIMIT : Math.Min(value, NO_SHADOW_LIMIT);
+    private static int s_shadowPipChance => Math.Clamp(ConfigurationManager.GetValue("Battle.ShadowPipChance", 0), 0, 100);
+
+    /// <summary>
+    /// Each round, maybe gives a shadow pip. The chance is ShadowPipChance if set, else the participant's own
+    /// shadow pip rating (from level and gear) as a percent.
+    /// </summary>
+    private void RollShadowPip() {
+        var pipCount = CombatParticipant.m_pipCount;
+        var max = MaxShadowPips;
+        if (!HasShadowMagic) {
+            return;
+        }
+
+        // [Battle] PlayerShadowPipMin: a wizard never holds fewer shadow pips than this.
+        if (_wizard is not null && pipCount.m_shadowPips < Math.Min(s_playerMinShadowPips, max)) {
+            pipCount.m_shadowPips = (byte) Math.Min(s_playerMinShadowPips, max);
+        }
+
+        if (pipCount.m_shadowPips >= max) {
+            return;
+        }
+
+        // The chance fills the shadow gauge each round; a full gauge (GAUGE_FULL) gives the pip.
+        _shadowGauge += ShadowPipChance();
+        if (_shadowGauge >= GAUGE_FULL) {
+            _shadowGauge -= GAUGE_FULL;
+            pipCount.m_shadowPips++;
+        }
+    }
+
+    private int ShadowPipChance() {
+        var chance = s_shadowPipChance > 0
+            ? s_shadowPipChance
+            : (int) Math.Round(ParticipantGameStats.m_shadowPipRating + ParticipantGameStats.m_bonusShadowPipRating);
+        if ((s_naturalShadowPips || HasOwnShadowMagic) && _wizard is not null && chance <= 0) {
+            chance = NATURAL_SHADOW_PIP_CHANCE;
+        }
+        if (_wizard is null && chance <= 0 && BossShadowPips.Most > 0) {
+            chance = BossShadowPips.Chance;
+        }
+
+        return Math.Clamp(chance, 0, (int) GAUGE_FULL);
+    }
+
+    // Shadow and archmastery (school pip) gauges, 0 to GAUGE_FULL, shown around the pip slots.
+    private const float GAUGE_FULL = 100f;
+    // How many shadow pip slots the client lays out when there is no limit.
+    private const int SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT = 5;
+    private float _shadowGauge;
+    private float _schoolGauge;
+
+    // The changes from the app's Bosses tab for the creature in this circle (BossOverrides.cs), or null.
+    private BossOverrides.BossOverride _bossOverride;
+
+    /// <summary>
+    /// The school the archmastery gauge fills toward, as the client wants it (0 when none).
+    /// </summary>
+    internal uint ArchmasterySchool {
+        get {
+            if (_wizard is null) {
+                // A creature with Archmastery fills toward its own school (one of the seven; Shadow and the Astral
+                // schools have no school pips).
+                var own = CheatSchoolNow ?? (MagicSchool) CombatParticipant.m_primaryMagicSchoolID;
+                return ArchmasteryActive && Archmastery.Schools.Contains(own) ? (uint) own : 0;
+            }
+
+            return !(s_gainSchoolPips || ArchmasteryActive) ? 0
+                : CheatSchoolNow is { } cheatSchool && Archmastery.Schools.Contains(cheatSchool) ? (uint) cheatSchool
+                : _deckArchmasterySchool != 0 ? _deckArchmasterySchool : ParticipantGameStats.m_schoolID;
+        }
+    }
+
+    // The school picked for the gauge in the equipped deck (or on the orb this battle), or 0 when none was picked.
+    private uint _deckArchmasterySchool;
+
+    internal static bool SchoolGaugeOn => s_gainSchoolPips || Archmastery.Enabled;
+
+    private DeckBehavior EquippedDeck(out int deckSize) {
+        deckSize = 0;
+        var equipment = _wizard?.EquipmentBehavior;
+        var deckSlot = equipment?.SlotList?.FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);
+        var deckItem = deckSlot?.ItemId is null ? null
+            : equipment.EquippedItems?.FirstOrDefault(i => i.m_globalID == deckSlot.ItemId);
+        if (deckItem is null || !CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(deckItem, out var deck)) {
+            return null;
+        }
+
+        var template = CoreObjectFactory.GetCoreTemplate(deckItem.m_templateID);
+        deckSize = template?.m_behaviors?.OfType<DeckBehaviorTemplate>().FirstOrDefault()?.m_maxSpells ?? 0;
+
+        return deck;
+    }
+
+    private uint DeckArchmasterySchool() => EquippedDeck(out _)?.m_archmasterySchool ?? 0;
+
+    /// <summary>
+    /// The school picked on the Power Orb mid-battle (or on the deck while in battle): new school pips come in it
+    /// from the next round. 0 goes back to the wizard's own school.
+    /// </summary>
+    internal void SetArchmasterySchool(uint school) {
+        if (_wizard is null) {
+            return;
+        }
+
+        _deckArchmasterySchool = school;
+        CombatParticipant.m_archmasterySchool = ArchmasterySchool;
+        CombatParticipant.m_archmasteryFlags = ArchmasterySchool != 0 ? Archmastery.ALL_SCHOOL_FLAGS : 0;
+        Logger.Information("Archmastery school for {0} is now {1}.", Logger.Args(_wizard.CharId, (MagicSchool) ArchmasterySchool));
+    }
+
+    internal float ArchmasteryPoints => ArchmasterySchool == 0 ? 0
+        : ArchmasteryActive ? Math.Min(_archmasteryPower, 1f) * GAUGE_FULL
+        : _schoolGauge;
+
+    // [Archmastery] Like the game: the Power Orb fills each round, fastest for whoever has the most Archmastery in
+    // the battle (see Archmastery.cs). Each point of power turns a power pip into a school pip; with 3 points left,
+    // a white pip becomes a power pip.
+    private float _archmasteryPower;
+    private float? _archmasteryRating;
+    private float? _archmasteryEfficiency;
+
+    private bool ArchmasteryActive => Archmastery.Enabled && ArchmasteryRating > 0;
+
+    /// <summary>
+    /// This combatant's Archmastery: the level table from level 50, [Archmastery] BonusRating, gear, jewels and pets
+    /// for wizards; the creature's own stats for creatures.
+    /// </summary>
+    internal float ArchmasteryRating {
+        get {
+            // A creature's school and level are on its participant, which may not be made yet.
+            if (!Archmastery.Enabled || ParticipantGameStats is null || (_wizard is null && CombatParticipant is null)) {
+                return 0;
+            }
+
+            return _archmasteryRating ??= ComputeArchmasteryRating();
+        }
+    }
+
+    private float ComputeArchmasteryRating() {
+        try {
+            var isPlayer = _wizard is not null;
+            var school = isPlayer ? (MagicSchool) ParticipantGameStats.m_schoolID : (MagicSchool) CombatParticipant.m_primaryMagicSchoolID;
+            var level = isPlayer ? ParticipantGameStats.Level : CombatParticipant.m_mobLevel;
+            var rating = Archmastery.RatingOf(ParticipantGameStats, school, level, isPlayer);
+            if (rating > 0) {
+                Logger.Debug("Archmastery for {0} (level {1}): {2}.", Logger.Args(SlotName, level, rating));
+            }
+
+            return rating;
+        }
+        catch (Exception e) {
+            Logger.Error("Archmastery could not be worked out for {0}: {1}", Logger.Args(SlotName, e.Message));
+
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// "Power Orb Efficiency": 100% outside PvP; in PvP, how full the main deck is of PvP cards.
+    /// </summary>
+    private float ArchmasteryEfficiency {
+        get {
+            if (_archmasteryEfficiency is { } known) {
+                return known;
+            }
+
+            try {
+                var pvp = _duelActor.Duel.m_bPVP;
+                var size = 0;
+                var deck = pvp && _wizard is not null ? EquippedDeck(out size) : null;
+                _archmasteryEfficiency = Archmastery.Efficiency(pvp, deck, size);
+            }
+            catch (Exception e) {
+                Logger.Error("Power Orb efficiency could not be worked out for {0}: {1}", Logger.Args(SlotName, e.Message));
+                _archmasteryEfficiency = 1f;
+            }
+
+            return _archmasteryEfficiency.Value;
+        }
+    }
+
+    private void ArchmasteryRound(float highest) {
+        _archmasteryPower = Math.Min(Archmastery.MAX_POWER,
+            _archmasteryPower + Archmastery.FillThisRound(ArchmasteryRating, highest, ArchmasteryEfficiency));
+
+        // Power pips turn into school pips first, a point of power each.
+        var pipCount = CombatParticipant.m_pipCount;
+        while (_archmasteryPower >= 1f && pipCount.m_powerPips > 0 && SchoolPipTarget() is { } school) {
+            pipCount.m_powerPips--;
+            SetSchoolPips(pipCount, school, (byte) (SchoolPips(pipCount, school)!.Value + 1));
+            _archmasteryPower -= 1f;
+        }
+
+        // Then, with enough power left, a white pip turns into a power pip.
+        var powerPipCost = Archmastery.PowerPipCost;
+        if (_archmasteryPower >= powerPipCost && pipCount.m_genericPips > 0) {
+            pipCount.m_genericPips--;
+            pipCount.m_powerPips++;
+            _archmasteryPower -= powerPipCost;
+        }
+
+        CombatParticipant.m_archmasteryPoints = ArchmasteryPoints;
+    }
+
+    /// <summary>
+    /// Fills in what the client needs to lay out shadow pip slots and draw the shadow gauge. Wizards get
+    /// shadow magic unlocked whenever shadow pips are on.
+    /// </summary>
+    internal void ApplyPipGauges(WizGameStats stats) {
+        if (stats is null) {
+            return;
+        }
+
+        // The game only builds the Power Orb (and its school picker ring) when the battle stats show Archmastery,
+        // (1 + percent) * base + bonus above 0.01. The server's own rating goes in whole so the two always agree.
+        stats.m_archmasteryBase = ArchmasteryRating;
+        stats.m_archmasteryBonusFlat = 0;
+        stats.m_archmasteryBonusPercentage = 0;
+
+        // .mastery and .allknowing: the game decides which cards a wizard can afford from these, so they are sent too.
+        foreach (var school in IsAllKnowing ? _cheatMasteries.Concat(Commands.Protocols.CommandPipProtocol.Schools.Select(s => (uint) s)) : _cheatMasteries) {
+            switch ((MagicSchool) school) {
+                case MagicSchool.Storm: stats.m_stormMastery = Math.Max(stats.m_stormMastery, 1); break;
+                case MagicSchool.Fire: stats.m_fireMastery = Math.Max(stats.m_fireMastery, 1); break;
+                case MagicSchool.Ice: stats.m_iceMastery = Math.Max(stats.m_iceMastery, 1); break;
+                case MagicSchool.Myth: stats.m_mythMastery = Math.Max(stats.m_mythMastery, 1); break;
+                case MagicSchool.Life: stats.m_lifeMastery = Math.Max(stats.m_lifeMastery, 1); break;
+                case MagicSchool.Death: stats.m_deathMastery = Math.Max(stats.m_deathMastery, 1); break;
+                case MagicSchool.Balance: stats.m_balanceMastery = Math.Max(stats.m_balanceMastery, 1); break;
+            }
+        }
+
+        if (!HasShadowMagic) {
+            return;
+        }
+
+        var max = MaxShadowPips;
+        stats.m_shadowMagicUnlocked = true;
+        stats.m_shadowPipMax = Math.Max(max >= NO_SHADOW_LIMIT ? SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT : max,
+            CombatParticipant?.m_pipCount?.m_shadowPips ?? 0);
+        stats.m_shadowPipRating = ShadowPipChance();
+        stats.m_shadowPipRateAccumulated = _shadowGauge;
+        stats.m_shadowPipRateThreshold = GAUGE_FULL;
+        stats.m_shadowPipRatePercentage = (int) _shadowGauge;
+    }
+
+    /// <summary>
+    /// Shown shadow pip slots in the settings the server uses, for the login stats.
+    /// </summary>
+    internal static int ShownPlayerShadowSlots
+        => s_playerMaxShadowPips >= NO_SHADOW_LIMIT ? SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT : s_playerMaxShadowPips;
+
+    internal static bool ShadowPipsOn => s_shadowPips;
+
+    // A wizard who used .intothedarkness has shadow magic of their own, whatever the toggles say.
+    private bool HasOwnShadowMagic => _wizard is not null && ParticipantGameStats?.m_shadowMagicUnlocked == true;
+
+    // .pip give shadow: shadow slots for the rest of this battle, so the given pips show on the circle.
+    private bool _cheatShadowMagic;
+
+    private bool HasShadowMagic => _cheatShadowMagic
+        || (_wizard is null ? s_shadowPips && !BossHasNoShadowPips && (CreatureHasShadowMagic || BossShadowPips.Most > 0)
+                            : s_shadowPips || HasOwnShadowMagic);
+
+    private static readonly MagicSchool[] s_pipSchools = [
+        MagicSchool.Balance, MagicSchool.Death, MagicSchool.Fire, MagicSchool.Ice,
+        MagicSchool.Life, MagicSchool.Myth, MagicSchool.Storm,
+    ];
+
+    private static byte? SchoolPips(PipCount pips, MagicSchool school) => school switch {
+        MagicSchool.Balance => pips.m_balancePips,
+        MagicSchool.Death   => pips.m_deathPips,
+        MagicSchool.Fire    => pips.m_firePips,
+        MagicSchool.Ice     => pips.m_icePips,
+        MagicSchool.Life    => pips.m_lifePips,
+        MagicSchool.Myth    => pips.m_mythPips,
+        MagicSchool.Storm   => pips.m_stormPips,
+        _ => null,
+    };
+
+    /// <summary>
+    /// A spell's pip change (kModifyPowerPips, kModifyShadowPips, kModifySchoolPips): above 0 gives, below 0 takes.
+    /// Gains fill free pip slots, then turn normal pips into the kind given, never past the 7 slots.
+    /// </summary>
+    /// <param name="school">For school pips, the school; null for power pips.</param>
+    internal void ChangePips(MagicSchool? school, int amount, bool shadow = false) {
+        if (CombatParticipant?.m_pipCount is not { } pips || amount == 0) {
+            return;
+        }
+
+        if (shadow) {
+            var max = Math.Max(1, MaxShadowPips >= NO_SHADOW_LIMIT ? SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT : MaxShadowPips);
+            pips.m_shadowPips = (byte) Math.Clamp(pips.m_shadowPips + amount, 0, Math.Max(max, pips.m_shadowPips));
+
+            return;
+        }
+
+        byte Get() => school is { } s ? SchoolPips(pips, s) ?? 0 : pips.m_powerPips;
+        void Set(int value) {
+            if (school is { } s) {
+                SetSchoolPips(pips, s, (byte) value);
+            }
+            else {
+                pips.m_powerPips = (byte) value;
+            }
+        }
+
+        if (school is { } known && SchoolPips(pips, known) is null) {
+            return;
+        }
+
+        if (amount < 0) {
+            Set(Math.Max(0, Get() + amount));
+
+            return;
+        }
+
+        for (var i = 0; i < amount; i++) {
+            if (TotalPips(pips) < MAX_PIP_COUNT) {
+                Set(Get() + 1);
+            }
+            else if (pips.m_genericPips > 0) {
+                pips.m_genericPips--;
+                Set(Get() + 1);
+            }
+            else {
+                break;
+            }
+        }
+    }
+
+    private static void SetSchoolPips(PipCount pips, MagicSchool school, byte value) {
+        switch (school) {
+            case MagicSchool.Balance: pips.m_balancePips = value; break;
+            case MagicSchool.Death:   pips.m_deathPips = value; break;
+            case MagicSchool.Fire:    pips.m_firePips = value; break;
+            case MagicSchool.Ice:     pips.m_icePips = value; break;
+            case MagicSchool.Life:    pips.m_lifePips = value; break;
+            case MagicSchool.Myth:    pips.m_mythPips = value; break;
+            case MagicSchool.Storm:   pips.m_stormPips = value; break;
+        }
+    }
+
+    // The school pips a spell costs, school by school.
+    private static IEnumerable<(MagicSchool School, byte Cost)> SchoolPipCosts(SpellRank rank) {
+        if (rank is null) {
+            yield break;
+        }
+
+        yield return (MagicSchool.Balance, rank.m_balancePips);
+        yield return (MagicSchool.Death, rank.m_deathPips);
+        yield return (MagicSchool.Fire, rank.m_firePips);
+        yield return (MagicSchool.Ice, rank.m_icePips);
+        yield return (MagicSchool.Life, rank.m_lifePips);
+        yield return (MagicSchool.Myth, rank.m_mythPips);
+        yield return (MagicSchool.Storm, rank.m_stormPips);
+    }
+
+    /// <summary>
+    /// Whether the participant has the school pips a spell costs.
+    /// </summary>
+    internal bool HasSchoolPipsForSpell(Spell spell)
+        => (s_anySchoolPips
+               ? s_pipSchools.Sum(school => SchoolPips(CombatParticipant.m_pipCount, school) ?? 0)
+                 >= SchoolPipCosts(spell.m_pipCost).Sum(c => c.Cost)
+               : SchoolPipCosts(spell.m_pipCost).All(c => c.Cost == 0 || (SchoolPips(CombatParticipant.m_pipCount, c.School) ?? 0) >= c.Cost))
+           && (spell.m_pipCost is null || CombatParticipant.m_pipCount.m_shadowPips >= spell.m_pipCost.m_shadowPips);
+
+    // [Battle] AnySchoolPips: a school pip of any school pays for any school's pip cost.
+    private static bool s_anySchoolPips => ConfigurationManager.GetValue("Battle.AnySchoolPips", false);
+
+    /// <summary>
+    /// Spends the school pips a spell costs.
+    /// </summary>
+    internal void DeductSchoolPips(Spell spell) {
+        var pipCount = CombatParticipant.m_pipCount;
+        if (spell.m_pipCost is { m_shadowPips: > 0 } rank) {
+            pipCount.m_shadowPips = (byte) Math.Max(0, pipCount.m_shadowPips - rank.m_shadowPips);
+        }
+
+        var unpaid = 0;
+        foreach (var (school, cost) in SchoolPipCosts(spell.m_pipCost)) {
+            if (cost > 0 && SchoolPips(pipCount, school) is { } have) {
+                SetSchoolPips(pipCount, school, (byte) Math.Max(0, have - cost));
+                unpaid += Math.Max(0, cost - have);
+            }
+        }
+
+        // With AnySchoolPips, what the spell's own schools could not pay comes from the other schools, the
+        // fullest first.
+        while (s_anySchoolPips && unpaid > 0) {
+            var fullest = s_pipSchools.OrderByDescending(school => SchoolPips(pipCount, school) ?? 0).First();
+            var have = SchoolPips(pipCount, fullest) ?? 0;
+            if (have == 0) {
+                break;
+            }
+
+            var take = Math.Min(have, unpaid);
+            SetSchoolPips(pipCount, fullest, (byte) (have - take));
+            unpaid -= take;
+        }
+    }
+
+    // .mastery: schools this wizard counts as mastering for the rest of this battle.
+    private readonly HashSet<uint> _cheatMasteries = [];
+
+    /// <summary>
+    /// .mastery: this wizard counts as mastering the school for the rest of this battle.
+    /// </summary>
+    internal void GrantMastery(MagicSchool school) => _cheatMasteries.Add((uint) school);
+
+    // .allknowing on: mastery of every school in every battle.
+    private bool IsAllKnowing => _wizard is not null && BattleModes.AllKnowing.IsOn(_wizard.CharId);
+
+    /// <summary>
+    /// .pip give: adds pips for the rest of this battle. Normal, power and school pips share the 7 slots: they
+    /// fill empty slots first, then turn normal pips into the asked kind. Shadow pips go in their own slots.
+    /// </summary>
+    /// <param name="kind">"light", "power", "shadow", "all" (power and shadow) or a school name.</param>
+    /// <param name="amount">How many, or -1 for as many as fit.</param>
+    /// <returns>What changed, for the chat window.</returns>
+    internal string GivePips(string kind, int amount) {
+        var pips = CombatParticipant?.m_pipCount;
+        if (pips is null) {
+            return "Your pips could not be changed.";
+        }
+
+        if (kind == "all") {
+            var power = GivePips("power", amount);
+            var shadow = GivePips("shadow", amount);
+
+            return $"{power} {shadow}";
+        }
+
+        if (kind == "shadow") {
+            _cheatShadowMagic = true;
+            var max = MaxShadowPips >= NO_SHADOW_LIMIT ? SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT : Math.Max(MaxShadowPips, 1);
+            var target = amount < 0 ? max : Math.Min(max, pips.m_shadowPips + amount);
+            var added = Math.Max(0, target - pips.m_shadowPips);
+            pips.m_shadowPips = (byte) Math.Max(pips.m_shadowPips, target);
+
+            return $"+{added} shadow pips ({pips.m_shadowPips} of {max}).";
+        }
+
+        MagicSchool? school = kind switch {
+            "light" or "power" => null,
+            _ => Enum.TryParse<MagicSchool>(kind, true, out var parsed) && SchoolPips(pips, parsed) is not null ? parsed : null,
+        };
+        if (kind is not ("light" or "power") && school is null) {
+            return $"\"{kind}\" is not a pip type. Use light, power, shadow, all or a school such as fire.";
+        }
+
+        var wanted = amount < 0 ? MAX_PIP_COUNT : amount;
+        var given = 0;
+        void AddOne() {
+            if (kind == "light") {
+                pips.m_genericPips++;
+            }
+            else if (kind == "power") {
+                pips.m_powerPips++;
+            }
+            else {
+                SetSchoolPips(pips, school.Value, (byte) (SchoolPips(pips, school.Value)!.Value + 1));
+            }
+
+            given++;
+        }
+
+        while (given < wanted && TotalPips(pips) < MAX_PIP_COUNT) {
+            AddOne();
+        }
+
+        // No empty slot left: normal pips turn into the asked kind.
+        while (given < wanted && kind != "light" && pips.m_genericPips > 0) {
+            pips.m_genericPips--;
+            AddOne();
+        }
+
+        // School pips are the Archmastery pips: they fill the school slots, not the Archmastery gauge.
+        var name = kind == "light" ? "normal" : school is { } picked ? $"{picked} Archmastery" : kind;
+
+        return given == 0 ? $"No room for more {name} pips." : $"+{given} {name} pips.";
+    }
+
     internal bool HasSchoolMastery(uint magicSchoolID) {
-        if (ParticipantGameStats.m_schoolID == magicSchoolID) {
+        if (ParticipantGameStats.m_schoolID == magicSchoolID || _cheatMasteries.Contains(magicSchoolID) || IsAllKnowing
+            || (CheatSchoolNow is { } cheatSchool && (uint) cheatSchool == magicSchoolID)) {
             return true;
         }
 
@@ -308,15 +1117,16 @@ public class CombatDuelSubCircle {
             throw new ArgumentException("List items must be primitive types or enums");
         }
 
-        // Check if we're over the max index.
-        var maxIndex = MagicSchools.GetMaxMagicSchoolIndex();
-        if (list.Count < maxIndex) {
-            throw new ArgumentException("List must have a count equal to the max magic school index.");
+        // A spell school with no stat entry ("All", "None", an empty name, or a list shorter than the schools) has no
+        // school stat. This threw before and took the whole round with it (a PvP duel's planning phase in Niduus's log,
+        // 2026-10-21: "List must have a count equal to the max magic school index"), so no spell of that round cast.
+        if (MagicSchools.GetMagicSchool(StatSchool(magicSchool)) is not { } school) {
+            return default;
         }
 
-        var index = (int) MagicSchools.GetMagicSchool(magicSchool).m_schoolIndex;
+        var index = (int) school.m_schoolIndex;
 
-        return list[index];
+        return index >= 0 && index < list.Count ? list[index] : default;
     }
 
     internal bool HasPipsForSpell(Spell spell) {
@@ -335,11 +1145,39 @@ public class CombatDuelSubCircle {
             ? genericPips + (powerPips * 2)
             : genericPips + powerPips;
 
-        return totalPips >= spellRank;
+        // School pips left after the spell's own school pip cost pay for its rank too: one of the spell's school as a
+        // power pip, any other as a normal pip. Full pips turn power pips into school pips each round, so without this
+        // a wizard ended up unable to cast while the game still offered the cards (Niduus, 2026-10-23).
+        var (ownSchool, otherSchools) = SpareSchoolPips(spell);
+        totalPips += (isMastered ? ownSchool * 2 : ownSchool) + otherSchools;
+
+        return totalPips >= spellRank && HasSchoolPipsForSpell(spell) && HasManaForSpell(spell);
+    }
+
+    // The school pips not needed for the spell's school pip cost: those of the spell's school and the rest.
+    private (int Own, int Other) SpareSchoolPips(Spell spell) {
+        var pips = CombatParticipant.m_pipCount;
+        var costs = SchoolPipCosts(spell?.m_pipCost).ToDictionary(c => c.School, c => (int) c.Cost);
+        int own = 0, other = 0;
+        foreach (var school in s_pipSchools) {
+            var spare = Math.Max(0, (SchoolPips(pips, school) ?? 0) - costs.GetValueOrDefault(school));
+            if ((uint) school == spell?.m_magicSchoolID) {
+                own += spare;
+            }
+            else {
+                other += spare;
+            }
+        }
+
+        return (own, other);
     }
 
     internal bool TryStun() {
-        // todo: check if this creature can be stunned.
+        // A boss set to Stunable: No in the app's Bosses tab shrugs stuns off (no stun, no stun block).
+        if (_wizard is null && _bossOverride?.Stunable == false) {
+            return false;
+        }
+
         CombatParticipant.m_stunned = 1;
 
         return true;
@@ -347,7 +1185,7 @@ public class CombatDuelSubCircle {
 
     internal void DamageParticipant(int damage) {
         // If the participant is a player, update their health.
-        if (_wizard is not null) {
+        if (_wizard is not null && !FightsWithCopy) {
             var currentHealth = ParticipantGameStats.m_currentHitpoints;
             var newHealth = currentHealth - damage;
 
@@ -370,9 +1208,52 @@ public class CombatDuelSubCircle {
         }
     }
 
+    /// <summary>
+    /// Sets the health outright, even from 0 (an afterlife, or a wizard getting up after a won battle), and keeps the
+    /// participant's own health in step.
+    /// </summary>
+    internal void SetHealthTo(int health) {
+        if (ParticipantGameStats is null) {
+            return;
+        }
+
+        health = Math.Max(0, health);
+        if (_wizard is not null && !FightsWithCopy) {
+            _wizard.UpdateHealth(health);
+        }
+        else {
+            ParticipantGameStats.m_currentHitpoints = health;
+        }
+
+        SyncParticipantHealth();
+    }
+
+    /// <summary>
+    /// Puts the server's health into the participant (m_playerHealth, m_maxPlayerHealth and its game stats), which the
+    /// game reads for the health ring on the duel circle. They were only set when the participant joined, so a later
+    /// re-send (a late joiner's MSG_COMBATADD, the participant list) carried the health from the start of the battle.
+    /// </summary>
+    internal void SyncParticipantHealth() {
+        if (CombatParticipant is not { } participant || ParticipantGameStats is not { } stats) {
+            return;
+        }
+
+        var most = participant.m_maxPlayerHealth > 0 ? participant.m_maxPlayerHealth : stats.m_baseHitpoints;
+        participant.m_maxPlayerHealth = Math.Max(most, stats.m_currentHitpoints);
+        participant.m_playerHealth = Math.Max(0, stats.m_currentHitpoints);
+        if (participant.m_pGameStats is { } combatStats) {
+            combatStats.m_currentHitpoints = participant.m_playerHealth;
+        }
+    }
+
     internal void HealParticipant(int heal) {
+        // Healing never brings a defeated participant back.
+        if (!IsAlive) {
+            return;
+        }
+
         // If the participant is a player, update their health.
-        if (_wizard is not null) {
+        if (_wizard is not null && !FightsWithCopy) {
             var currentHealth = ParticipantGameStats.m_currentHitpoints;
             var newHealth = currentHealth + heal;
 
@@ -395,24 +1276,94 @@ public class CombatDuelSubCircle {
         }
     }
 
+    // [Battle] UnlimitedMana: spells cost no mana, and mana refills in the Commons.
+    internal static bool UnlimitedMana => ConfigurationManager.GetValue("Battle.UnlimitedMana", false);
+
     internal void DeductMana(int mana) {
         // If the participant is a player, update their mana.
         // Creature's don't have mana.
-        if (_wizard is not null) {
-            var currentMana = ParticipantGameStats.m_currentMana;
-            var newMana = currentMana - mana;
+        if (_wizard is null || UnlimitedMana || mana <= 0) {
+            return;
+        }
 
-            // Make sure the mana doesn't go below 0.
-            if (newMana < 0) {
-                newMana = 0;
-            }
+        var currentMana = ParticipantGameStats.m_currentMana;
+        var newMana = Math.Max(0, currentMana - mana);
 
-            // Update the mana of the player.
+        // Update the mana of the player, and the mana globe on their screen. A PvP duel only changes its copy.
+        if (FightsWithCopy) {
+            ParticipantGameStats.m_currentMana = newMana;
+        }
+        else {
             _wizard.UpdateMana(newMana);
         }
+        ParticipantActor.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEMANA {
+            Mana = newMana,
+            MaxMana = ParticipantGameStats.GetClientTypeAlternative().m_baseMana,
+            DisplayDiff = 1,
+        });
     }
 
-    internal void DeductPips(MagicSchool school, byte spellRank) {
+    /// <summary>
+    /// A wizard needs at least as much mana as the spell's pip cost to cast it (unless UnlimitedMana is on).
+    /// </summary>
+    private bool HasManaForSpell(Spell spell)
+        => _wizard is null || UnlimitedMana || ParticipantGameStats.m_currentMana >= spell.m_pipCost.m_spellRank;
+
+    // [Battle] FullPipConversion (on by default, Niduus 2026-10-23): a wizard with any Pip Conversion for a spell's
+    // school always gets the conversion. Off, the chance is the rating times the game's first-tier scalar (0.00205,
+    // WizStatisticEffectConfig), with no diminishing returns: 100 rating is about 20%, 500 or more is 100%.
+    private static bool s_fullPipConversion => ConfigurationManager.GetValue("Battle.FullPipConversion", true);
+    private const float DEFAULT_PIP_CONVERSION_SCALAR = 0.00205f;
+
+    /// <summary>
+    /// The wizard's Pip Conversion rating for a school: that school's rating plus the all-schools one.
+    /// </summary>
+    internal float PipConversionRating(MagicSchool school) {
+        var stats = ParticipantGameStats;
+        if (_wizard is null || stats is null) {
+            return 0;
+        }
+
+        return stats.m_pipConversionRatingAll + GetStatBySchool(stats.m_pipConversionRatingPerSchool, school.ToString());
+    }
+
+    internal float PipConversionChance(MagicSchool school) {
+        var rating = PipConversionRating(school);
+        if (rating <= 0) {
+            return 0;
+        }
+        if (s_fullPipConversion) {
+            return 1;
+        }
+
+        var scalar = Imlight.CoreLib.Game.Effects.WizStatisticEffectConfigLoader.Config?.m_pipConversionLevelData?
+            .FirstOrDefault()?.m_levelValues?.FirstOrDefault()?.m_scalarBase ?? 0f;
+
+        return Math.Clamp(rating * (scalar > 0 ? scalar : DEFAULT_PIP_CONVERSION_SCALAR), 0f, 1f);
+    }
+
+    /// <summary>
+    /// Pip Conversion (the game's "Converted to Power Pip!"): after a wizard casts a spell that cost pips, the Pip
+    /// Conversion chance for the spell's school turns one of their normal pips into a power pip.
+    /// </summary>
+    internal void TryPipConversion(MagicSchool school) {
+        var pips = CombatParticipant.m_pipCount;
+        if (pips.m_genericPips == 0) {
+            return;
+        }
+
+        var chance = PipConversionChance(school);
+        if (chance <= 0 || Random.Shared.NextDouble() >= chance) {
+            return;
+        }
+
+        pips.m_genericPips--;
+        pips.m_powerPips++;
+        Logger.Debug("Pip Conversion ({0} rating {1}, {2:P0}): {3} had a normal pip turned into a power pip.",
+            Logger.Args(school, PipConversionRating(school), chance, SlotName));
+    }
+
+    internal void DeductPips(MagicSchool school, byte spellRank, bool fullPipConserve = false) {
         var isMastered = HasSchoolMastery((uint) school);
         var pipCount = CombatParticipant.m_pipCount;
 
@@ -421,6 +1372,17 @@ public class CombatDuelSubCircle {
         while (spellRank is > 0 and < (MAX_PIP_COUNT * 2)) {
             if (isMastered && pipCount.m_powerPips > 0) {
                 pipCount.m_powerPips--;
+
+                // A power pip is worth 2 here; paying the last 1 with it wastes half. Pip conserve
+                // (100% with FullPipConserve) hands that half back as a normal pip.
+                if (spellRank == 1) {
+                    if (fullPipConserve) {
+                        pipCount.m_genericPips++;
+                    }
+
+                    break;
+                }
+
                 spellRank -= 2;
             }
             else if (!isMastered && pipCount.m_powerPips > 0) {
@@ -431,7 +1393,17 @@ public class CombatDuelSubCircle {
                 pipCount.m_genericPips--;
                 spellRank--;
             }
-            else if (pipCount.m_powerPips == 0 && pipCount.m_genericPips == 0) {
+            else if ((SchoolPips(pipCount, school) ?? 0) > 0) {
+                // A school pip of the spell's school pays like a power pip.
+                SetSchoolPips(pipCount, school, (byte) (SchoolPips(pipCount, school).Value - 1));
+                spellRank = (byte) Math.Max(0, spellRank - (isMastered ? 2 : 1));
+            }
+            else if (s_pipSchools.Where(other => (SchoolPips(pipCount, other) ?? 0) > 0).Cast<MagicSchool?>().FirstOrDefault() is { } other) {
+                // Any other school pip pays like a normal pip.
+                SetSchoolPips(pipCount, other, (byte) (SchoolPips(pipCount, other).Value - 1));
+                spellRank--;
+            }
+            else {
                 break;
             }
         }
@@ -441,6 +1413,10 @@ public class CombatDuelSubCircle {
         var ourPipCount = CombatParticipant.m_pipCount;
         ourPipCount.m_powerPips = 0;
         ourPipCount.m_genericPips = 0;
+        ourPipCount.m_shadowPips = 0;
+        foreach (var school in s_pipSchools) {
+            SetSchoolPips(ourPipCount, school, 0);
+        }
     }
 
     internal void Reshuffle() => _combatDeck.Reshuffle();
@@ -473,12 +1449,28 @@ public class CombatDuelSubCircle {
             .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg)
             .Result
             .Wizard;
+        _deckArchmasterySchool = DeckArchmasterySchool();
+        if (_deckArchmasterySchool != 0) {
+            Logger.Debug("Deck school pip gauge school: {0}.", Logger.Args(_deckArchmasterySchool));
+        }
 
-        // Dyanmic symbols start at 9 for players.
-        var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 9);
-
-        ParticipantGameStats = _wizard.GameStats;
+        IsSandboxed = _duelActor.Duel.m_bPVP;
+        // The Deckathalon (Game/Events/Deckathalon.cs): the stats of the wizard's level and deck, and treasure cards only.
+        var deckathalon = !IsSandboxed && Imlight.CoreLib.Game.Events.Deckathalon.FightsHere(_wizard);
+        FightsWithCopy = IsSandboxed || deckathalon;
+        ParticipantGameStats = deckathalon ? Imlight.CoreLib.Game.Events.Deckathalon.StatsFor(_wizard)
+            : IsSandboxed ? _wizard.GameStats.CopyForDuel() : _wizard.GameStats;
         var combatStats = ParticipantGameStats.GetCombatGameStats();
+        // What the game is told this wizard fights with, to hold next to .stats and the game's Stats page.
+        Logger.Debug("Stats sent to the game for {0}: damage [{1}] + {2} all, resist [{3}] + {4} all, pierce [{5}] + {6} all, flat [{7}] + {8} all.",
+            Logger.Args(SlotName, string.Join(", ", combatStats.m_dmgBonusPercent ?? []), combatStats.m_dmgBonusPercentAll,
+                string.Join(", ", combatStats.m_dmgReducePercent ?? []), combatStats.m_dmgReducePercentAll,
+                string.Join(", ", combatStats.m_apBonusPercent ?? []), combatStats.m_apBonusPercentAll,
+                string.Join(", ", combatStats.m_dmgBonusFlat ?? []), combatStats.m_dmgBonusFlatAll));
+        if (IsSandboxed && PvPLeagueScaling.TryScaleDuelStats(_duelActor.PvPLeagueId, ParticipantGameStats)) {
+            _clientGameStats = combatStats;
+            _resolverGameStats = ParticipantGameStats.GetCombatGameStats();
+        }
 
         // Collage spells the player has learned and temporary spells (perhaps from equipment)
         // into one list to create the combat hand. Treasure cards go into a separate vault.
@@ -490,11 +1482,13 @@ public class CombatDuelSubCircle {
                 var isTreasureCard = template is SpellTemplate spellTemplate
                     && (spellTemplate.m_Treasure || ((string)spellTemplate.m_name).EndsWith(" TC"));
 
-                // A deck entry the player hasn't learned can only be a treasure card (item cards live in
-                // TemporarySpells). Guarded on a populated list so an empty list can't misclassify the deck.
+                // A deck entry the player hasn't learned is a treasure card if they own it as one (item cards
+                // live in TemporarySpells). Spells a starter deck comes with are never learned, and must stay
+                // regular spells even once the player has learned others (such as randomizer starting spells).
                 if (!isTreasureCard
                     && _wizard.SpellbookBehavior.LearnedSpellTemplateIds is { Count: > 0 }
-                    && !_wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)) {
+                    && !_wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)
+                    && _wizard.SpellbookBehavior.TreasureCardCount(spell.m_templateID) > 0) {
                     isTreasureCard = true;
                 }
 
@@ -521,27 +1515,43 @@ public class CombatDuelSubCircle {
         var temporarySpells = new List<CombatDeckSpellData>();
         var equippedDeckId = _wizard.EquipmentBehavior.SlotList
             .FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck)?.ItemId;
+        var skipped = new Dictionary<uint, int>();
         foreach (var tempSpell in _wizard.SpellbookBehavior.TemporarySpells) {
-            // Check if this item spell is excluded for the equipped deck.
-            if (equippedDeckId != null
-                && _wizard.SpellbookBehavior.IsItemSpellExcluded(equippedDeckId.Value, tempSpell.m_templateID)) {
-                continue;
+            // Skip as many copies of this item spell as are crossed out for the equipped deck.
+            if (equippedDeckId != null) {
+                skipped.TryGetValue(tempSpell.m_templateID, out var done);
+                if (done < _wizard.SpellbookBehavior.ExcludedItemSpellCount(equippedDeckId.Value, tempSpell.m_templateID)) {
+                    skipped[tempSpell.m_templateID] = done + 1;
+
+                    continue;
+                }
             }
 
+            // Randomizer mode may swap each gear card for another spell of the same type and pip cost.
+            var itemCardId = Randomization.Randomizer.RollItemCard(tempSpell.m_templateID);
+
             // If the spell data already exists, increase the quantity.. otherwise add it.
-            var existingSpell = temporarySpells.Find(s => s.TemplateId == tempSpell.m_templateID);
+            var existingSpell = temporarySpells.Find(s => s.TemplateId == itemCardId);
             if (existingSpell is not null) {
                 existingSpell.Quantity++;
             }
             else {
                 temporarySpells.Add(new CombatDeckSpellData {
-                    TemplateId = tempSpell.m_templateID,
+                    TemplateId = itemCardId,
                     Quantity = 1,
                     IsItemCard = true
                 });
             }
         }
         allSpells.AddRange(temporarySpells);
+        if (deckathalon && Imlight.CoreLib.Game.Events.Deckathalon.TreasureCardsOnly) {
+            Logger.Information("Deckathalon: {0} fights with treasure cards only ({1} in the deck).", Logger.Args(_wizard.CharId, vaultSpells.Sum(v => (int) v.Quantity)));
+            allSpells.Clear();
+        }
+        Logger.Information("Battle deck for {0}: deck {1}, {2} item cards from gear, {3} left out as crossed out ({4}); saved crossed out: {5}.",
+            Logger.Args(_wizard.CharId, equippedDeckId, _wizard.SpellbookBehavior.TemporarySpells.Count, skipped.Values.Sum(),
+                string.Join(", ", skipped.Select(pair => $"{pair.Key} x{pair.Value}")),
+                string.Join("; ", _wizard.SpellbookBehavior.ExcludedItemSpellIds.Select(pair => $"deck {pair.Key}: {string.Join(", ", pair.Value)}"))));
         _combatDeck = new CombatDeck(allSpells, vaultSpells, PLAYER_HAND_SIZE);
 
         CombatParticipant = new CombatParticipant {
@@ -550,28 +1560,35 @@ public class CombatDuelSubCircle {
             m_isPlayer = true,
             m_zoneID = _duelActor.SigilId,
             m_isMonster = 0,
-            m_teamID = 0,
+            m_teamID = (int) OccupiedTeam,
             m_primaryMagicSchoolID = (int) _wizard.MagicSchoolBehavior.MagicSchool,
             m_pipCount = DetermineStartingPips(),
             m_pipRoundRates = new(),
-            m_originalTeam = 0,
+            m_originalTeam = (int) OccupiedTeam,
             m_maxHandSize = PLAYER_HAND_SIZE,
             m_playerHealth = ParticipantGameStats.m_currentHitpoints,
             m_maxPlayerHealth = ParticipantGameStats.m_baseHitpoints,
             // The client's crit sim reads the participant level from m_mobLevel (it zeroes its
             // crit chance below the level threshold when this is missing).
             m_mobLevel = ParticipantGameStats.Level,
-            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == 0,
+            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (int) OccupiedTeam,
             m_pGameStats = combatStats,
             m_pPlayDeck = new PlayDeck(),
             m_subcircle = SlotIndex,
-            m_dynamicSymbol = dynamicSymbol,
+            m_dynamicSymbol = DynamicSymbol,
             m_PipsSuspended = false,
+            m_shadowPipRateThreshold = GAUGE_FULL,
+            m_maxArchmasteryPoints = GAUGE_FULL,
+            m_archmasterySchool = ArchmasterySchool,
+            // The schools the Power Orb may be switched to in battle: any of the seven, like the deck window.
+            m_archmasteryFlags = ArchmasterySchool != 0 ? Archmastery.ALL_SCHOOL_FLAGS : 0,
+            m_pvp = IsSandboxed,
 
             m_color = _color,
             m_rotation = _rotation,
             m_radius = _radius,
         };
+        ApplyPipGauges(CombatParticipant.m_pGameStats);
     }
 
     private void InitializeCreatureSubCircle(bool asMinion = false, int minionOwnerSubCircle = 0) {
@@ -579,9 +1596,6 @@ public class CombatDuelSubCircle {
         var creatureStats = ParticipantActor
             .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(queryGameStatsMsg)
             .Result;
-
-        // Dynamic symbols start 1-4 for creatures.
-        var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 1);
 
         // Convert the creature stats to a combat deck.
         var spellData = new List<CombatDeckSpellData>();
@@ -596,9 +1610,21 @@ public class CombatDuelSubCircle {
             });
         }
 
+        // Changes saved in the app's Bosses tab (BossOverrides): the creature fights with a copy of its stats, so it
+        // keeps the game's own, and a changed file counts from the next battle.
+        var gameStats = creatureStats.GameStats;
+        var school = creatureStats.MagicSchool;
+        var level = creatureStats.CombatLevel;
+        // A custom (Customs.cs) has its own changes instead of its creature's.
+        _bossOverride = BossOverrides.For(Customs.KeyOf(ParticipantObject));
+        if (_bossOverride is { } boss) {
+            gameStats = BossOverrides.Apply(boss, gameStats, ref school, ref level);
+            spellData = BossOverrides.DeckOf(boss) ?? spellData;
+        }
+
         _combatDeck = new CombatDeck(spellData, [], PLAYER_HAND_SIZE);
 
-        ParticipantGameStats = creatureStats.GameStats;
+        ParticipantGameStats = gameStats;
         CombatParticipant = new CombatParticipant {
             m_ownerID = ParticipantObject.m_globalID,
             m_templateID = 2199023290637, // Captured 2199023290637 from live
@@ -606,31 +1632,40 @@ public class CombatDuelSubCircle {
             m_zoneID = _duelActor.SigilId,
             m_isMonster = 0, // Live server sends 0
             // Minions are creatures on the player team; m_isPlayer stays false.
-            m_teamID = asMinion ? 0 : 1,
-            m_originalTeam = 0,
+            m_teamID = (int) OccupiedTeam,
+            m_originalTeam = asMinion ? (int) OccupiedTeam : 0,
             m_isMinion = asMinion,
             m_maxHandSize = PLAYER_HAND_SIZE,
-            m_primaryMagicSchoolID = (int) creatureStats.MagicSchool,
+            m_primaryMagicSchoolID = (int) school,
             m_pipCount = DetermineStartingPips(),
             m_pipRoundRates = new(),
-            m_playerHealth = creatureStats.GameStats.m_currentHitpoints,
-            m_maxPlayerHealth = creatureStats.GameStats.m_baseHitpoints,
-            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == 1,
-            m_pGameStats = creatureStats.GameStats.GetCombatGameStats(),
-            m_mobLevel = creatureStats.CombatLevel,
+            m_playerHealth = gameStats.m_currentHitpoints,
+            m_maxPlayerHealth = gameStats.m_baseHitpoints,
+            // todo: a PvE minion has always been told it acts with the creatures, is that right?
+            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (int) (_duelActor.Duel.m_bPVP ? OccupiedTeam : CombatTeam.Monster),
+            m_pGameStats = gameStats.GetCombatGameStats(),
+            m_mobLevel = level,
 
-            m_minionStartingHealth = asMinion ? creatureStats.GameStats.m_currentHitpoints : 0,
-            m_curMaxHP = asMinion ? creatureStats.GameStats.m_baseHitpoints : 0,
+            m_minionStartingHealth = asMinion ? gameStats.m_currentHitpoints : 0,
+            m_curMaxHP = asMinion ? gameStats.m_baseHitpoints : 0,
             // The client links a minion to its owner through this sub-circle.
             m_minionSubCircle = asMinion ? minionOwnerSubCircle : 0,
 
             m_subcircle = SlotIndex,
-            m_dynamicSymbol = dynamicSymbol,
+            m_dynamicSymbol = DynamicSymbol,
+            m_pvp = _duelActor.Duel.m_bPVP,
 
             m_color = _color,
             m_rotation = _rotation,
             m_radius = _radius,
         };
+        // A creature with Archmastery in its stats has a Power Orb of its own school.
+        if (ArchmasterySchool is var orbSchool and not 0) {
+            CombatParticipant.m_maxArchmasteryPoints = GAUGE_FULL;
+            CombatParticipant.m_archmasterySchool = orbSchool;
+            CombatParticipant.m_archmasteryFlags = Archmastery.FlagOf((MagicSchool) orbSchool);
+        }
+        ApplyPipGauges(CombatParticipant.m_pGameStats);
     }
 
     private async Task PlayEntranceAnimation(CoreObject participantObject, IActorRef participantActor) {
@@ -666,7 +1701,21 @@ public class CombatDuelSubCircle {
         });
     }
 
+    // The circles of the creature side show Dagger, Key, Gem and Spiral (1 to 4), the others Sun, Eye, Star and Moon
+    // (9 to 12), whoever stands on them. The player circles are slots 4 to 7: SlotIndex + 9 was 13 to 16, which the
+    // game has no symbol for, so a wizard's card showed the shadow icon instead of their circle's (Niduus, 2026-10-25).
+    private DynamicSigilSymbol DynamicSymbol
+        => (DynamicSigilSymbol) ((SlotType == CombatSlotType.Creature ? 1 : 9) + SlotIndex % 4);
+
     private PipCount DetermineStartingPips() {
+        // .harmony on: all 7 pips as power pips and full shadow pips.
+        if (_wizard is not null && BattleModes.Harmony.IsOn(_wizard.CharId)) {
+            _cheatShadowMagic = true;
+            var shadow = MaxShadowPips >= NO_SHADOW_LIMIT ? SHOWN_SHADOW_SLOTS_WITHOUT_LIMIT : Math.Max(MaxShadowPips, 1);
+
+            return new PipCount { m_powerPips = MAX_PIP_COUNT, m_shadowPips = (byte) shadow };
+        }
+
         var pipCount = new PipCount() {
             m_powerPips = ParticipantGameStats.m_startingPowerPips,
             m_genericPips = ParticipantGameStats.m_startingPips
@@ -692,8 +1741,8 @@ public class CombatDuelSubCircle {
         return pipCount;
     }
 
-    private bool DeterminePowerPipGain(CombatParticipant participant) {
-        var stats = participant.m_pGameStats;
+    private bool DeterminePowerPipGain() {
+        var stats = ResolverGameStats;
         var powerPipChance = 100 * (stats.m_powerPipBase + stats.m_powerPipBonusPercentAll);
 
         var powerPipRoll = Random.Shared.Next(0, 100);

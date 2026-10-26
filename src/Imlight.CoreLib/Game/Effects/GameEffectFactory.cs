@@ -64,6 +64,8 @@ internal static class GameEffectFactory {
                 return CreateSpeedEffect(speedEffectInfo, itemSlotId);
             case StatisticEffectInfo statisticEffectInfo:
                 return CreateWizStatisticEffect(statisticEffectInfo, itemSlotId);
+            case TransformationEffectInfo transformationEffectInfo:
+                return CreateTransformationEffect(transformationEffectInfo, itemSlotId);
             default:
                 Logger.Warning("Unknown effect type: {0}", Logger.Args(info.GetType().Name));
                 return null;
@@ -118,6 +120,9 @@ internal static class GameEffectFactory {
         // Broad category effects are property specific.
         var effectName = info.m_effectName.ToString();
         switch (effectName) {
+            // Archmastery Rating and Archmastery % (jewels, gear, pets, creature stats).
+            case var _ when effectName.Contains("ArchmasteryPercent"): effect.m_archmasteryBonusPercent = val; break;
+            case var _ when effectName.Contains("Archmastery"): effect.m_archmastery = val; break;
             case var _ when effectName.Contains("MaxMana"): effect.m_manaBonus = val; break;
             case var _ when effectName.Contains("MaxHealth"): effect.m_hitPointBonus = val; break;
             case var _ when effectName.Contains("MaxEnergy"): effect.m_energyBonus = val; break;
@@ -147,6 +152,25 @@ internal static class GameEffectFactory {
             case "CanonicalBalanceMastery": effect.m_balanceMastery = 1; break;
             default: break;
         }
+
+        return effect;
+    }
+
+    private static TransformationEffect CreateTransformationEffect(TransformationEffectInfo info, uint itemSlotId) {
+        // TODO: implement m_endTime
+
+        var effect = new TransformationEffect() {
+            m_sRace = info.m_sRace,
+            m_eGender = info.m_eGender,
+            m_fScale = info.m_fScale,
+            m_nPrimaryColor = info.m_nPrimaryColor,
+            m_nSecondaryColor = info.m_nSecondaryColor,
+            m_nPatternOption = info.m_nPatternOption,
+            m_nGeometryOption = info.m_nGeometryOption,
+            m_sNaturalAttack = info.m_sNaturalAttack,
+            m_effectNameID = StringHash.Compute(info.m_effectName),
+            m_itemSlotID = itemSlotId,
+        };
 
         return effect;
     }

@@ -41,6 +41,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Randomization;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Resources;
@@ -59,18 +60,378 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
     public WizBangs WizBang       => WizBangs.Training;
     public string StateName       => "Shop";
     public string InteractWizBang => "Registrar";
-    public string DisplayKey      => "GUI_ShopOptionEquipment";
+    public string DisplayKey      => "GUI_00000979"; // Spell List
 
     public List<NPCSpellEntry> SpellInventory { get; private set; } = [];
     private List<ServiceOptionBase> _serviceOptionBases = [];
+    private readonly HashSet<ulong> _showingSpellOptions = [];
 
     public static bool ShouldAttachToEntity(CoreTemplate template) 
         // Attach if the template is an NPC and has a spell inventory in Dragon database.
         => template is GameObjectTemplate goTemplate 
-        && goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate) 
-        && NpcSpellInventoryCollection.TryGetNpcInventory(goTemplate.m_templateID, out _);
+        // The Tome of Fishing in the Commons is a book on a pedestal, not an NPC.
+        && (goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate) || TestTrainerKindOf(goTemplate) == TestTrainerKind.Tome)
+        && (NpcSpellInventoryCollection.TryGetNpcInventory(goTemplate.m_templateID, out _)
+            || TestTrainerKindOf(goTemplate) is not null
+            || Imlight.CoreLib.Game.World.TradeTrainers.For(goTemplate.m_templateID) is not null
+            || Imlight.CoreLib.Game.Gardening.GardenLessons.IsTrainer(goTemplate.m_templateID)
+            || Imlight.CoreLib.Game.World.NpcChanges.For(goTemplate.m_templateID) is { HideTraining: false, Spells.Count: > 0 });
+
+    /// <summary>
+    /// A test trainer teaches a whole kind of spell for free, at any level. In Ravenwood: Monstrologist Burke every
+    /// Extract spell and Mellori the Shadow spells. The monster and boss spells (TestTrainerKind.Boss) are taught by
+    /// the house set trainers and the Customs tab's preset; the Ravenwood Merle Ambrose who taught them is a quest copy
+    /// that stays hidden until a quest calls for him (Niduus 2026-10-25). Mr. Lincoln teaches nothing (he resets
+    /// training points).
+    /// </summary>
+    public bool IsTestTrainer { get; private set; }
+
+    /// <summary>
+    /// A trainer of the Customs tab (CustomNpcs): it teaches exactly its list, each spell at its own price in training
+    /// points, at any level and with no spell needed first, in sections of 50 as the test trainers do.
+    /// </summary>
+    public bool IsCustom => _custom is not null;
+
+    /// <summary>Whether the trainer teaches its spells as listed: the randomizer's swaps do not reach them.</summary>
+    public bool TeachesAsListed => IsTestTrainer || IsCustom || IsGardenTrainer
+        || (_change is not null && SpellInventory.Count > TEST_TRAINER_MAX_OPTIONS);
+
+    /// <summary>
+    /// A garden trainer (Farley, Charley, Barley, Harley, Marley, Narley, Roger the Shrubber): it teaches its garden spells
+    /// for gold, the spell's own price, from the gardening rank each needs (Game/Gardening/GardenLessons).
+    /// </summary>
+    public bool IsGardenTrainer { get; private set; }
+
+    // The Tome of Fishing also keeps its own "read the book" choice beside "Spell List".
+    private bool IsTome => Entity.Template is GameObjectTemplate template && TestTrainerKindOf(template) == TestTrainerKind.Tome;
+
+    // A fishing or gardening trainer of the real game (TradeTrainers).
+    private bool _isTradeTrainer;
+
+    private Imlight.CoreLib.Game.World.CustomNpcs.CustomNpc _custom;
+    private Dictionary<ulong, int> _customCosts = [];
+    // The last list logged for each wizard, so the once-a-second refresh does not fill the log.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, string> _customLogged = new();
+
+    internal enum TestTrainerKind { Enchantments, Extracts, Shadow, Boss, Hall, Fishing, Tome }
+
+    /// <summary>
+    /// Finds which test trainer an NPC is: in Ravenwood Monstrologist Burke (WC-RAV-NPC13) or Mellori
+    /// (WC-RAV-NPC12). (Abner in the Commons only shows one kind of service, so he
+    /// keeps the treasure card shop.)
+    /// </summary>
+    /// <returns>The kind of spells the NPC teaches, or null for any other NPC.</returns>
+    internal static TestTrainerKind? TestTrainerKindOf(GameObjectTemplate template) {
+        var objectName = template.m_objectName.ToString();
+        switch (objectName) {
+            case "WC-RAV-NPC13":
+                return TestTrainerKind.Extracts;
+            case "WC-RAV-NPC12":
+                return TestTrainerKind.Shadow;
+            case "WC-HUB-NPC15_A":
+            case "WC-HUB-NPC15_B":
+                // The Deckathalon Tome, the trainer hall's trainer (only as a house trainer: elsewhere it reads its
+                // Deckathalon pages, InteractDeckathalonTomeComponent).
+                return TestTrainerKind.Hall;
+            case "WC-Pelican-NPC01":
+            case "WC-PARTY-NPC15":
+                // Lucky Hookline, in the Commons and at the party room: every fishing spell.
+                return TestTrainerKind.Fishing;
+            case "WC_Pedestal_TobeOfFishing":
+                // The Tome of Fishing beside Lucky Hookline: every fishing and gardening spell (Niduus 2026-10-25).
+                return TestTrainerKind.Tome;
+        }
+
+        // Mr. Lincoln no longer teaches (Niduus 2026-10-25); he only resets training points (InteractRespecComponent).
+        return null;
+    }
+
+    /// <summary>Whether an NPC is Mr. Lincoln in Ravenwood.</summary>
+    internal static bool IsLincoln(GameObjectTemplate template)
+        => $"{template.m_objectName} {Imlight.CoreLib.Shared.Resources.Locale.GetEnglishName(template.m_displayName.ToString())}"
+            .Contains("Lincoln", System.StringComparison.OrdinalIgnoreCase);
+
+    // The Shadow spells players learn (template names): Shadow Shrike, Sentinel, Seraph and Trickster, the Dark Fiend,
+    // Dark Nova and Dark Shepherd creatures, the Shadow Shield, Shadow Trap, Shadowblade and Shadowspear cards, and
+    // Justiceblade. They head Mellori's list.
+    private static readonly HashSet<string> s_vanillaShadowSpells = [
+        "Shadow Self DPS", "Shadow Self Tank", "Shadow Self Heal", "Shadow Self Crit",
+        "Shadow Creature Fiend", "Shadow Creature Big Bomb", "Shadow Creature Healer",
+        "Shadow Shield", "Shadow Trap", "Shadowblade", "Shadowspear", "Balanceblade Shadowblade",
+    ];
+
+    // Spell folders that hold monster and boss fight spells.
+    private static readonly string[] s_bossFolders = [
+        "Fight Specific/", "Mobs/", "CombatTrigger", "Gauntlet", "DisposableDungeon",
+    ];
+
+    // Folders of spells that are not for battle or that only work in one place.
+    private static readonly string[] s_skippedFolders = [
+        "Test/", "Gardening", "Fishing", "Cantrip", "Castle", "WhirlyBurly", "Battleground", "Sherlock", "Rhoshambo",
+        "Sigil", "PetPowers", "Tournament", "MonsterMagic", "Minion Specific",
+    ];
+
+    private static readonly HashSet<string> s_combatSchools = new(System.StringComparer.OrdinalIgnoreCase) {
+        "Fire", "Ice", "Storm", "Myth", "Life", "Death", "Balance", "Star", "Sun", "Moon", "Shadow",
+    };
+
+    private static readonly System.Lazy<Dictionary<TestTrainerKind, List<NPCSpellEntry>>> s_testSpells
+        = new(BuildTestSpells, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+
+    // The Extract spells (Extract Undead and the rest) are templates named CollectEssence<Creature>; the ones with a
+    // number after the name are what an enchanted card turns into.
+    private static bool IsExtractSpell(string name)
+        => name.StartsWith("CollectEssence", System.StringComparison.Ordinal) && !name.Contains(' ');
+
+    private static bool IsBossSpell(string path, string name)
+        => s_bossFolders.Any(folder => path.Contains(folder, System.StringComparison.OrdinalIgnoreCase))
+            || System.Text.RegularExpressions.Regex.IsMatch(name, @"\bMOB\b|- Mob\b|\bBoss\b|RAID");
+
+    private static bool IsShadowSpell(SpellTemplate spell, string name)
+        => (string) spell.m_sMagicSchoolName == "Shadow" || name.Contains("Shadow", System.StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Builds every test trainer's list at once, so a spell is taught by one trainer only and each card name shows
+    /// once (the many copies the game has of a spell share its name). Lists are sorted by name.
+    /// </summary>
+    private static Dictionary<TestTrainerKind, List<NPCSpellEntry>> BuildTestSpells() {
+        var templateIds = new Dictionary<string, uint>(System.StringComparer.OrdinalIgnoreCase);
+        foreach (var location in CoreObjectFactory.TemplateManifest?.m_serializedTemplates ?? []) {
+            templateIds.TryAdd(location.m_filename, location.m_id);
+        }
+
+        // One candidate per spell template that can be learned and cast in battle.
+        var candidates = new List<(TestTrainerKind Kind, string Shown, int Rank, uint TemplateId, string Name)>();
+        var normalNames = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        var normalOtherSchoolNames = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, spell) in Imlight.CoreLib.Game.Spells.SpellFactory.AllSpellTemplates()) {
+            string name = spell.m_name;
+            string displayKey = spell.m_displayName;
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(displayKey) || name.EndsWith(" TC")
+                || !s_combatSchools.Contains((string) spell.m_sMagicSchoolName ?? "")
+                || s_skippedFolders.Any(folder => path.Contains(folder, System.StringComparison.OrdinalIgnoreCase))
+                || !templateIds.TryGetValue(path, out var templateId)) {
+                continue;
+            }
+
+            var shown = Imlight.CoreLib.Shared.Resources.Locale.GetEnglishName(displayKey);
+            if (string.IsNullOrWhiteSpace(shown)) {
+                shown = displayKey;
+            }
+
+            // Internal helper spells: no type, placeholder names, tests and scripted defeats.
+            string typeName = spell.m_sTypeName;
+            if (string.IsNullOrEmpty(typeName) || typeName == "None" || !shown.Any(char.IsUpper)
+                || shown.Contains("Test", System.StringComparison.OrdinalIgnoreCase) || shown.Contains("zappy")
+                || name.Contains("Defeat", System.StringComparison.OrdinalIgnoreCase)) {
+                continue;
+            }
+
+            var isBoss = IsBossSpell(path, name);
+            var isEnchantment = Imlight.CoreLib.Game.Combat.CombatEnchantments.IsEnchantment(spell) || (string) spell.m_sTypeName == "Enchantment";
+            if (!isBoss && !spell.m_Treasure && !name.Contains(" - ")) {
+                normalNames.Add(shown);
+                if (!IsShadowSpell(spell, name)) {
+                    normalOtherSchoolNames.Add(shown);
+                }
+            }
+
+            // Every copy of an Extract card belongs to Burke; the enchanted copies ("CollectEssenceGobbler 100")
+            // count as enchantments, so they are left out instead of landing on Mr. Lincoln.
+            var isExtractCopy = name.StartsWith("CollectEssence", System.StringComparison.OrdinalIgnoreCase)
+                || shown.StartsWith("Extract ", System.StringComparison.OrdinalIgnoreCase);
+            if (isExtractCopy && !IsExtractSpell(name)) {
+                continue;
+            }
+
+            TestTrainerKind? kind = isExtractCopy ? TestTrainerKind.Extracts
+                // Treasure-card-only enchantments (Sniper, Tough...) come from cards, not from Mr. Lincoln.
+                : isEnchantment ? (spell.m_Treasure ? null : TestTrainerKind.Enchantments)
+                : s_vanillaShadowSpells.Contains(name) || (!isBoss && !spell.m_Treasure && IsShadowSpell(spell, name)) ? TestTrainerKind.Shadow
+                : isBoss && !spell.m_Treasure ? TestTrainerKind.Boss
+                : null;
+            if (kind is null) {
+                continue;
+            }
+
+            // The plainest copy of a spell wins: a listed Shadow spell, then the one that is not a treasure card,
+            // has no " - " variant suffix and has the shortest name.
+            var rank = (s_vanillaShadowSpells.Contains(name) ? 0 : 1000) + (spell.m_Treasure ? 500 : 0)
+                + (name.Contains(" - ") ? 200 : 0) + name.Length;
+            candidates.Add((kind.Value, shown, rank, templateId, name));
+        }
+
+        var result = new Dictionary<TestTrainerKind, List<NPCSpellEntry>>();
+        var taken = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        foreach (var kind in new[] { TestTrainerKind.Extracts, TestTrainerKind.Enchantments, TestTrainerKind.Shadow, TestTrainerKind.Boss }) {
+            var picks = candidates
+                .Where(c => c.Kind == kind)
+                // Merle only teaches what players can't learn anywhere else.
+                .Where(c => kind != TestTrainerKind.Boss || !normalNames.Contains(c.Shown))
+                // Shadow copies of other schools' spells (a Shadow Blizzard) would look like the normal card.
+                .Where(c => kind != TestTrainerKind.Shadow || s_vanillaShadowSpells.Contains(c.Name) || !normalOtherSchoolNames.Contains(c.Shown))
+                .GroupBy(c => c.Shown, System.StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderBy(c => c.Rank).First())
+                .Where(c => taken.Add(c.Shown))
+                .OrderBy(c => kind == TestTrainerKind.Shadow && s_vanillaShadowSpells.Contains(c.Name) ? 0 : 1)
+                .ThenBy(c => c.Shown, System.StringComparer.OrdinalIgnoreCase);
+
+            result[kind] = [.. picks.Select(c => new NPCSpellEntry { TemplateID = c.TemplateId, RequiredSpellID = 0, Level = 1 })];
+            Logger.Information("Test trainer teaches {0} {1} spells.", Logger.Args(result[kind].Count, kind));
+        }
+
+        // The trainer hall's book teaches every spell some trainer in the game teaches, school by school.
+        result[TestTrainerKind.Hall] = [.. Imlight.CoreLib.WizardData.SpiralDB.NpcSpellInventories.Values
+            .Where(inventory => inventory?.Spells is not null)
+            .SelectMany(inventory => inventory.Spells)
+            .Select(entry => entry.TemplateID)
+            .Distinct()
+            .Select(id => (Id: id, Spell: CoreObjectFactory.GetCoreTemplate(id) as SpellTemplate))
+            .Where(pair => pair.Spell is not null && !pair.Spell.m_Treasure)
+            .OrderBy(pair => (string) pair.Spell.m_sMagicSchoolName ?? "", System.StringComparer.OrdinalIgnoreCase)
+            .ThenBy(pair => (string) pair.Spell.m_name, System.StringComparer.OrdinalIgnoreCase)
+            .Select(pair => new NPCSpellEntry { TemplateID = pair.Id, RequiredSpellID = 0, Level = 1 })];
+        Logger.Information("Test trainer teaches {0} {1} spells.", Logger.Args(result[TestTrainerKind.Hall].Count, TestTrainerKind.Hall));
+
+        // Lucky Hookline teaches every fishing spell players can have (lures, reveals and the rest), by name.
+        result[TestTrainerKind.Fishing] = [.. Imlight.CoreLib.Game.Fishing.FishingData.Spells
+            .Where(s => Imlight.CoreLib.Game.Fishing.FishingData.IsPlayerSpell(s.Template))
+            .GroupBy(s => Imlight.CoreLib.Shared.Resources.Locale.GetEnglishName(s.Template.m_displayName.ToString()) is { Length: > 0 } shown
+                ? shown : (string) s.Template.m_name, System.StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderBy(s => ((string) s.Template.m_name).Length).First())
+            .OrderBy(s => (string) s.Template.m_name, System.StringComparer.OrdinalIgnoreCase)
+            .Select(s => new NPCSpellEntry { TemplateID = s.Id, RequiredSpellID = 0, Level = 1 })];
+        Logger.Information("Test trainer teaches {0} {1} spells.", Logger.Args(result[TestTrainerKind.Fishing].Count, TestTrainerKind.Fishing));
+
+        // The Tome of Fishing teaches Lucky Hookline's fishing spells, then every gardening spell (GardenLessons).
+        var gardenSpells = Imlight.CoreLib.Game.Gardening.GardenLessons.All
+            .OrderBy(lesson => lesson.Level)
+            .ThenBy(lesson => lesson.Name, System.StringComparer.OrdinalIgnoreCase)
+            .Select(lesson => lesson.SpellId)
+            .Distinct()
+            .Where(id => CoreObjectFactory.GetCoreTemplate(id) is SpellTemplate)
+            .Select(id => new NPCSpellEntry { TemplateID = id, RequiredSpellID = 0, Level = 1 });
+        result[TestTrainerKind.Tome] = [.. result[TestTrainerKind.Fishing], .. gardenSpells];
+        Logger.Information("Test trainer teaches {0} {1} spells.", Logger.Args(result[TestTrainerKind.Tome].Count, TestTrainerKind.Tome));
+
+        return result;
+    }
+
+    /// <summary>What one of the test trainers teaches (Merle's boss spells, for the set trainers).</summary>
+    internal static IReadOnlyList<NPCSpellEntry> TestSpellsOf(TestTrainerKind kind)
+        => s_testSpells.Value.TryGetValue(kind, out var spells) ? spells : [];
 
     public override void OnStart() {
+        StartTraining();
+        _baseSpells = SpellInventory;
+    }
+
+    // The Customs tab's changes to this game trainer (NpcChanges), used over what it teaches by itself (_baseSpells):
+    // spells added or the whole list replaced, spells taken out, their prices in training points, or no spell list.
+    private List<NPCSpellEntry> _baseSpells;
+    private int _changesVersion = -1;
+    private Imlight.CoreLib.Game.World.NpcChanges.Change _change;
+    private Dictionary<ulong, int> _changeCosts = [];
+
+    private void UseChanges() {
+        if (IsCustom || _baseSpells is null) {
+            return;
+        }
+
+        var version = Imlight.CoreLib.Game.World.NpcChanges.Version;
+        if (version == _changesVersion) {
+            return;
+        }
+
+        _changesVersion = version;
+        var templateId = Entity.ActiveGameObject.m_templateID.MParts.TemplateId;
+        _change = Imlight.CoreLib.Game.World.NpcChanges.For(templateId);
+        _changeCosts = [];
+        if (_change is null) {
+            SpellInventory = _baseSpells;
+            InitializeServiceBases();
+
+            return;
+        }
+
+        var removed = _change.RemoveSpells.Select(id => (ulong) id).ToHashSet();
+        var spells = _change.ReplacesSpells ? [] : _baseSpells.Where(entry => !removed.Contains(entry.TemplateID)).ToList();
+        foreach (var entry in _change.Spells.Where(e => !removed.Contains(e.ID))) {
+            if (CoreObjectFactory.GetCoreTemplate(entry.ID) is not SpellTemplate) {
+                continue;
+            }
+
+            if (spells.All(had => had.TemplateID != entry.ID)) {
+                spells.Add(new NPCSpellEntry { TemplateID = entry.ID, RequiredSpellID = 0, Level = 1 });
+            }
+
+            if (entry.Price >= 0) {
+                _changeCosts[entry.ID] = entry.Price;
+            }
+        }
+
+        SpellInventory = spells;
+        InitializeServiceBases();
+        _sectionStart.Clear();
+        Logger.Information("Trainer {0} ({1}) uses the Customs tab's changes: {2}{3} spells{4}.", Logger.Args(templateId, _change.Name,
+            _change.ReplacesSpells ? "only its " : "", SpellInventory.Count, _change.HideTraining ? ", spell list hidden" : ""));
+    }
+
+    private void StartTraining() {
+        if (Imlight.CoreLib.Game.World.CustomNpcs.For(Entity.Info?.m_zoneTag) is { } custom) {
+            _custom = custom;
+            _customCosts = custom.Spells.ToDictionary(e => (ulong) e.ID, e => e.Price);
+            // An ID that is not a spell is left out here, so the list and its options keep the same indexes.
+            var notSpells = custom.Spells.Where(e => Imlight.CoreLib.Game.World.CustomNpcs.TemplateOf(e.ID) is not SpellTemplate).Select(e => e.ID).ToList();
+            SpellInventory = [.. custom.Spells.Where(e => !notSpells.Contains(e.ID))
+                .Select(e => new NPCSpellEntry { TemplateID = e.ID, RequiredSpellID = 0, Level = 1 })];
+            InitializeServiceBases();
+            Logger.Information("Custom trainer {0} ({1}) in {2}: {3} spells{4}.",
+                Logger.Args(custom.Id, custom.Name, custom.Zone, SpellInventory.Count,
+                    notSpells.Count == 0 ? "" : $", left out {string.Join(", ", notSpells)} (not spells)"));
+
+            return;
+        }
+
+        if (Entity.Template is GameObjectTemplate testTrainer && TestTrainerKindOf(testTrainer) is { } kind) {
+            IsTestTrainer = true;
+            // A trainer tome holding a set trainer part teaches only that part.
+            SpellInventory = kind == TestTrainerKind.Hall && Imlight.CoreLib.Game.World.HouseTrainerSets.SetFor(Entity.Info?.m_zoneTag) is { } set
+                ? set.Spells
+                : s_testSpells.Value[kind];
+            InitializeServiceBases();
+
+            return;
+        }
+
+        // A garden trainer sells its garden spells for gold, from the rank each needs (GardenLessons); it comes before
+        // TradeTrainers, which would teach them free.
+        if (Entity.Template is GameObjectTemplate gardenTrainer && Imlight.CoreLib.Game.Gardening.GardenLessons.IsTrainer(gardenTrainer.m_templateID)) {
+            IsGardenTrainer = true;
+            SpellInventory = [.. Imlight.CoreLib.Game.Gardening.GardenLessons.ForTrainer(gardenTrainer.m_templateID)
+                .Where(lesson => CoreObjectFactory.GetCoreTemplate(lesson.SpellId) is SpellTemplate)
+                .Select(lesson => new NPCSpellEntry { TemplateID = lesson.SpellId, RequiredSpellID = 0, Level = lesson.Level })];
+            InitializeServiceBases();
+            Logger.Information("Garden trainer {0} teaches {1} garden spells.", Logger.Args(gardenTrainer.m_templateID, SpellInventory.Count));
+
+            return;
+        }
+
+        // A fishing trainer of the real game teaches its own spells, free and at any rank (garden trainers sell theirs, above).
+        if (Entity.Template is GameObjectTemplate tradeTemplate
+            && Imlight.CoreLib.Game.World.TradeTrainers.For(tradeTemplate.m_templateID) is { } trade) {
+            IsTestTrainer = true;
+            _isTradeTrainer = true;
+            SpellInventory = [.. trade.Spells
+                .Where(id => CoreObjectFactory.GetCoreTemplate(id) is SpellTemplate)
+                .Select(id => new NPCSpellEntry { TemplateID = id, RequiredSpellID = 0, Level = 1 })];
+            InitializeServiceBases();
+            Logger.Debug("{0} trainer {1} teaches {2} of its {3} spells.",
+                Logger.Args(trade.Kind, trade.Name, SpellInventory.Count, trade.Spells.Count));
+
+            return;
+        }
+
         // Search Dragon database for our spell inventory.
         if (    Entity.Template is not GameObjectTemplate goTemplate
             || !NpcSpellInventoryCollection.TryGetNpcInventory(goTemplate.m_templateID, out var spellInventory)) {
@@ -84,9 +445,83 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
         InitializeServiceBases();
     }
 
-    public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard wizard) {
+    // About six pages of the training window; the game disconnects when an NPC offers hundreds.
+    private const int TEST_TRAINER_MAX_OPTIONS = 50;
+
+    // Where each wizard's current section starts in the list of spells they don't know yet, by character id.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, int> _sectionStart = new();
+
+    /// <summary>
+    /// The spells this trainer offers a wizard, as indexes into <see cref="SpellInventory"/>. The game disconnects
+    /// when an NPC offers hundreds of options at once, so a test trainer offers one section of up to 50 spells the
+    /// wizard doesn't know yet; walking away and back shows the next section.
+    /// </summary>
+    private IEnumerable<int> OfferedIndexes(Wizard wizard) {
+        if (!TeachesAsListed) {
+            return Enumerable.Range(0, _serviceOptionBases.Count);
+        }
+
+        var unknown = UnknownIndexes(wizard);
+        var start = _sectionStart.GetValueOrDefault(wizard.CharId);
+        if (start >= unknown.Count) {
+            start = 0;
+        }
+
+        return unknown.Skip(start).Take(TEST_TRAINER_MAX_OPTIONS);
+    }
+
+    private List<int> UnknownIndexes(Wizard wizard)
+        => [.. Enumerable.Range(0, _serviceOptionBases.Count)
+            .Where(i => !wizard.SpellbookBehavior.HasSpell((uint) SpellInventory[i].TemplateID))];
+
+    /// <summary>
+    /// Moves a wizard on to the next section of a test trainer's list, back to the first after the last. The first
+    /// visit shows the first section.
+    /// </summary>
+    internal void NextSection(Wizard wizard) {
         if (wizard is null) {
-            return _serviceOptionBases;
+            return;
+        }
+
+        // Closing the NPC dialog and walking back up should return to the shared service menu.
+        _showingSpellOptions.Remove(wizard.CharId);
+        if (!TeachesAsListed) {
+            return;
+        }
+
+        var unknownCount = UnknownIndexes(wizard).Count;
+        _sectionStart.AddOrUpdate(wizard.CharId, 0, (_, start) => {
+            var next = start + TEST_TRAINER_MAX_OPTIONS;
+
+            return next >= unknownCount ? 0 : next;
+        });
+    }
+
+    public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard wizard) {
+        UseChanges();
+        if (_change?.HideTraining == true) {
+            return [];
+        }
+
+        // The Deckathalon Tome teaches only as a house trainer; anywhere else it reads its Deckathalon pages, as in the
+        // game (InteractDeckathalonTomeComponent).
+        if (InteractDeckathalonTomeComponent.ReadsPages(Entity)) {
+            return [];
+        }
+
+        if (wizard is null) {
+            return TeachesAsListed ? _serviceOptionBases.Take(TEST_TRAINER_MAX_OPTIONS) : _serviceOptionBases;
+        }
+
+        // If this trainer also completes an active quest or offers a training point reset, first offer one trainer
+        // choice. The client interprets individual WizTrainingOption entries as the spell picker, so putting them
+        // beside GoalEntry or RespecOption skips the shared "What can I do for you?" choice entirely.
+        if (HasOtherChoice(wizard) && !_showingSpellOptions.Contains(wizard.CharId)) {
+            return [new WizTrainingInteraction {
+                m_iconKey = WizBang.ToString(),
+                m_serviceName = ServiceName,
+                m_displayKey = DisplayKey,
+            }];
         }
 
         // We've initialized a list of service option bases in InitializeServiceBases.
@@ -94,29 +529,51 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
         // We must now edit each service option to reflect the player's status.
         List<ServiceOptionBase> newServiceOptions = [];
 
-        for (int i = 0; i < _serviceOptionBases.Count; i++) {
-            var spellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(SpellInventory[i].TemplateID);
+        foreach (var i in OfferedIndexes(wizard)) {
+            // In randomizer mode the wizard learns a swapped spell, so the trainer offers that one instead.
+            var trainerSpellId = (uint) SpellInventory[i].TemplateID;
+            var spellId = TeachesAsListed ? trainerSpellId : Randomizer.MapSpell(wizard, trainerSpellId);
+            if (CoreObjectFactory.GetCoreTemplate(spellId) is not SpellTemplate spellTemplate) {
+                continue;
+            }
 
-            var hasSpell = wizard.SpellbookBehavior.HasSpell((uint) SpellInventory[i].TemplateID);
+            var hasSpell = wizard.SpellbookBehavior.HasSpell(spellId);
             if (hasSpell) {
                 continue;
             }
 
-            var newBase = (WizTrainingOption) _serviceOptionBases[i];
+            // Copy the shared option so one wizard's view never leaks into another's.
+            var newBase = (WizTrainingOption) _serviceOptionBases[i] with { };
+            if (spellId != trainerSpellId) {
+                newBase.m_spellName = spellTemplate.m_name;
+                newBase.m_displayKey = spellTemplate.m_displayName;
+            }
 
-            // If a wizard is the same school as the spell, it is free to train.
-            var schoolName = wizard.MagicSchoolBehavior.MagicSchool.ToString();
-            if (spellTemplate.m_sMagicSchoolName == schoolName) {
-                newBase.m_trainingCost = 0;
+            // Training costs nothing for the wizard's own school (or for everyone with FreeTraining), else one point.
+            newBase.m_trainingCost = CostFor(wizard, spellTemplate);
+
+            // A garden spell needs its gardening rank and costs gold, not training points or a wizard level.
+            if (GardenRankFor(i, spellId) is { } needed) {
+                var rank = Imlight.CoreLib.Game.Gardening.GardenLessons.RankOf(wizard);
+                newBase.m_requiredLevel = 0;
+                newBase.m_requirements = spellTemplate.m_purchaseRequirements;
+                newBase.m_bCanTrain = rank >= needed && wizard.GameStats.m_currentGold >= Imlight.CoreLib.Game.Gardening.GardenLessons.PriceOf(spellTemplate);
+                newBase.m_failedRequirement = rank >= needed
+                    ? null
+                    : spellTemplate.m_purchaseRequirements?.m_requirements?.OfType<ReqGardeningLevel>().FirstOrDefault();
+                newServiceOptions.Add(newBase);
+
+                continue;
             }
-            else {
-                newBase.m_trainingCost = 1;
-            }
+
+            // NoLevelRequirements lets any level train any spell.
+            var requiredLevel = Randomizer.NoLevelRequirements ? 1 : SpellInventory[i].Level;
+            newBase.m_requiredLevel = requiredLevel;
 
             // Check if wizard has enough training points to train the spell, and if the
             // wizard is high enough level to train the spell.
             if (wizard.MagicSchoolBehavior.TrainingPoints < newBase.m_trainingCost
-                    || wizard.MagicSchoolBehavior.Level < SpellInventory[i].Level) {
+                    || wizard.MagicSchoolBehavior.Level < requiredLevel) {
                 newBase.m_bCanTrain = false;
                 newBase.m_failedRequirement = null;
 
@@ -125,16 +582,31 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
             }
 
             // If the spell has no required spell, it can be trained, else check if the wizard has the required spell.
-            if (SpellInventory[i].RequiredSpellID == 0) {
+            var originalRequiredId = RequiredSpellFor(wizard, SpellInventory[i]);
+            if (originalRequiredId == 0) {
                 newBase.m_bCanTrain = true;
                 newBase.m_failedRequirement = null;
+                newBase.m_requirements = null;
             }
             else {
-                var hasReqSpell = wizard.SpellbookBehavior.HasSpell((uint) SpellInventory[i].RequiredSpellID);
+                // The required spell is swapped the same way, so a randomized chain still lines up.
+                var requiredSpellId = Randomizer.MapSpell(wizard, (uint) originalRequiredId);
+                if (CoreObjectFactory.GetCoreTemplate(requiredSpellId) is not SpellTemplate reqSpellTemplate) {
+                    // A requirement that can't be found doesn't block training.
+                    newBase.m_bCanTrain = true;
+                    newBase.m_failedRequirement = null;
+                    newBase.m_requirements = null;
+                    newServiceOptions.Add(newBase);
+                    continue;
+                }
+
+                if (requiredSpellId != SpellInventory[i].RequiredSpellID) {
+                    newBase.m_requirements = HasSpellRequirement(reqSpellTemplate);
+                }
+
+                var hasReqSpell = wizard.SpellbookBehavior.HasSpell(requiredSpellId);
 
                 if (!hasReqSpell) {
-                    var reqSpellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(SpellInventory[i].RequiredSpellID);
-
                     newBase.m_bCanTrain = false;
                     newBase.m_failedRequirement = new ReqHasSpell() {
                         m_applyNOT = false,
@@ -151,10 +623,132 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
             newServiceOptions.Add(newBase);
         }
 
+        if (IsCustom) {
+            LogCustomOffer(wizard, newServiceOptions);
+        }
+
         return newServiceOptions;
     }
 
-    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) { }
+    private void LogCustomOffer(Wizard wizard, List<ServiceOptionBase> offered) {
+        var list = string.Join(", ", offered.OfType<WizTrainingOption>()
+            .Select(o => $"{SpellInventory[o.m_trainingIndex].TemplateID} {(string) o.m_spellName} for {o.m_trainingCost}{(o.m_bCanTrain ? "" : " (can't yet)")}"));
+        if (_customLogged.TryGetValue(wizard.CharId, out var last) && last == list) {
+            return;
+        }
+
+        _customLogged[wizard.CharId] = list;
+        Logger.Information("Custom trainer {0} ({1}) offers {2}: {3} of its {4} spells (they have {5} training points): {6}",
+            Logger.Args(_custom.Id, _custom.Name, wizard.PlayerNameBehavior?.GetWizardName(), offered.Count, SpellInventory.Count,
+                wizard.MagicSchoolBehavior.TrainingPoints, list.Length > 0 ? list : "none (knows them all, or none was found)"));
+    }
+
+    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
+        if (playerCharacter is null || !HasOtherChoice(playerCharacter)) {
+            return;
+        }
+
+        _showingSpellOptions.Add(playerCharacter.CharId);
+        Entity.GetComponentOfType<InteractServiceMementoComponent>()?.ShowServiceOptions(playerActor, reinteract: 2);
+    }
+
+    private bool HasOtherChoice(Wizard wizard)
+        => InteractPersonaGoalComponent.HasPendingGoalFor(Entity, wizard) || InteractRespecComponent.Offers(Entity, wizard)
+        || InteractFishSellingComponent.Offers(Entity, wizard)
+        // A fishing or gardening trainer that also runs a shop (Farley's seeds) keeps the shop beside "Spell List".
+        || ((_isTradeTrainer || IsGardenTrainer || IsTome) && Entity.GetComponentsOfType<IServiceComponent>()
+            .Any(c => c != this && (c.GetServiceOptions(wizard)?.Any() ?? false)));
+
+    internal static bool IsShowingSpellOptions(ZoneEntity entity, Wizard wizard)
+        => wizard is not null
+            && entity.GetComponentOfType<InteractTrainerComponent>()?._showingSpellOptions.Contains(wizard.CharId) == true;
+
+    internal void ResetSpellOptions(Wizard wizard) {
+        if (wizard is not null) {
+            _showingSpellOptions.Remove(wizard.CharId);
+        }
+    }
+
+    /// <summary>
+    /// How many training points a spell costs this wizard: none for their own school or with FreeTraining, else one.
+    /// </summary>
+    internal int CostFor(Wizard wizard, SpellTemplate spellTemplate)
+        => IsCustom && IsTradeSpell(spellTemplate) ? 0
+         : IsCustom ? CustomCostOf(spellTemplate)
+         : ChangedCostOf(spellTemplate) is { } changed ? changed
+         : IsTestTrainer || IsGardenTrainer ? 0 : TrainingCost(wizard, spellTemplate);
+
+    /// <summary>
+    /// The gardening rank the spell at an index needs when it is sold as a garden spell (for gold), else null: every
+    /// spell of a garden trainer, and the garden spells of a custom trainer (the Customs tab's "Garden Spells").
+    /// </summary>
+    internal int? GardenRankFor(int index, uint spellId)
+        => IsGardenTrainer ? SpellInventory[index].Level
+         : IsCustom ? Imlight.CoreLib.Game.Gardening.GardenLessons.Of(spellId)?.Level
+         : null;
+
+    // A garden or fishing spell never costs training points.
+    private static bool IsTradeSpell(SpellTemplate spellTemplate)
+        => spellTemplate is FishingSpellTemplate or GardenSpellTemplate;
+
+    // A custom trainer's price for a spell, found by the spell's name (a spell template has no id of its own); 1 when
+    // it is not in the list.
+    private int CustomCostOf(SpellTemplate spellTemplate) {
+        string name = spellTemplate?.m_name;
+        var id = SpellInventory.Select(e => e.TemplateID)
+            .FirstOrDefault(t => CoreObjectFactory.GetCoreTemplate(t) is SpellTemplate listed && (string) listed.m_name == name);
+
+        return _customCosts.TryGetValue(id, out var cost) ? cost : 1;
+    }
+
+    // The Customs tab's price for a spell of a changed game trainer, found by name as for a custom trainer, or null.
+    private int? ChangedCostOf(SpellTemplate spellTemplate) {
+        if (_changeCosts.Count == 0) {
+            return null;
+        }
+
+        string name = spellTemplate?.m_name;
+        foreach (var (id, cost) in _changeCosts) {
+            if (CoreObjectFactory.GetCoreTemplate(id) is SpellTemplate listed && (string) listed.m_name == name) {
+                return cost;
+            }
+        }
+
+        return null;
+    }
+
+    internal static int TrainingCost(Wizard wizard, SpellTemplate spellTemplate) {
+        if (Randomizer.FreeTraining) {
+            return 0;
+        }
+
+        string school = spellTemplate.m_sMagicSchoolName;
+
+        return school == wizard.MagicSchoolBehavior.MagicSchool.ToString() ? 0 : 1;
+    }
+
+    /// <summary>
+    /// The spell (before randomizer swaps) a wizard must know to train this entry, or 0 for none.
+    /// NoSpellRequirements removes them all. RandomizeSpellRequirements gives each spell that has one a
+    /// requirement picked from this trainer's lower level spells, so every chain can still be finished.
+    /// </summary>
+    private ulong RequiredSpellFor(Wizard wizard, NPCSpellEntry entry) {
+        if (Randomizer.NoSpellRequirements || entry.RequiredSpellID == 0) {
+            return 0;
+        }
+
+        if (!Randomizer.RandomizeSpellRequirements) {
+            return entry.RequiredSpellID;
+        }
+
+        var lower = SpellInventory
+            .Where(other => other.Level < entry.Level && other.TemplateID != entry.TemplateID)
+            .Select(other => other.TemplateID)
+            .OrderBy(id => id)
+            .ToArray();
+
+        return lower.Length == 0 ? 0 : lower[Randomizer.PickIndex(wizard, "requirements", entry.TemplateID, lower.Length)];
+    }
 
     private void InitializeServiceBases() {
         // Foreach spell in the inventory, create a service option. This method serves to initialize defaults.
@@ -191,17 +785,7 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
                     continue;
                 }
 
-                spellOption.m_requirements = new RequirementList() {
-                    m_applyNOT = false,
-                    m_operator = Operator.ROP_AND,
-                    m_requirements = new List<Requirement>() {
-                        new ReqHasSpell() {
-                            m_applyNOT = false,
-                            m_operator = Operator.ROP_AND,
-                            m_spellName = reqSpellTemplate.m_name,
-                        }
-                    }
-                };
+                spellOption.m_requirements = HasSpellRequirement(reqSpellTemplate);
             }
             else {
                 spellOption.m_requirements = null;
@@ -210,5 +794,18 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
             _serviceOptionBases.Add(spellOption);
         }
     }
+
+    private static RequirementList HasSpellRequirement(SpellTemplate requiredSpell)
+        => new() {
+            m_applyNOT = false,
+            m_operator = Operator.ROP_AND,
+            m_requirements = new List<Requirement>() {
+                new ReqHasSpell() {
+                    m_applyNOT = false,
+                    m_operator = Operator.ROP_AND,
+                    m_spellName = requiredSpell.m_name,
+                }
+            }
+        };
 
 }

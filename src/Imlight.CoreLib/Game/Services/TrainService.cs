@@ -33,16 +33,20 @@
  * 
  * Created by: Joji
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 10/14/2026
  */
 
 using Akka.Actor;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Badges;
+using Imlight.CoreLib.Game.DropTables;
+using Imlight.CoreLib.Game.Gardening;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Game.Spells;
+using Imlight.CoreLib.Game.Randomization;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 
@@ -89,31 +93,74 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
         }
 
         var spellEntry = trainerComponent.SpellInventory[message.TrainingIndex];
-        var spellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(spellEntry.TemplateID);
 
-        // Determine if the wizard has enough training points to learn the spell.
-        // Wizards that are of the same magic school as the spell they are training have a cost of 0.
-        var spellCost = wizard.MagicSchoolBehavior.MagicSchool.ToString() == spellTemplate.m_sMagicSchoolName ? 0 : 1;
-        if (wizard.MagicSchoolBehavior.TrainingPoints < spellCost) {
-            Logger.Error("Wizard {0} attempted to train spell {1} but does not have enough training points.",
+        // In randomizer mode the trainer offered this wizard's swapped spell; teach that one.
+        var spellId = trainerComponent.TeachesAsListed
+            ? (uint) spellEntry.TemplateID
+            : Randomizer.MapSpell(wizard, (uint) spellEntry.TemplateID);
+        var spellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(spellId);
+
+        if (BadgeGate.Blocks(spellTemplate?.m_purchaseRequirements, spellEntry.TemplateID, SessionActor.ActorRef, GetActiveGameObject(), wizard, SessionActor.GetZoneActor())) {
+            Logger.Warning("Wizard {0} attempted to train spell {1} without the badge it requires.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID));
 
             return;
         }
 
-        var spell = SpellFactory.GetSpell((uint) spellEntry.TemplateID);
+        // Determine if the wizard has enough training points to learn the spell.
+        // Wizards that are of the same magic school as the spell they are training have a cost of 0.
+        var spellCost = trainerComponent.CostFor(wizard, spellTemplate);
+        if (trainerComponent.IsCustom) {
+            Logger.Information("Custom trainer: {0} trains spell {1} (index {2}) for {3} of their {4} training points.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellId, message.TrainingIndex, spellCost, wizard.MagicSchoolBehavior.TrainingPoints));
+        }
+
+        // A garden trainer sells for gold, from the gardening rank the spell needs.
+        var gold = 0;
+        var gardenRank = trainerComponent.GardenRankFor(message.TrainingIndex, spellId);
+        if (gardenRank is { } needed) {
+            gold = GardenLessons.PriceOf(spellTemplate);
+            var rank = GardenLessons.RankOf(wizard);
+            if (rank < needed || wizard.GameStats.m_currentGold < gold) {
+                Logger.Warning("Wizard {0} tried to buy garden spell {1} ({2} gold, rank {3}) with {4} gold at rank {5}.",
+                    Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellId, gold, needed, wizard.GameStats.m_currentGold, rank));
+                SendToSocket(new WIZARD_12_PROTOCOL.MSG_SPELLTRAINCOMPLETE { SpellID = spellId, DisplayText = "WizTraining_00000040", Success = 0 });
+
+                return;
+            }
+        }
+
+        if (wizard.MagicSchoolBehavior.TrainingPoints < spellCost) {
+            Logger.Error("Wizard {0} attempted to train spell {1} but does not have enough training points.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellId));
+
+            return;
+        }
+
+        var spell = SpellFactory.GetSpell(spellId);
         var spellLearnedSuccess = wizard.LearnSpell(spell);
         if (!spellLearnedSuccess) {
             Logger.Error("Wizard {0} attempted to train spell {1} but failed to learn it.",
-                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID));
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellId));
 
             return;
         }
 
         var addSpellMsg = new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK() {
-            SpellID = (int) spellEntry.TemplateID
+            SpellID = (int) spellId
         };
         SendToSocket(addSpellMsg);
+
+        if (gold > 0) {
+            LootGranter.UpdateWizardGold(SessionActor.ActorRef, wizard, -gold);
+            Logger.Information("Gardening: {0} bought garden spell {1} for {2} gold.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellId, gold));
+        }
+
+        // A garden spell costs no training points, so a training point reset leaves it alone.
+        if (gardenRank is null) {
+            TrainingReset.Record(wizard, spellId, spellCost);
+        }
 
         var newTrainingPoints = wizard.MagicSchoolBehavior.TrainingPoints - spellCost;
         wizard.UpdateTrainingPoints(newTrainingPoints);
@@ -124,11 +171,45 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
         SendToSocket(updateTrainingMsg);
 
         var trainCompleteMsg = new WIZARD_12_PROTOCOL.MSG_SPELLTRAINCOMPLETE() {
-            SpellID = spellEntry.TemplateID,
+            SpellID = spellId,
             DisplayText = "WizTraining_00000040",
             Success = 1
         };
         SendToSocket(trainCompleteMsg);
     }
+
+
+    // The game's reset window (opened by TrainingReset.OpenWindow) answers with one of these; which one is not known
+    // yet, so both are taken, and only from a wizard who was just shown the window.
+    [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_RESPEC))]
+    private void ReceiveRespec(WIZARDHOUSING_50_PROTOCOL.MSG_RESPEC message)
+        => AnswerRespecWindow("MSG_RESPEC");
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_RESPECCONFIRM))]
+    private void ReceiveRespecConfirm(WIZARD_12_PROTOCOL.MSG_RESPECCONFIRM message)
+        => AnswerRespecWindow("MSG_RESPECCONFIRM");
+
+    private void AnswerRespecWindow(string messageName) {
+        var wizard = GetActiveWizard();
+        Logger.Information("Respec | {0} answered the reset window with {1}.",
+            Logger.Args(wizard?.PlayerNameBehavior?.GetWizardName(), messageName));
+        if (!TrainingReset.TakeWindowAnswer(wizard)) {
+            return;
+        }
+
+        var (spells, points) = TrainingReset.Reset(SessionActor.ActorRef, wizard);
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_RESPECCONFIRM {
+            Failure = 0,
+            WebFailure = 0,
+            Credits = wizard.Account?.Crowns ?? 0
+        });
+        TrainingReset.Tell(SessionActor.ActorRef, ResetText(spells, points));
+    }
+
+    internal static string ResetText(int spells, int points)
+        => spells == 0
+            ? "You have no training points to get back."
+            : $"Your training points are reset: {spells} spells left your spellbook and you got {points} training points back. "
+              + "If your deck still shows them, log out and back in.";
 
 }

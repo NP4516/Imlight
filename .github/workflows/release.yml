@@ -1,0 +1,142 @@
+# Publishes a GitHub release when a version tag (v1.2.3) is pushed.
+#
+# ImlightManager.exe is always built and attached. It installs this fork on a PC, building it
+# from that PC's own Wizard101 files, and adds the Control Panel.
+#
+# The launcher is always built and attached. Installed launchers pick up new releases from here,
+# so a release is how an update reaches every server owner.
+#
+# The server needs Imcodec generator inputs from the game client, which cannot live in this
+# public repository. To build the server and installer too, add a repository secret named
+# IMCODEC_GENERATOR_INPUTS holding a base64-encoded zip with two folders:
+#   ObjectProperty/   the wiztype type dump (*.json)
+#   MessageLayer/     the *Messages*.xml files
+# On Windows: [Convert]::ToBase64String([IO.File]::ReadAllBytes("inputs.zip")) | Set-Clipboard
+# Without the secret, attach ImlightServer-win-x64.zip by hand (installer\build-installer.ps1 makes it).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 1.2.3'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      GENERATOR_INPUTS: ${{ secrets.IMCODEC_GENERATOR_INPUTS }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          # The whole history and its tags, so the notes can list what changed since the last release.
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          # Pinned to the SDK the Windows runner already has: '10.0.x' picked 10.0.403 on release day, whose download
+          # failed (HTTP 409), and every release broke at this step (2026-10-25).
+          dotnet-version: '10.0.402'
+
+      - name: Work out the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.version }}" } else { "${{ github.ref_name }}" }
+          $version = $version.TrimStart('v')
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build the launcher
+        shell: pwsh
+        run: |
+          dotnet publish src/Imlight.Launcher/Imlight.Launcher.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -o installer/publish/launcher
+          New-Item -ItemType Directory -Force release | Out-Null
+          Compress-Archive -Path installer/publish/launcher/* -DestinationPath release/ImlightLauncher-win-x64.zip
+
+      - name: Write the patch notes built into the app
+        # Every version's changes up to this one, from the tags and the merged changes between them, for the app's
+        # What's New page (so versions from before release notes listed changes have notes too, even offline).
+        shell: pwsh
+        run: |
+          $tags = @(git tag --list 'v*' | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.TrimStart('v') })
+          $tag = "${{ steps.version.outputs.tag }}"
+          $all = [System.Collections.Generic.List[object]]::new()
+          $previous = $null
+          foreach ($t in $tags + @($tag | Where-Object { $tags -notcontains $_ })) {
+            if ($previous) {
+              $end = if ($t -eq $tag) { "HEAD" } else { $t }
+              $lines = @(git log --first-parent --pretty=format:"%s" "$previous..$end" | Where-Object { $_ -and $_ -notmatch '^Merge ' } | ForEach-Object { $_ -replace '\s*\(#\d+\)\s*$', '' })
+              if ($lines.Count -gt 0) { $all.Add([pscustomobject]@{ Version = $t.TrimStart('v'); Changes = $lines }) }
+            }
+            $previous = $t
+          }
+          ConvertTo-Json -InputObject @($all) -Depth 3 | Set-Content src/Imlight.Setup/Assets/patch-notes.json -Encoding utf8
+          Write-Host "Patch notes for $($all.Count) versions."
+
+      - name: Build ImlightManager.exe
+        # Builds this fork on the player's own PC from their own game files, so it needs no secret.
+        # The Game Files tab decodes game data with the type dump Imcodec ships for its tests.
+        shell: pwsh
+        run: |
+          $typeInput = "submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput"
+          New-Item -ItemType Directory -Force $typeInput | Out-Null
+          Copy-Item submodule/Imcodec/test/CodeGen/Inputs/*.json $typeInput/
+          dotnet publish src/Imlight.Setup/Imlight.Setup.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true -p:Version=${{ steps.version.outputs.version }} -p:ImlightEdition=Manager -o out/manager
+          Copy-Item out/manager/ImlightManager.exe release/
+
+      - name: Add the generator inputs
+        if: env.GENERATOR_INPUTS != ''
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/inputs.zip", [Convert]::FromBase64String($env:GENERATOR_INPUTS))
+          Expand-Archive "$env:RUNNER_TEMP/inputs.zip" "$env:RUNNER_TEMP/inputs"
+          $codec = "submodule/Imcodec/src"
+          New-Item -ItemType Directory -Force "$codec/Imcodec.ObjectProperty/GeneratorInput", "$codec/Imcodec.MessageLayer/GeneratorInput" | Out-Null
+          # Swap the bundled type dump the Manager was built with for this one.
+          Remove-Item "$codec/Imcodec.ObjectProperty/GeneratorInput/*.json" -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP/inputs/ObjectProperty/*" "$codec/Imcodec.ObjectProperty/GeneratorInput/"
+          Copy-Item "$env:RUNNER_TEMP/inputs/MessageLayer/*" "$codec/Imcodec.MessageLayer/GeneratorInput/"
+
+      - name: Build the server
+        if: env.GENERATOR_INPUTS != ''
+        shell: pwsh
+        run: |
+          dotnet publish src/Imlight.Director/Imlight.Director.csproj -c Release -r win-x64 --self-contained true `
+            -p:Version=${{ steps.version.outputs.version }} -o installer/publish/server
+          Set-Content -Path installer/publish/server/version.txt -Value "${{ steps.version.outputs.version }}" -NoNewline
+          Compress-Archive -Path installer/publish/server/* -DestinationPath release/ImlightServer-win-x64.zip
+
+      - name: Build the installer
+        if: env.GENERATOR_INPUTS != ''
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.version.outputs.version }}" installer/Imlight.iss
+          Copy-Item installer/output/ImlightLauncherSetup.exe release/
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          $notes = if ($env:GENERATOR_INPUTS) { "ImlightManager.exe installs this build with its Control Panel. ImlightLauncherSetup.exe installs this build; existing installs update through the launcher." } `
+                   else { "ImlightManager.exe installs this build with its Control Panel. Launcher only for this build: attach ImlightServer-win-x64.zip so launchers can update the server." }
+          # What changed since the last release, one line per merged change: the app's What's New window shows these.
+          $previous = git describe --tags --abbrev=0 --exclude $tag HEAD 2>$null
+          $changes = if ($previous) { git log --first-parent --pretty=format:"- %s" "$previous..HEAD" | Where-Object { $_ -notmatch '^- Merge ' } } else { @() }
+          if (-not $changes) { $changes = @("- Small fixes and improvements.") }
+          $notes = "## What's new`n" + ($changes -join "`n") + "`n`n## Downloads`n" + $notes
+          gh release create $tag (Get-ChildItem release/*).FullName --title $tag --notes $notes --target "${{ github.sha }}"

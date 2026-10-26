@@ -361,3 +361,12 @@ src/Imlight.Director/cache
 spiraldb-cache/
 /.scratch
 /scratch
+
+# Cache file created by Imlight
+cache
+
+# Local MCP client settings (may hold the agent bridge token)
+.mcp.json
+
+# Written by the release workflow from the tags (the app's built-in patch notes).
+src/Imlight.Setup/Assets/patch-notes.json

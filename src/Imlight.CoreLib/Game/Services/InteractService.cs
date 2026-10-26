@@ -50,8 +50,32 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class InteractService(SessionActor sessionActor) : MessageService(sessionActor) {
 
+    private const string DIALOG_ENTRY_EVENT_COMPLETION = "ENTRY";
+
+    // The NPC the player last used, so its options can be sent again once its dialog or shop closes.
+    private IActorRef _lastInteractedNpc;
+
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new InteractService(parentActor));
+
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_COMPLETEDIALOG))]
+    private void ReceiveCompleteDialog(WIZARD_12_PROTOCOL.MSG_COMPLETEDIALOG message) {
+        // "ENTRY" reports an event part way through a dialog; anything else means the dialog closed.
+        string completionType = message.CompletionType;
+        if (!string.Equals(completionType, DIALOG_ENTRY_EVENT_COMPLETION, StringComparison.OrdinalIgnoreCase)) {
+            RefreshLastInteractedNpc();
+        }
+    }
+
+    [MessageHandler(typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEPERSONA))]
+    private void ReceiveCompletePersona(QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEPERSONA message)
+        => RefreshLastInteractedNpc();
+
+    private void RefreshLastInteractedNpc() {
+        _lastInteractedNpc?.Tell(new ZONE_102_PROTOCOL.MSG_REFRESHSERVICEOPTIONS {
+            PlayerActor = SessionActor.ActorRef,
+        });
+    }
 
     [MessageHandler(typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_INTERACTNPC))]
     private void ReceiveNpcInteract(QUEST_MESSAGES_52_PROTOCOL.MSG_INTERACTNPC message) {
@@ -60,6 +84,7 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
         // A player is closing their shop
         if (message.ServiceName == "") {
             CloseShop(wizard.GameObjectID);
+            RefreshLastInteractedNpc();
             return;
         }
 
@@ -78,6 +103,18 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
         if (npc == null) {
             Logger.Error("{0} searched for NPC by global ID {1} but one was not found",
                 Logger.Args(wizard.CharId, getObjectId(message)));
+
+            // The game still holds an object this zone does not have (seen after a server restart: presses on a
+            // hatchery sigil went to an old copy and did nothing, Niduus 2026-10-21). Drop it so the real one is used.
+            // Furniture is no zone object either (a crafting station's click is handled by HousingService); it stays.
+            var unknownId = getObjectId(message);
+            if (Housing.HousingGids.IsHousingObject(unknownId)) {
+                return;
+            }
+
+            if (unknownId <= 2 || !TryGetOnlinePlayer(unknownId - 2, out _)) {
+                SendToSocket(new GAME_5_PROTOCOL.MSG_REMOVEOBJECT { GameObjectID = unknownId });
+            }
 
             return;
         }
@@ -104,6 +141,7 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
             PlayerObject = gameObj
         };
         serviceMementoComponent.ActorRef.Tell(msg);
+        _lastInteractedNpc = serviceMementoComponent.ActorRef;
     }
 
     private void CloseShop(ulong gameObjectId) {

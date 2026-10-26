@@ -16,6 +16,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+using Imcodec.Cryptography;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.Bit;
 using Imcodec.ObjectProperty.TypeCache;
@@ -62,8 +63,19 @@ public class PetFactory : RootDirectoryResourceSingleton<PetFactory>, IMemoryStr
 
     public static bool IsPetTemplate(uint templateId) => s_petTemplates.ContainsKey(templateId);
 
-    public static WizClientObjectItem CreateHatchedPet(ulong ownerId, uint templateId)
-        => CreatePet(ownerId, templateId, preHatch: true);
+    /// <summary>
+    /// Builds a hatched pet with a random name, the way the game names a new pet. Every way of getting a pet (shops,
+    /// the Crown Shop, packs, drops, commands) comes through here; before, only hatched eggs got a name, so the others
+    /// all showed the first name in the tables (Niduus, 2026-10-25).
+    /// </summary>
+    public static WizClientObjectItem CreateHatchedPet(ulong ownerId, uint templateId) {
+        var pet = CreatePet(ownerId, templateId, preHatch: true);
+        if (pet is not null) {
+            TrySetPetName(pet, WizardNameBank.RandomPetName(Random.Shared));
+        }
+
+        return pet;
+    }
 
     public static WizClientObjectItem CreatePet(
             ulong ownerId,
@@ -105,7 +117,72 @@ public class PetFactory : RootDirectoryResourceSingleton<PetFactory>, IMemoryStr
             ]
         };
 
+        AlignBehaviorsToTemplate(pet);
+
+        // The pet's maximum stats are its kind's, under the server's ceiling; hatching replaces them with the parents'.
+        PetProgress.RememberOwnMaxStats(pet, petItemBehaviorTemplate.m_maxStats);
+
+        // A hatched pet starts with its stats and talent pool.
+        if (preHatch) {
+            PetProgress.EnsureInitialized(pet);
+        }
+
         return pet;
+    }
+
+    /// <summary>
+    /// Moves a pet's behaviors to the positions its template lists them at. The game reads an item's behaviors
+    /// by position, so a pet whose template does not start with PetItemBehavior (the Pet Pavilion gummy bears,
+    /// for example) makes the game drop the connection when it reads the backpack.
+    /// </summary>
+    /// <param name="pet">The pet item.</param>
+    /// <returns>True if the behaviors moved.</returns>
+    internal static bool AlignBehaviorsToTemplate(WizClientObjectItem pet) {
+        var current = pet?.m_inactiveBehaviors;
+        var template = current is null ? null : CoreObjectFactory.GetCoreTemplate(pet.m_templateID);
+        if (template?.m_behaviors is null) {
+            return false;
+        }
+
+        var remaining = current.Where(b => b is not null).ToList();
+        var aligned = new List<BehaviorInstance>(template.m_behaviors.Count);
+        var lastFilled = -1;
+        for (var i = 0; i < template.m_behaviors.Count; i++) {
+            var behaviorTemplate = template.m_behaviors[i];
+            if (behaviorTemplate is null) {
+                aligned.Add(null);
+                continue;
+            }
+
+            var hash = StringHash.Compute(behaviorTemplate.m_behaviorName);
+            var fresh = BehaviorCache.AllocateBehavior(hash);
+            var existing = fresh is null ? null : remaining.FirstOrDefault(b => b.GetType() == fresh.GetType());
+            if (existing is not null) {
+                remaining.Remove(existing);
+                aligned.Add(existing);
+                lastFilled = i;
+                continue;
+            }
+
+            if (fresh is not null) {
+                fresh.m_behaviorTemplateNameID = hash;
+            }
+            aligned.Add(fresh);
+        }
+
+        // Behaviors the template does not list are left where they are.
+        if (remaining.Count > 0) {
+            return false;
+        }
+
+        aligned.RemoveRange(lastFilled + 1, aligned.Count - lastFilled - 1);
+        if (aligned.Count == current.Count && aligned.SequenceEqual(current)) {
+            return false;
+        }
+
+        pet.m_inactiveBehaviors = aligned;
+
+        return true;
     }
 
     /// <summary>
@@ -206,21 +283,35 @@ public class PetFactory : RootDirectoryResourceSingleton<PetFactory>, IMemoryStr
 
     private static ClientPetNameBehavior CreatePetNameBehavior(WizClientObjectItem pet, ClientPetNameBehavior itemName) {
         CoreObjectFactory.FindBehaviorInstance<ClientPetItemBehavior>(pet, out var petItemBehavior);
+        // A pet stitched at Zeke shows the race (model) of the pet whose look it took.
+        var look = LookTemplateId(pet);
+        var lookTemplate = look == (uint) pet.m_templateID ? null : GetPetItemBehaviorTemplate(look);
 
         return new ClientPetNameBehavior {
             m_nameKeys = itemName.m_nameKeys,
+            // A name given with .name pet.
+            m_wsNameOverride = itemName.m_wsNameOverride,
             m_useRank = true,
-            m_eGender = itemName.m_eGender,
-            m_eRace = itemName.m_eRace,
+            m_eGender = lookTemplate?.m_eGender ?? itemName.m_eGender,
+            m_eRace = lookTemplate?.m_eRace ?? itemName.m_eRace,
             m_overallRating = petItemBehavior?.m_overallRating ?? 0,
             m_activeRating = petItemBehavior?.m_activeRating ?? 0,
             m_petLevel = petItemBehavior?.m_level ?? 0,
-            m_templateID = (uint) pet.m_templateID,
+            m_templateID = look,
+            // The jewel mark beside the pet's name.
+            m_bHasSocketedJewel = Imlight.CoreLib.Shared.Items.JewelSockets.GetSocketedJewels(pet).Any(),
         };
     }
 
+    /// <summary>
+    /// The template a pet looks like: the one it was stitched to, else its own.
+    /// </summary>
+    internal static uint LookTemplateId(WizClientObjectItem pet)
+        => (uint) pet.m_displayID != 0 && IsPetTemplate((uint) pet.m_displayID) ? (uint) pet.m_displayID : (uint) pet.m_templateID;
+
     private static WizardCharacterBehavior CreatePetAppearance(WizClientObjectItem pet, ClientPetNameBehavior itemName) {
-        var petItemTemplate = GetPetItemBehaviorTemplate((uint) pet.m_templateID);
+        var look = LookTemplateId(pet);
+        var petItemTemplate = GetPetItemBehaviorTemplate(look);
         if (petItemTemplate is null) {
             Logger.Warning("Pet {0} has no pet item behavior on template {1}; it will show its race's default look.",
                 Logger.Args(pet.m_globalID.Full, pet.m_templateID.Full));
@@ -232,9 +323,10 @@ public class PetFactory : RootDirectoryResourceSingleton<PetFactory>, IMemoryStr
 
         // Live writes the primary texture into every color slot and the secondary into every decal
         // slot; the 4-bit skin color saturates, the skin decal keeps its high bits in the extended field.
+        var stitched = look != (uint) pet.m_templateID && petItemTemplate is not null;
         return new WizardCharacterBehavior {
-            m_eRace = itemName.m_eRace,
-            m_eGender = itemName.m_eGender,
+            m_eRace = stitched ? petItemTemplate.m_eRace : itemName.m_eRace,
+            m_eGender = stitched ? petItemTemplate.m_eGender : itemName.m_eGender,
             m_nSkinColor = (Bui4) Math.Min(primary, MaxSkinColor),
             m_nHairColor = (Bui7) primary,
             m_nHatColor = (Bui5) primary,
@@ -249,7 +341,34 @@ public class PetFactory : RootDirectoryResourceSingleton<PetFactory>, IMemoryStr
         };
     }
 
-    private static PetItemBehaviorTemplate GetPetItemBehaviorTemplate(uint templateId) {
+    /// <summary>
+    /// The look the summoned pet shows (CreatePetAppearance): its race, gender, size and the textures its colors and
+    /// pattern pick, with a pet stitched at Zeke showing the pet whose look it took.
+    /// </summary>
+    internal static (eRace Race, eGender Gender, float Scale, int Primary, int Secondary, int Pattern)? GetPetLook(WizClientObjectItem pet) {
+        if (pet is null) {
+            return null;
+        }
+
+        var look = LookTemplateId(pet);
+        var lookTemplate = GetPetItemBehaviorTemplate(look) ?? GetPetItemBehaviorTemplate((uint) pet.m_templateID);
+        CoreObjectFactory.FindBehaviorInstance<ClientPetNameBehavior>(pet, out var itemName);
+        var stitched = look != (uint) pet.m_templateID && lookTemplate is not null;
+        var useItem = !stitched && itemName is not null && itemName.m_eRace != 0;
+        var race = useItem ? itemName.m_eRace : lookTemplate?.m_eRace ?? 0;
+        if (race == 0) {
+            return null;
+        }
+
+        return (race,
+            useItem || lookTemplate is null ? itemName.m_eGender : lookTemplate.m_eGender,
+            lookTemplate?.m_fScale > 0 ? lookTemplate.m_fScale : 1f,
+            GetDyeTexture(lookTemplate?.m_primaryDyeToTexture, pet.m_primaryColor),
+            GetDyeTexture(lookTemplate?.m_secondaryDyeToTexture, pet.m_secondaryColor),
+            GetDyeTexture(lookTemplate?.m_patternToTexture, pet.m_pattern));
+    }
+
+    internal static PetItemBehaviorTemplate GetPetItemBehaviorTemplate(uint templateId) {
         var template = s_petTemplates.GetValueOrDefault(templateId)
             ?? CoreObjectFactory.GetCoreTemplate(templateId) as GameObjectTemplate;
 

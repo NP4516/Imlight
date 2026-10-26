@@ -1,0 +1,578 @@
+/*
+ * Imlight
+ * Copyright (C) 2025 Revive101
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * ========================================================================
+ * BANK REQUESTS
+ * ========================================================================
+ *
+ * PURPOSE:
+ * Does what the bank window asks of the server: moves between the backpack, the bank and the shared bank,
+ * deletes, the bank count and the streams other windows ask for. Every request is checked, done through the
+ * atomic paths (Wizard transfers for the character's own lists, BankCollection for anything that touches the
+ * shared bank) and answered with the messages the client needs.
+ *
+ * USAGE EXAMPLE:
+ * var requests = new BankRequests(wizard, SessionActor.ActorRef, IsBankOpen, UnequipItem);
+ * requests.InventoryToBank(message);
+ *
+ * NOTE:
+ * The client messages go in the order the client needs: the destination add (it looks the destination up
+ * when the confirm arrives), the source remove (the confirm recounts from the client's lists), then the
+ * confirm. A refusal is a confirm with the failure set, and the client often shows nothing for it, so every
+ * refusal is logged. The client does not take off a worn item before it asks to bank it, so the request
+ * does that through the unequip delegate, after the rules agreed and only when a backpack slot is free.
+ * The client sends one request per selected row without waiting, each is checked against the state the
+ * request before it left.
+ *
+ * TODO:
+ * Does the client list worn items in the Backpack tab for a delete? They are unequipped first, as for a move.
+ *
+ * Created by: Jay
+ * Version: KALI 1.0
+ * Last Updated: 10/14/2026
+ */
+
+using System;
+using System.Linq;
+using Akka.Actor;
+using Imcodec.MessageLayer;
+using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty;
+using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
+using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Shared.Items;
+using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.WizardData.Models.Misc;
+using Imlight.CoreLib.WizardData.Models.Player;
+
+namespace Imlight.CoreLib.Game.Bank;
+
+/// <summary>
+/// The bank requests of one wizard.
+/// </summary>
+/// <param name="wizard">The wizard that asks.</param>
+/// <param name="session">The SessionActor reference of the wizard's session.</param>
+/// <param name="bankIsOpen">Whether the wizard has the bank open at a bank NPC in range.</param>
+/// <param name="unequip">Takes an equipped item off the wizard and returns whether it is no longer equipped.</param>
+internal sealed class BankRequests(Wizard wizard, IActorRef session, Func<bool> bankIsOpen, Func<ulong, bool> unequip) {
+
+    private const int LockBit = ItemHelper.LockBit;
+    private const uint HouseTransferListMask = 4;
+
+    /// <summary>
+    /// Opens the bank window: reads the shared bank again, streams the bank and the shared bank, then opens the
+    /// window. The window fills its lists from what the client holds when it opens, so the stream goes first.
+    /// MSG_OPENBANK names the bank object, not the player: the client's InteractionManager looks the GlobalID up
+    /// among the objects the player is interacting with (0x14172ef50, the same check as MSG_SHOPLIST and
+    /// MSG_DYESHOPOPEN) and, when it is not one of them, sends MSG_DONESHOPPING at once and no window opens.
+    /// </summary>
+    /// <param name="bankObjectId">The global id of the bank object the player used.</param>
+    internal void Open(ulong bankObjectId) {
+        if (!AccountCollection.ReloadSharedBank(wizard.Account)) {
+            Logger.Error("The shared bank of account {AccountId} could not be read again, the window opens with what the session holds.",
+                Logger.Args(wizard.Account.AccountId));
+        }
+
+        var complete = BankSync.StreamBank(session, wizard, includeShared: true);
+        var shared = wizard.Account?.SharedBank;
+        Logger.Information("Bank: opened for {CharId}: {BankCount} of {BankLimit} bank items, shared bank {SharedItems} items, {SharedReagents} reagent and {SharedSnacks} snack stacks{Missing}.",
+            Logger.Args(wizard.CharId, wizard.StorageBehavior.Items.Count, wizard.StorageBehavior.Limit,
+                shared?.Items.Count ?? 0, shared?.Reagents.Count ?? 0, shared?.Snacks.Count ?? 0,
+                complete ? string.Empty : " (some items could not be sent, see the errors above)"));
+        session.Tell(new WIZARD_12_PROTOCOL.MSG_OPENBANK { GlobalID = bankObjectId });
+    }
+
+    /// <summary>
+    /// Moves an item or part of a stack from the backpack into the bank or the shared bank.
+    /// </summary>
+    /// <param name="message">The client's request. UseShared names the destination.</param>
+    internal void InventoryToBank(WIZARD_12_PROTOCOL.MSG_MOVEINVTOBANK message) {
+        var useShared = message.UseShared != 0;
+        var itemId = message.GlobalID;
+        var to = useShared ? BankContainer.SharedBank : BankContainer.Bank;
+        var request = $"move of item {itemId} to the {(useShared ? "shared bank" : "bank")}";
+        var item = CheckMove(request, itemId, BankContainer.Backpack, to, message.Quantity);
+        if (item is null) {
+            session.Tell(BankSync.InvToBankFailed(message.ClientRequestID, itemId, useShared));
+
+            return;
+        }
+
+        if (!EnsureUnequipped(request, itemId)) {
+            session.Tell(BankSync.InvToBankFailed(message.ClientRequestID, itemId, useShared));
+
+            return;
+        }
+
+        if (!useShared) {
+            if (!wizard.InventoryToBankTransfer(itemId)) {
+                Deny(request, itemId, "the character could not be saved");
+                session.Tell(BankSync.InvToBankFailed(message.ClientRequestID, itemId, useShared));
+
+                return;
+            }
+
+            Send(BankSync.StorageAdd(wizard, item, shared: false));
+            ItemSync.SendRemoved(session, wizard, itemId);
+            session.Tell(BankSync.InvToBankConfirm(message.ClientRequestID, itemId, itemId, useShared: false));
+            Done($"moved item {itemId} from the backpack to the bank");
+
+            return;
+        }
+
+        var result = BankCollection.TryMoveShared(wizard, new SharedMove(BankContainer.Backpack, to, itemId, message.Quantity));
+        if (!result.Success) {
+            Deny(request, itemId, $"{result.Denial}: {result.Reason}");
+            session.Tell(BankSync.InvToBankFailed(message.ClientRequestID, itemId, useShared));
+
+            return;
+        }
+
+        Send(BankSync.StorageAdd(wizard, result.Destination, shared: true));
+        if (result.Kind is BankItemKind.Reagent or BankItemKind.PetSnack) {
+            if (result.Source is not null) {
+                BankSync.SendBackpackStackChanged(session, wizard, result.Source);
+            } else {
+                BankSync.SendBackpackStackRemoved(session, wizard, result.OriginalId, result.Kind);
+            }
+        } else {
+            ItemSync.SendRemoved(session, wizard, itemId);
+        }
+
+        session.Tell(BankSync.InvToBankConfirm(message.ClientRequestID, result.OriginalId, result.NewId, useShared: true));
+        Done($"moved {message.Quantity} of item {itemId} from the backpack to the shared bank (now {result.NewId})");
+        TakeOffKiosk(result.Destination, "it went to the shared bank");
+    }
+
+    /// <summary>
+    /// Moves an item or part of a stack from the bank or the shared bank into the backpack.
+    /// </summary>
+    /// <param name="message">The client's request. UseShared names the tab the client is on, which is the source.</param>
+    internal void BankToInventory(WIZARD_12_PROTOCOL.MSG_MOVEBANKTOINV message) {
+        var useShared = message.UseShared != 0;
+        var itemId = message.GlobalID;
+        var from = useShared ? BankContainer.SharedBank : BankContainer.Bank;
+        var request = $"move of item {itemId} from the {(useShared ? "shared bank" : "bank")} to the backpack";
+        var item = CheckMove(request, itemId, from, BankContainer.Backpack, message.Quantity);
+        if (item is null) {
+            session.Tell(BankSync.BankToInvFailed(message.ClientRequestID, itemId));
+
+            return;
+        }
+
+        if (!useShared) {
+            if (!wizard.BankToInventoryTransfer(itemId)) {
+                Deny(request, itemId, "the character could not be saved");
+                session.Tell(BankSync.BankToInvFailed(message.ClientRequestID, itemId));
+
+                return;
+            }
+
+            ItemSync.SendAdded(session, wizard, item);
+            session.Tell(BankSync.StorageRemove(wizard, itemId, shared: false));
+            session.Tell(BankSync.BankToInvConfirm(message.ClientRequestID, itemId, itemId));
+            Done($"moved item {itemId} from the bank to the backpack");
+
+            return;
+        }
+
+        var result = BankCollection.TryMoveShared(wizard, new SharedMove(from, BankContainer.Backpack, itemId, message.Quantity));
+        if (!result.Success) {
+            Deny(request, itemId, $"{result.Denial}: {result.Reason}");
+            session.Tell(BankSync.BankToInvFailed(message.ClientRequestID, itemId));
+
+            return;
+        }
+
+        if (result.Kind is BankItemKind.Reagent or BankItemKind.PetSnack) {
+            BankSync.SendBackpackStackAdded(session, wizard, result.Destination);
+            if (result.Source is not null) {
+                Send(BankSync.StorageAdd(wizard, result.Source, shared: true));
+            } else {
+                session.Tell(BankSync.StorageRemove(wizard, result.OriginalId, shared: true));
+            }
+        } else {
+            ItemSync.SendAdded(session, wizard, result.Destination);
+            session.Tell(BankSync.StorageRemove(wizard, itemId, shared: true));
+        }
+
+        session.Tell(BankSync.BankToInvConfirm(message.ClientRequestID, result.OriginalId, result.NewId));
+        Done($"moved {message.Quantity} of item {itemId} from the shared bank to the backpack (now {result.NewId})");
+        DrainEnergyForSharedPet(result.Destination);
+    }
+
+    /// <summary>
+    /// Moves an item between the bank and the shared bank.
+    /// </summary>
+    /// <param name="message">The client's request. BankID is set for a move into the shared bank, BankSharedID for a move out of it.</param>
+    internal void BankToBank(WIZARD_12_PROTOCOL.MSG_MOVEBANKTOBANK message) {
+        var toShared = message.BankID != 0;
+        var itemId = toShared ? message.BankID : message.BankSharedID;
+        var request = $"move of item {itemId} between the bank and the shared bank";
+        if ((message.BankID != 0) == (message.BankSharedID != 0)) {
+            Deny(request, itemId, "exactly one of BankID and BankSharedID has to be set");
+            session.Tell(BankSync.BankToBankFailed(message.ClientRequestID, itemId, toShared));
+
+            return;
+        }
+
+        var from = toShared ? BankContainer.Bank : BankContainer.SharedBank;
+        var to = toShared ? BankContainer.SharedBank : BankContainer.Bank;
+        if (CheckMove(request, itemId, from, to, 1) is null) {
+            session.Tell(BankSync.BankToBankFailed(message.ClientRequestID, itemId, toShared));
+
+            return;
+        }
+
+        var result = BankCollection.TryMoveShared(wizard, new SharedMove(from, to, itemId, 1));
+        if (!result.Success) {
+            Deny(request, itemId, $"{result.Denial}: {result.Reason}");
+            session.Tell(BankSync.BankToBankFailed(message.ClientRequestID, itemId, toShared));
+
+            return;
+        }
+
+        Send(BankSync.StorageAdd(wizard, result.Destination, shared: toShared));
+        session.Tell(BankSync.StorageRemove(wizard, itemId, shared: !toShared));
+        session.Tell(BankSync.BankToBankConfirm(message.ClientRequestID, itemId, result.NewId, toShared));
+        Done($"moved item {itemId} from the {(toShared ? "bank to the shared bank" : "shared bank to the bank")} (now {result.NewId})");
+        if (toShared) {
+            TakeOffKiosk(result.Destination, "it went to the shared bank");
+        } else {
+            DrainEnergyForSharedPet(result.Destination);
+        }
+    }
+
+    /// <summary>
+    /// Deletes an item for good from the backpack, the bank or the shared bank.
+    /// </summary>
+    /// <param name="message">The client's request. UseShared and FromInventory name the tab, neither set is the Bank tab.</param>
+    internal void Delete(WIZARD_12_PROTOCOL.MSG_BANKDELETE message) {
+        var useShared = message.UseShared != 0;
+        var fromBackpack = !useShared && message.FromInventory != 0;
+        var itemId = message.GlobalID;
+        var from = useShared ? BankContainer.SharedBank : fromBackpack ? BankContainer.Backpack : BankContainer.Bank;
+        var request = $"delete of item {itemId} from the {from}";
+        var item = FindItem(from, itemId);
+        if (!bankIsOpen()) {
+            Deny(request, itemId, "the bank is not open");
+        } else if (item is null) {
+            ReportUnknown(request, itemId);
+        } else if (item is ClientReagentItem or ClientPetSnackItem) {
+            Deny(request, itemId, "stacks are not deleted with this request");
+        } else if (BankRules.CanDelete(item) is var denial && denial != BankDenial.None) {
+            Deny(request, itemId, denial.ToString());
+        } else if (wizard.IsFilledVault(itemId)) {
+            // A vault keeps what it holds wherever it goes, so it would be deleted with it.
+            Deny(request, itemId, $"{BankDenial.HasContents}: the vault still holds items");
+        } else if (EnsureUnequipped(request, itemId)) {
+            var result = from == BankContainer.SharedBank
+                ? BankCollection.TryDeleteShared(wizard, itemId, 1)
+                : BankCollection.TryDeleteOwn(wizard, from, itemId);
+            if (result.Success) {
+                if (from == BankContainer.Backpack) {
+                    ItemSync.SendRemoved(session, wizard, itemId);
+                } else {
+                    session.Tell(BankSync.StorageRemove(wizard, itemId, shared: useShared));
+                }
+
+                session.Tell(BankSync.BankDeleteConfirm(message.ClientRequestID, itemId, useShared));
+                Done($"deleted item {itemId} from the {from}");
+                TakeOffKiosk(item, "it was deleted");
+
+                return;
+            }
+
+            Deny(request, itemId, $"{result.Denial}: {result.Reason}");
+        }
+
+        session.Tell(BankSync.BankDeleteFailed(message.ClientRequestID, useShared));
+    }
+
+    /// <summary>
+    /// Deletes units of a reagent or pet snack stack of the shared bank.
+    /// </summary>
+    /// <param name="message">The client's request.</param>
+    internal void DeleteSharedStack(WIZARD_12_PROTOCOL.MSG_SHAREDBANKDELETEREAGENTORPETSNACK message) {
+        var stackId = message.GlobalID;
+        var request = $"delete of {message.Quantity} units of shared stack {stackId}";
+        var stack = FindItem(BankContainer.SharedBank, stackId);
+        if (!bankIsOpen()) {
+            Deny(request, stackId, "the bank is not open");
+        } else if (stack is null) {
+            ReportUnknown(request, stackId);
+        } else if (stack is not (ClientReagentItem or ClientPetSnackItem)) {
+            Deny(request, stackId, "the item is not a stack");
+        } else {
+            var result = BankCollection.TryDeleteShared(wizard, stackId, message.Quantity);
+            if (result.Success) {
+                if (result.Source is not null) {
+                    Send(BankSync.StorageAdd(wizard, result.Source, shared: true));
+                } else {
+                    session.Tell(BankSync.StorageRemove(wizard, stackId, shared: true));
+                }
+
+                session.Tell(BankSync.SharedStackDeleteConfirm(message.ClientRequestID, stackId, failed: false));
+                Done($"deleted {message.Quantity} units of shared stack {stackId}");
+
+                return;
+            }
+
+            Deny(request, stackId, $"{result.Denial}: {result.Reason}");
+        }
+
+        session.Tell(BankSync.SharedStackDeleteConfirm(message.ClientRequestID, stackId, failed: true));
+    }
+
+    /// <summary>
+    /// Sends the bank items to a window that asked for them, such as the bazaar, and then the end marker.
+    /// </summary>
+    /// <param name="endMarker">The message the window asked with, now empty, sent after the stream.</param>
+    /// <param name="includeShared">Whether the shared bank goes too. The item finder lists shared bank items (its
+    /// SharedBankIcon) and the crown shop delivery invoice counts them (NumItemsInSharedBank, NumJewelsInSharedBank).</param>
+    internal void StreamBankFor(IMessage endMarker, bool includeShared = false) {
+        if (includeShared && !AccountCollection.ReloadSharedBank(wizard.Account)) {
+            Logger.Error("The shared bank of account {AccountId} could not be read again, the window gets what the session holds.",
+                Logger.Args(wizard.Account?.AccountId));
+        }
+
+        BankSync.StreamBank(session, wizard, includeShared);
+        session.Tell(endMarker);
+        var shared = includeShared ? wizard.Account?.SharedBank : null;
+        Logger.Information("Bank: sent the {Count} bank items{Shared} of {CharId} to the window that asked with {Message}.",
+            Logger.Args(wizard.StorageBehavior.Items.Count,
+                shared is null ? string.Empty : $" and the {shared.Items.Count + shared.Reagents.Count + shared.Snacks.Count} shared bank items",
+                wizard.CharId, endMarker.GetType().Name));
+    }
+
+    /// <summary>
+    /// Locks or unlocks an item of the backpack, the worn gear, the bank or the shared bank (the lock buttons of the
+    /// bank window and the backpack). The lock is bit 31 of m_pattern; the client sets the item's m_pattern to the
+    /// IsLocked of the answer and refreshes the window (ClientWizStorageBehavior::MSG_RequestToggleLockItem 0x142120080).
+    /// </summary>
+    /// <param name="message">The client's request. Only ItemGID is set.</param>
+    internal void ToggleLock(WIZARD_12_PROTOCOL.MSG_REQUESTTOGGLELOCKITEM message) {
+        var itemId = (ulong) message.ItemGID;
+        try {
+            var request = $"lock of item {itemId}";
+            var item = FindItem(BankContainer.Backpack, itemId) ?? FindItem(BankContainer.Bank, itemId) ?? FindItem(BankContainer.SharedBank, itemId);
+            if (item is null) {
+                ReportUnknown(request, itemId);
+
+                return;
+            }
+
+            if (item is ClientReagentItem or ClientPetSnackItem) {
+                Deny(request, itemId, "reagent and pet snack stacks are not locked");
+
+                return;
+            }
+
+            var pattern = item.m_pattern ^ LockBit;
+            if (!WizardItemCollection.ApplyPattern(item, pattern)) {
+                Deny(request, itemId, "the item could not be saved");
+
+                return;
+            }
+
+            item.m_pattern = pattern;
+            session.Tell(new WIZARD_12_PROTOCOL.MSG_REQUESTTOGGLELOCKITEM {
+                ItemGID = itemId,
+                GlobalID = wizard.GameObjectID,
+                IsLocked = unchecked((uint) pattern),
+            });
+            Logger.Information("Item lock: {Item} {What} by {Wizard} ({CharId}).",
+                Logger.Args(ItemHelper.DescribeForLog(item), (pattern & LockBit) != 0 ? "locked" : "unlocked",
+                    wizard.PlayerNameBehavior?.GetWizardName(), wizard.CharId));
+        }
+        catch (Exception exception) {
+            Logger.Error("Item lock: the lock request for item {ItemId} of {CharId} failed: {Error}",
+                Logger.Args(itemId, wizard.CharId, exception));
+        }
+    }
+
+    /// <summary>
+    /// Answers the bank window's question which houses may go to the shared bank. The server keeps houses out of the
+    /// shared bank (BankRules, a house's lot belongs to its character), so the list names none and the window keeps
+    /// them out too (BankingWindow 0x1406a40b0 asks, 0x1406a3920 reads the HouseTransferResultList).
+    /// </summary>
+    internal void SendHouseTransferList() {
+        var list = new HouseTransferResultList {
+            m_houseTransferResultList = [],
+            m_characterGID = wizard.CharId,
+        };
+        var serializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.None);
+        if (!serializer.Serialize(list, HouseTransferListMask, out var data)) {
+            Logger.Error("Bank: the house transfer list of {CharId} could not be serialized.", Logger.Args(wizard.CharId));
+
+            return;
+        }
+
+        session.Tell(new WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTHOUSETRANSFERLIST { Data = data });
+        Logger.Information("Bank: told {CharId} that no house may go to the shared bank.", Logger.Args(wizard.CharId));
+    }
+
+    /// <summary>
+    /// Answers a bank count request with the number of items that count against the bank capacity.
+    /// </summary>
+    internal void SendBankCount()
+        => session.Tell(new WIZARD2_53_PROTOCOL.MSG_BANKCOUNT { BankCount = (uint) wizard.StorageBehavior.CountRegularItems() });
+
+    private WizClientObjectItem CheckMove(string request, ulong itemId, BankContainer from, BankContainer to, int quantity) {
+        if (!bankIsOpen()) {
+            Deny(request, itemId, "the bank is not open");
+
+            return null;
+        }
+
+        var item = FindItem(from, itemId);
+        if (item is null) {
+            ReportUnknown(request, itemId);
+
+            return null;
+        }
+
+        // The result of a move is told to the client after it happened, so an item the client could not be told about stops here.
+        if (!ItemSync.TrySerialize(item, out _)) {
+            Deny(request, itemId, "the item could not be serialized for the client");
+
+            return null;
+        }
+
+        var denial = BankRules.CanMove(from, to, item, quantity, wizard, wizard.Account);
+        if (denial != BankDenial.None) {
+            Deny(request, itemId, denial.ToString());
+
+            return null;
+        }
+
+        return item;
+    }
+
+    /// <summary>
+    /// Takes a pet off the hatchmaking kiosk once it went to the shared bank or was deleted. The bank window warns
+    /// about both (GUI2_00000549 "Moving a pet to the Shared Bank will remove it from the Hatchmaking Kiosk",
+    /// GUI2_00000558 "Trashing a pet will remove it from the Hatchmaking Kiosk").
+    /// </summary>
+    /// <param name="item">The item that moved or was deleted.</param>
+    /// <param name="why">Why, for the log.</param>
+    private void TakeOffKiosk(WizClientObjectItem item, string why) {
+        if (item is null || !PetFactory.IsPetTemplate((uint) item.m_templateID)) {
+            return;
+        }
+
+        if (HatchmakingListings.Remove(item.m_globalID)) {
+            Done($"took pet {item.m_globalID.Full} off the hatchmaking kiosk because {why}");
+        }
+    }
+
+    /// <summary>
+    /// Empties the energy of the wizard that took a pet out of the shared bank. The bank window asks first with
+    /// GUI_BankPetFromShared ("Moving a pet out of your Shared Bank will empty your Energy"), so a pet cannot be
+    /// trained on the energy of every wizard of the account in one day.
+    /// </summary>
+    /// <param name="item">The item that came out of the shared bank.</param>
+    private void DrainEnergyForSharedPet(WizClientObjectItem item) {
+        if (item is null || !PetFactory.IsPetTemplate((uint) item.m_templateID) || wizard.PetOwnerBehavior is null) {
+            return;
+        }
+
+        wizard.UpdateEnergy(0);
+        session.Tell(new PET_9_PROTOCOL.MSG_PETENERGYTICK {
+            GlobalID = wizard.GameObjectID,
+            Energy = 0,
+            MaxEnergy = wizard.GameStats.GetClientTypeAlternative().m_energyMax,
+            TickTime = (int) wizard.PetOwnerBehavior.LastEnergyTickEpoch,
+        });
+        Done($"took pet {item.m_globalID.Full} out of the shared bank, so the energy of the wizard is now 0");
+    }
+
+    private bool EnsureUnequipped(string request, ulong itemId) {
+        if (!wizard.EquipmentBehavior.HasItemEquipped(itemId)) {
+            return true;
+        }
+
+        // The worn item takes a backpack slot when it comes off.
+        if (wizard.BackpackFreeSlots < 1) {
+            Deny(request, itemId, $"{BankDenial.BackpackFull}: a worn item needs a free backpack slot to be taken off");
+
+            return false;
+        }
+
+        if (!unequip(itemId) || wizard.EquipmentBehavior.HasItemEquipped(itemId)) {
+            Deny(request, itemId, "the item could not be taken off");
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private WizClientObjectItem FindItem(BankContainer container, ulong itemId) {
+        switch (container) {
+            case BankContainer.Backpack:
+                return wizard.InventoryBehavior.GetItem(itemId)
+                    ?? wizard.EquipmentBehavior.GetItem(itemId)
+                    ?? wizard.AlchemyBehavior?.Reagents?.FirstOrDefault(stack => stack.m_globalID == itemId)
+                    ?? (WizClientObjectItem) wizard.PetSnackBehavior?.Snacks?.FirstOrDefault(stack => stack.m_globalID == itemId);
+            case BankContainer.Bank:
+                return wizard.StorageBehavior.GetItem(itemId);
+            default:
+                var shared = wizard.Account?.SharedBank;
+                if (shared is null) {
+                    return null;
+                }
+
+                return shared.Items.FirstOrDefault(item => item.m_globalID == itemId)
+                    ?? shared.Reagents.FirstOrDefault(stack => stack.m_globalID == itemId)
+                    ?? (WizClientObjectItem) shared.Snacks.FirstOrDefault(stack => stack.m_globalID == itemId);
+        }
+    }
+
+    private bool IsKnown(ulong itemId)
+        => FindItem(BankContainer.Backpack, itemId) is not null
+            || FindItem(BankContainer.Bank, itemId) is not null
+            || FindItem(BankContainer.SharedBank, itemId) is not null;
+
+    private void ReportUnknown(string request, ulong itemId) {
+        // An item in another container is a stale window or a repeated click. One that is nowhere cannot come from a client that is in step.
+        if (IsKnown(itemId)) {
+            Deny(request, itemId, "the item is not in the container the request names");
+
+            return;
+        }
+
+        var infractionText = $"Player sent the bank request '{request}' for item {itemId}, which they do not have!";
+        wizard.Account.AddInfraction(InfractionType.SuspiciousBehavior, infractionText);
+        Logger.Warning("Bank: {Infraction} This has been logged as a suspicious behavior infraction.", Logger.Args(infractionText));
+    }
+
+    private void Send(IMessage message) {
+        // A storage add the item could not be built for is already logged.
+        if (message is not null) {
+            session.Tell(message);
+        }
+    }
+
+    private void Deny(string request, ulong itemId, string reason)
+        => Logger.Warning("Bank: refused the {Request} for {CharId}: {Reason} (item {ItemId})", Logger.Args(request, wizard.CharId, reason, itemId));
+
+    private void Done(string what)
+        => Logger.Information("Bank: {CharId} {What}.", Logger.Args(wizard.CharId, what));
+
+}

@@ -17,7 +17,11 @@
  */
 
 using System.Collections.Generic;
+using Imlight.CoreLib.Game.Minigames;
+using Imlight.CoreLib.Game.Housing;
+using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Shared.Networking;
+using System.Collections.Generic;
 
 namespace Imlight.CoreLib.Shared.Packets;
 
@@ -121,6 +125,7 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
         public string DestinationLocation;
         public bool MakePrivate;
         public ulong OwnerCharId;
+        public HouseEntry HouseEntry;
 
     }
 
@@ -168,7 +173,7 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
         public ulong UserId;
         public ulong CharId;
         public string FallbackZone;
-        public uint FallbackZoneId;
+        public ulong FallbackZoneId;
         public string FallbackLocation;
         public string GameServerIp;
         public ushort GameServerPort;
@@ -202,7 +207,7 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
         public ulong UserId;
         public ulong CharId;
         public string FallbackZone;
-        public uint FallbackZoneId;
+        public ulong FallbackZoneId;
         public string FallbackLocation;
         public string GameServerIp;
         public ushort GameServerPort;
@@ -233,4 +238,76 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Sent by ResMinigameHandler to the session of the player who opened it, asking the minigame service to take
+    /// the player into the chest game described by <see cref="Context"/>.
+    /// </summary>
+    public class MSG_START_CHEST_MINIGAME : IServerMessage {
+
+        public byte MessageOrder { get; } = 21;
+        public byte ServiceID { get; } = 101;
+
+        public ChestGameContext Context;
+
+
+    }
+
+    /// <summary>
+    /// Timer signal indicating the client never confirmed that the house zone is ready.
+    /// </summary>
+    public class MSG_DEEDZONE_TIMEOUT : IServerMessage {
+
+        public byte MessageOrder { get; } = 22;
+        public byte ServiceID { get; } = 101;
+
+    }
+
+    /// <summary>
+    /// Internal message dispatched to a player's session when they receive a gift while online.
+    /// </summary>
+    public class MSG_DELIVER_GIFT : IServerMessage {
+        public byte MessageOrder { get; } = 23;
+        public byte ServiceID { get; } = 101;
+        public Mail Mail;
+    }
+
+    /// <summary>
+    /// A command typed in the Imlight app, sent to every online player's session. Only the sessions playing on the
+    /// server's own PC run it.
+    /// </summary>
+    public class MSG_MANAGERCOMMAND : IServerMessage {
+        public byte MessageOrder { get; } = 24;
+        public byte ServiceID { get; } = 101;
+        public string Command;
+    }
+
+    /// <summary>
+    /// Asks a house zone to put the trainer on a placed trainer tome (HouseTrainers).
+    /// </summary>
+    public class MSG_SPAWNHOUSETRAINER : IServerMessage {
+        public byte MessageOrder { get; } = 25;
+        public byte ServiceID { get; } = 101;
+        public string Tag;
+        public float X;
+        public float Y;
+        public float Z;
+        public float Yaw;
+    }
+
+    /// <summary>
+    /// Timer signal indicating the client has not answered a house teleport request, so the plain zone transfer request
+    /// is tried for the same house.
+    /// </summary>
+    public class MSG_HOUSETELEPORT_FALLBACK : IServerMessage {
+        public byte MessageOrder { get; } = 26;
+        public byte ServiceID { get; } = 101;
+    }
+
+    /// <summary>
+    /// Timer signal to play the wizard's equipped Victory Dance once a won battle's victory scene has started.
+    /// </summary>
+    public class MSG_PLAYVICTORYDANCE : IServerMessage {
+        public byte MessageOrder { get; } = 27;
+        public byte ServiceID { get; } = 101;
+    }
 }

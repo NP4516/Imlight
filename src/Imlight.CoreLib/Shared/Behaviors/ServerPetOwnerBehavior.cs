@@ -38,8 +38,8 @@ public class ServerPetOwnerBehavior : IClientBehaviorProvider<ClientPetOwnerBeha
 
     [JsonIgnore] public bool NoTransfer { get; set; } = false;
 
-    public readonly int EnergyTickIntervalInSeconds = ConfigurationManager
-        .Settings["Character.PetEnergyTickInSeconds"].AsInt();
+    [JsonIgnore] public int EnergyTickIntervalInSeconds
+        => Imlight.CoreLib.Game.Tools.MemberBenefits.EnergyTickSeconds(Imlight.CoreLib.Game.Pet.AdvancedPetsConfig.EnergyTickInSeconds);
 
     public byte MaxSlots { get; set; }
     public uint LastEnergyTickEpoch { get; private set; }
@@ -68,6 +68,11 @@ public class ServerPetOwnerBehavior : IClientBehaviorProvider<ClientPetOwnerBeha
     /// The inventory item GlobalID of the currently equipped pet (0 if none).
     /// </summary>
     public ulong EquippedPetGlobalId { get; set; }
+
+    /// <summary>
+    /// The pet templates in the wizard's Pet Tome: every kind of pet they have owned (PetTome).
+    /// </summary>
+    public List<uint> PetTome { get; set; }
 
     // ctor
     public ServerPetOwnerBehavior() 

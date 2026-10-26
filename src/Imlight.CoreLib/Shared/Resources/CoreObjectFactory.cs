@@ -51,6 +51,7 @@ using Imcodec.IO;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Utilities;
 
 namespace Imlight.CoreLib.Shared.Resources;
@@ -159,6 +160,23 @@ public class CoreObjectFactory : RootSingleResourceSingleton<CoreObjectFactory>,
     }
 
     /// <summary>
+    /// The ID of a template already loaded (this very object, as <see cref="GetCoreTemplate"/> gave it), or 0.
+    /// </summary>
+    public static ulong LoadedIdOf(CoreTemplate template) {
+        if (template is null) {
+            return 0;
+        }
+
+        foreach (var (id, loaded) in s_templateCache) {
+            if (ReferenceEquals(loaded, template)) {
+                return id;
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>
     /// Gets the CoreTemplate object with the specified ID.
     /// </summary>
     /// <param name="id">The ID of the CoreTemplate.</param>
@@ -201,6 +219,17 @@ public class CoreObjectFactory : RootSingleResourceSingleton<CoreObjectFactory>,
         return RootArchiveLoader.GetFile<CoreTemplate>(fileName);
     }
 
+    /// <summary>Whether the game files have a template with this id.</summary>
+    public static bool HasTemplate(ulong id) => TemplateLocations().ContainsKey(id);
+
+    /// <summary>
+    /// Whether the game files have an object (an item, NPC or other game object, in ObjectData) with this id. A spell
+    /// is a template too, but no item.
+    /// </summary>
+    public static bool HasObjectTemplate(ulong id)
+        => TemplateLocations().TryGetValue(id, out var location)
+        && ((string) location.m_filename)?.StartsWith("ObjectData/", StringComparison.OrdinalIgnoreCase) == true;
+
     private static Dictionary<ulong, TemplateLocation> TemplateLocations()
         => LazyInitializer.EnsureInitialized(ref s_templateLocations, IndexTemplateLocations);
 
@@ -217,22 +246,36 @@ public class CoreObjectFactory : RootSingleResourceSingleton<CoreObjectFactory>,
     }
 
     /// <summary>
+    /// Gets the ID of the core template that matches the specified predicate, or 0 if not found.
+    /// </summary>
+    /// <param name="predicate">The predicate used to match the template.</param>
+    /// <param name="templateId">The ID of the matching core template, or 0 if not found.</param>
+    /// <returns>True if a matching template is found; otherwise, false.</returns>
+    public static bool TryGetCoreTemplateID(Func<TemplateLocation, bool> predicate, out uint templateId) {
+        templateId = 0;
+        var template = TemplateManifest?.m_serializedTemplates
+            .AsParallel()
+            .FirstOrDefault(predicate);
+
+        if (template is null) {
+            return false;
+        }
+
+        templateId = template.m_id;
+        return true;
+    }
+
+    /// <summary>
     /// Gets the ID of the core template that matches the specified predicate.
     /// </summary>
     /// <param name="predicate">The predicate used to match the template.</param>
     /// <returns>The ID of the matching core template.</returns>
     public static uint GetCoreTemplateID(Func<TemplateLocation, bool> predicate) {
-        var templateOrNull = TemplateManifest.m_serializedTemplates
-            .AsParallel()
-            .FirstOrDefault(predicate);
-
-        if (templateOrNull is null) {
+        if (!TryGetCoreTemplateID(predicate, out uint templateId)) {
             Logger.Error("Could not find CoreTemplate by predicate.");
-
-            return 0;
         }
 
-        return templateOrNull.m_id;
+        return templateId;
     }
 
     /// <summary>
@@ -297,7 +340,8 @@ public class CoreObjectFactory : RootSingleResourceSingleton<CoreObjectFactory>,
         obj.m_location = objInfo.m_location;
         obj.m_orientation = objInfo.m_orientation;
         obj.m_fScale = objInfo.m_fScale;
-        obj.m_globalID = RandomGen.GenerateGUID();
+        // An object added from spiraldb-extra/ZoneObjects keeps the same global id on every load.
+        obj.m_globalID = ZoneObjects.GlobalIdOf(objInfo) ?? RandomGen.GenerateGUID();
         obj.m_zoneTagID = StringHash.Compute(objInfo.m_zoneTag);
         obj.m_permID = RandomGen.GenerateHash(string.Create(CultureInfo.InvariantCulture,
             $"{obj.m_zoneTagID}{obj.m_templateID}{obj.m_location.X}"));
