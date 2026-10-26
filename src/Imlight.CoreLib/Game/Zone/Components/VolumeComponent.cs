@@ -111,6 +111,11 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
         }
 
         foreach (var quest in QuestTemplateCollection.GetAllQuests()) {
+            // Some quest templates load without a goals list (or not at all); there is nothing to match in them.
+            if (quest?.m_goals is null) {
+                continue;
+            }
+
             foreach (var goal in quest.m_goals) {
                 // The tag is the volume's name or, as most game quests write it, its enter event ("Enter_<name>").
                 if (goal is not WaypointGoalTemplate waypointGoal

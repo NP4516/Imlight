@@ -113,7 +113,7 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
 
         var questTemplates = QuestTemplateCollection
             .GetAllQuests()
-            .Where(x => x is not null)
+            .Where(x => x?.m_goals is not null)
             .ToArray();
 
         // Some Ravenwood zone copies use a localized NPC template name rather than the quest's
@@ -213,7 +213,7 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
         _cachedPlayerStates.Clear();
         var questTemplates = QuestTemplateCollection
             .GetAllQuests()
-            .Where(x => x is not null)
+            .Where(x => x?.m_goals is not null)
             .ToList();
 
         foreach (var questTemplate in questTemplates) {

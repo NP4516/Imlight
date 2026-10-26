@@ -37,7 +37,7 @@ namespace Imlight.CoreLib.Game.Zone.Supervisors;
 /// <param name="zone">The zone that this supervisor is responsible for.</param>
 internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDispatcher, IWithTimers {
 
-    protected const uint OBJECT_CREATION_TIMEOUT_IN_MS = 5000;
+    protected const uint OBJECT_CREATION_TIMEOUT_IN_MS = 20000;
     private const string EntityLoadTimeoutKey = "entity-load-timeout";
 
     public ITimerScheduler Timers { get; set; }
