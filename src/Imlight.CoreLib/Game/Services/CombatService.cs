@@ -369,7 +369,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         // Serialize item and broadcast equip action to other players.
         var pubItem = ItemHelper.GetPublicItem(item);
 
-        if (_itemSerializer.Serialize(pubItem, PropertyFlags.Prop_Transmit, out var data)) {
+        if (!_itemSerializer.Serialize(pubItem, PropertyFlags.Prop_Transmit, out var data)) {
             Logger.Error("Failed to serialize item {0}", Logger.Args(item.m_globalID));
 
             return;

@@ -80,6 +80,16 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
 
         SeedTriggerStates(replacedTriggers);
 
+        foreach (var diagTrigger in replacedTriggers.Where(t => t is not null)) {
+            Logger.Information("TRIGGERDIAG load {0}: '{1}' fire=[{2}] activate=[{3}] requirements={4} results=[{5}] max={6}",
+                Logger.Args(Zone.ZonePath, diagTrigger.m_triggerName.ToString(),
+                    string.Join(",", (diagTrigger.m_fireEvents ?? []).Select(e => e.ToString())),
+                    string.Join(",", (diagTrigger.m_activateEvents ?? []).Select(e => e.ToString())),
+                    diagTrigger.m_requirements?.m_requirements?.Count ?? 0,
+                    string.Join(",", (diagTrigger.m_results?.m_results ?? []).Select(x => x?.GetType().Name)),
+                    diagTrigger.m_triggerMax));
+        }
+
         _orderedTriggers.Clear();
         foreach (var trigger in replacedTriggers) {
             var triggerActor = Context.ActorOf(Props.Create(() => new ZoneTrigger(ZoneRef, Zone, trigger)));
@@ -112,12 +122,14 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         // (their results are independent), but paired teleporter triggers must not both win:
         // only one ResTeleport trigger may execute (see PickTeleportTrigger).
         var passing = new List<(Trigger Trigger, IActorRef Actor)>();
+        Logger.Information("TRIGGERDIAG event posted: '{0}' in {1}", Logger.Args(message.EventName.ToString(), Zone.ZonePath));
         foreach (var (trigger, triggerActor) in _orderedTriggers) {
             if (trigger.m_fireEvents is null || !trigger.m_fireEvents.Any(x => x == message.EventName)) {
                 continue;
             }
 
             if (!_chainedEvents.Contains(message.EventName) && !IsEnforcedEnabled(trigger)) {
+                Logger.Information("TRIGGERDIAG event '{0}' trigger '{1}': skipped, trigger disabled", Logger.Args(message.EventName.ToString(), trigger.m_triggerName.ToString()));
                 continue;
             }
 
@@ -136,9 +148,11 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
             }
 
             if (!EvaluateRequirements(trigger, message)) {
+                Logger.Information("TRIGGERDIAG event '{0}' trigger '{1}': skipped, requirements failed", Logger.Args(message.EventName.ToString(), trigger.m_triggerName.ToString()));
                 continue;
             }
 
+            Logger.Information("TRIGGERDIAG event '{0}' trigger '{1}': passes", Logger.Args(message.EventName.ToString(), trigger.m_triggerName.ToString()));
             passing.Add((trigger, triggerActor));
         }
 

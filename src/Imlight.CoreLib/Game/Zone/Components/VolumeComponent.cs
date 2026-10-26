@@ -107,7 +107,7 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
             foreach (var goal in quest.m_goals) {
                 if (goal is not WaypointGoalTemplate waypointGoal
                     || string.IsNullOrEmpty(waypointGoal.m_proximityTag)
-                    || waypointGoal.m_proximityTag != volumeName) {
+                    || !ProximityTagNamesVolume(waypointGoal.m_proximityTag, volumeName)) {
                     continue;
                 }
 
@@ -120,6 +120,16 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
                 _volumeGoals.Add((quest.m_questName, goal.m_goalName));
             }
         }
+    }
+
+    // A waypoint goal names its volume either by the volume's name or by the event the volume posts on entry
+    // ("Enter_" + the volume's name, as in "Enter_Activator Volume ST01-C04-003").
+    private bool ProximityTagNamesVolume(string proximityTag, string volumeName) {
+        if (proximityTag == volumeName) {
+            return true;
+        }
+
+        return (_volume.m_enterEvents ?? []).Any(enterEvent => enterEvent.ToString() == proximityTag);
     }
 
     private bool IsBox
