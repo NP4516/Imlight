@@ -39,6 +39,8 @@ namespace Imlight.Setup;
 /// </summary>
 internal sealed partial class ManagerWindow {
 
+    private DockPanel? _recipeDrawer;
+
     private const string ALL_STATIONS = "All stations";
     private const string ANY_RECIPE_SCHOOL = "Any school";
 
@@ -116,8 +118,7 @@ internal sealed partial class ManagerWindow {
         WhenFiltersChange(RenderRecipesTab, _recipeCategory, _recipeMakes, _recipeMakesSlot, _recipeNeedsKind, _recipeNeedsName,
             _recipeIngredientsMin, _recipeIngredientsMax, _recipeCooldownMin, _recipeCooldownMax, _recipeGoldMin, _recipeGoldMax,
             _recipeCrowns, _recipeSort);
-        var filters = new WrapPanel {
-            Children = {
+        var filters = SearchFilters(
                 Labelled("Crafting station", _recipeStation),
                 Labelled("School", _recipeSchool),
                 Labelled("Category", _recipeCategory),
@@ -134,9 +135,7 @@ internal sealed partial class ManagerWindow {
                 Labelled("Sort by", _recipeSort),
                 WithMargin(_recipeCrowns, new Thickness(4, 18, 0, 6)),
                 WithMargin(_recipeNoStation, new Thickness(14, 18, 0, 6)),
-                WithMargin(_recipeChangedOnly, new Thickness(14, 18, 0, 6)),
-            },
-        };
+                WithMargin(_recipeChangedOnly, new Thickness(14, 18, 0, 6)));
         var vendor = WithHint(Row(
                 Action(Primary("Make a recipe vendor here"), MakeRecipeVendorAsync),
                 Action(Plain("Open my crafting window"), () => {
@@ -156,7 +155,7 @@ internal sealed partial class ManagerWindow {
         var root = new DockPanel {
             Margin = new Thickness(24, 12, 24, 16),
             Children = {
-                WithDock(details, Dock.Right),
+                WithDock(_recipeDrawer = DetailsDrawer("Recipe details", details, () => { _recipeList.SelectedItem = null; ShowRecipe(null); }), Dock.Right),
                 WithDock(Fold("flask", "Recipes", "Find recipes",
                     "Search or filter, then click a recipe to see what it needs and makes.",
                     MissingNote("the .recipe and .craft commands are " + ServerSource.DefaultName + "'s.", () => !_manager.HasRecipeCommands),
@@ -375,6 +374,10 @@ internal sealed partial class ManagerWindow {
     // ---------------------------------------------------------------------
 
     private void ShowRecipe(Recipe? recipe) {
+        if (_recipeDrawer is not null) {
+            _recipeDrawer.IsVisible = recipe is not null;
+        }
+
         _recipePicked = recipe;
         _recipeDetails.Children.Clear();
         if (recipe is null || _recipeBook is null) {

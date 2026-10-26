@@ -21,6 +21,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.LogicalTree;
 
 namespace Imlight.Setup;
 
@@ -44,12 +45,45 @@ internal sealed partial class ManagerWindow {
     /// <summary>A tick in a row of filters, lined up with the boxes beside it.</summary>
     private static Control SearchTick(CheckBox box) => WithMargin(box, new Thickness(4, 18, 10, 6));
 
-    /// <summary>Filters in a row that wraps.</summary>
-    private static WrapPanel SearchFilters(params Control[] filters) {
+    /// <summary>
+    /// Filters tucked behind a Filters button (Niduus, 2026-10-26, mockup F: "Make this the default for all search
+    /// areas"): the button says how many are set, each filter that is set shows as a chip with an x that sets it back,
+    /// and Clear all sets them all back. The filters themselves show in a row that wraps when the button is clicked.
+    /// </summary>
+    private static Control SearchFilters(params Control[] filters) {
         var panel = new WrapPanel();
         panel.Children.AddRange(filters);
 
-        return panel;
+        return new FilterBar(panel);
+    }
+
+    /// <summary>
+    /// The details of what was clicked, on the right (mockup F): hidden until something is picked, with a title and a
+    /// close button that hides them again, so the list has the whole width the rest of the time.
+    /// </summary>
+    private static DockPanel DetailsDrawer(string title, Control details, Action close) {
+        var closeButton = new Button {
+            Classes = { "ui" }, Padding = new Thickness(9, 4), Content = ManagerTheme.TextIcon("close", 14),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+        };
+        ToolTip.SetTip(closeButton, "Close the details");
+        closeButton.Click += (_, _) => close();
+        var drawer = new DockPanel {
+            IsVisible = false, Margin = details.Margin,
+            Children = {
+                WithDock(new DockPanel {
+                    Margin = new Thickness(0, 0, 0, 8),
+                    Children = {
+                        WithDock(closeButton, Dock.Right),
+                        new TextBlock { Text = title, FontWeight = Avalonia.Media.FontWeight.SemiBold, Foreground = MUTED, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center },
+                    },
+                }, Dock.Top),
+                details,
+            },
+        };
+        details.Margin = new Thickness(0);
+
+        return drawer;
     }
 
     /// <summary>A drop-down of choices, the first picked.</summary>
@@ -131,6 +165,194 @@ internal sealed partial class ManagerWindow {
         var head = shown == total ? $"All {total:N0} {things}." : $"{shown:N0} of {total:N0} {things}.";
 
         return showing < shown ? $"{head} Showing the first {showing:N0}; add words or filters to narrow it down." : head;
+    }
+
+    /// <summary>The Filters button, the chips of the filters that are set, and the filters (shown when the button is clicked).</summary>
+    private sealed class FilterBar : StackPanel {
+
+        private readonly Panel _filters;
+        private readonly Border _drawer;
+        private readonly Button _toggle = new() { Classes = { "ui" } };
+        private readonly TextBlock _toggleText = new() { VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+        private readonly WrapPanel _chips = new() { VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+        private readonly Button _clearAll = new() { Content = "Clear all", Classes = { "ui" } };
+        // Each filter's value when the page was made, which its chip's x and Clear all put back.
+        private readonly Dictionary<Control, object?> _defaults = [];
+        private bool _resetting;
+
+        internal FilterBar(Panel filters) {
+            _filters = filters;
+            Spacing = 8;
+            _drawer = new Border {
+                IsVisible = false, Child = filters, Padding = new Thickness(14, 12, 4, 6),
+                Background = ManagerTheme.Glass(10), BorderBrush = ManagerTheme.Glass(30), BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(ManagerTheme.RADIUS_SMALL + 2),
+            };
+            _toggle.Content = new StackPanel {
+                Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 7,
+                Children = { ManagerTheme.TextIcon("sliders", 15), _toggleText },
+            };
+            ToolTip.SetTip(_toggle, "Show or hide every filter of this search");
+            _toggle.Click += (_, _) => {
+                _drawer.IsVisible = !_drawer.IsVisible;
+                Refresh();
+            };
+            _clearAll.Click += (_, _) => Reset(Inputs().Select(i => i.Box).ToList());
+            Children.Add(new DockPanel {
+                Children = {
+                    WithDock(WithMargin(_toggle, new Thickness(0, 0, 10, 0)), Avalonia.Controls.Dock.Left),
+                    WithDock(_clearAll, Avalonia.Controls.Dock.Right),
+                    _chips,
+                },
+            });
+            Children.Add(_drawer);
+
+            foreach (var (box, _) in Inputs()) {
+                _defaults[box] = ValueOf(box);
+            }
+
+            // Every kind of filter tells the bar when it changes, including ones added later (the Gear tab's stat rows).
+            AddHandler(Avalonia.Controls.Primitives.SelectingItemsControl.SelectionChangedEvent, (_, _) => Refresh());
+            AddHandler(Avalonia.Controls.Primitives.ToggleButton.IsCheckedChangedEvent, (_, _) => Refresh());
+            AddHandler(NumericUpDown.ValueChangedEvent, (_, _) => Refresh());
+            AddHandler(TextBox.TextChangedEvent, (_, _) => Refresh());
+            AttachedToVisualTree += (_, _) => Refresh();
+            Refresh();
+        }
+
+        /// <summary>The filters' boxes, drop-downs and ticks that show (a filter hidden by its page doesn't count), with their names.</summary>
+        private List<(Control Box, string Name)> Inputs() {
+            var found = new List<(Control, string)>();
+            foreach (var control in _filters.GetLogicalDescendants().OfType<Control>()) {
+                if (control is not (ComboBox or NumericUpDown or CheckBox or TextBox) || !ShowsInFilters(control)) {
+                    continue;
+                }
+
+                // A text box inside a number box or a drop-down is part of it, not a filter of its own.
+                if (control is TextBox && control.GetLogicalAncestors().Any(a => a is NumericUpDown or ComboBox)) {
+                    continue;
+                }
+
+                found.Add((control, NameOf(control)));
+            }
+
+            return found;
+        }
+
+        private bool ShowsInFilters(Control control) {
+            for (ILogical? at = control; at is not null && at != _filters; at = at.LogicalParent) {
+                if (at is Control { IsVisible: false }) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static string NameOf(Control control) {
+            if (control is CheckBox { Content: string text }) {
+                return text;
+            }
+
+            // A filter made by SearchFilter: its label is the text over it.
+            if (control.Parent is StackPanel { Children: [TextBlock { Text: { } label }, ..] }) {
+                return label;
+            }
+
+            return control is TextBox { Watermark: { } watermark } ? watermark : "Filter";
+        }
+
+        private static object? ValueOf(Control control) => control switch {
+            ComboBox box => box.SelectedIndex,
+            NumericUpDown number => number.Value,
+            CheckBox tick => tick.IsChecked,
+            TextBox text => text.Text ?? "",
+            _ => null,
+        };
+
+        private object? DefaultOf(Control control) => _defaults.TryGetValue(control, out var value) ? value : control switch {
+            ComboBox => 0,
+            NumericUpDown => null,
+            CheckBox => false,
+            TextBox => "",
+            _ => null,
+        };
+
+        private bool IsSet(Control control) => !Equals(ValueOf(control), DefaultOf(control))
+                                               && !(control is TextBox text && string.IsNullOrWhiteSpace(text.Text) && Equals(DefaultOf(control), ""));
+
+        private static string Shown(Control control, string name) => control switch {
+            ComboBox box => $"{name}: {box.SelectedItem}",
+            NumericUpDown number => $"{name}: {number.Value?.ToString("0.##", System.Globalization.CultureInfo.CurrentCulture) ?? ANY_FILTER}",
+            CheckBox { IsChecked: true } => name,
+            CheckBox => $"Not: {name}",
+            TextBox text => $"{name}: {text.Text}",
+            _ => name,
+        };
+
+        private void Reset(List<Control> boxes) {
+            _resetting = true;
+            try {
+                foreach (var box in boxes) {
+                    var value = DefaultOf(box);
+                    switch (box) {
+                        case ComboBox combo: combo.SelectedIndex = value as int? ?? 0; break;
+                        case NumericUpDown number: number.Value = value as decimal?; break;
+                        case CheckBox tick: tick.IsChecked = value as bool?; break;
+                        case TextBox text: text.Text = value as string ?? ""; break;
+                    }
+                }
+            }
+            finally {
+                _resetting = false;
+            }
+
+            Refresh();
+        }
+
+        private void Refresh() {
+            if (_resetting) {
+                return;
+            }
+
+            var set = Inputs().Where(i => IsSet(i.Box)).ToList();
+            _toggleText.Text = set.Count > 0 ? $"Filters · {set.Count}" : "Filters";
+            _toggle.Classes.Set("accent", set.Count > 0 && !_drawer.IsVisible);
+            _clearAll.IsVisible = set.Count > 0;
+            _chips.Children.Clear();
+            if (set.Count == 0) {
+                _chips.Children.Add(new TextBlock {
+                    Text = _drawer.IsVisible ? "Pick filters below to narrow the list." : "No filters set. Click Filters to narrow the list.",
+                    Foreground = MUTED, FontSize = ManagerTheme.FONT_SMALL, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                });
+
+                return;
+            }
+
+            foreach (var (box, name) in set) {
+                var remove = new Button {
+                    Padding = new Thickness(4), Margin = new Thickness(6, 0, 0, 0), CornerRadius = new CornerRadius(ManagerTheme.RADIUS_PILL),
+                    Background = ManagerTheme.Glass(26), BorderThickness = new Thickness(0), MinHeight = 0,
+                    Content = ManagerTheme.TextIcon("close", 10), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                };
+                ToolTip.SetTip(remove, "Set this filter back");
+                var target = box;
+                remove.Click += (_, _) => Reset([target]);
+                _chips.Children.Add(new Border {
+                    Margin = new Thickness(0, 2, 8, 2), Padding = new Thickness(12, 3, 4, 3), CornerRadius = new CornerRadius(ManagerTheme.RADIUS_PILL),
+                    Background = ManagerTheme.Brush(ManagerTheme.ACCENT, 50), BorderBrush = ManagerTheme.Brush(ManagerTheme.ACCENT_LIGHT, 150),
+                    BorderThickness = new Thickness(1),
+                    Child = new StackPanel {
+                        Orientation = Avalonia.Layout.Orientation.Horizontal,
+                        Children = {
+                            new TextBlock { Text = Shown(box, name), FontSize = ManagerTheme.FONT_SMALL, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center },
+                            remove,
+                        },
+                    },
+                });
+            }
+        }
+
     }
 
 }

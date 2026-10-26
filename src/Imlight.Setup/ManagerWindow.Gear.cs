@@ -43,6 +43,8 @@ namespace Imlight.Setup;
 /// </summary>
 internal sealed partial class ManagerWindow {
 
+    private DockPanel? _gearDrawer;
+
     private const string ALL_GEAR = "All gear";
     private const string NO_SCHOOL = "No school needed";
     private const double GEAR_TIP_WIDTH = 290;
@@ -138,8 +140,7 @@ internal sealed partial class ManagerWindow {
             Children = { new TextBlock { Text = label, Foreground = MUTED, FontSize = 12 }, box },
         };
 
-        var filters = new WrapPanel {
-            Children = {
+        var filters = SearchFilters(
                 Labelled("Slot", _gearSlot),
                 Labelled("School", _gearSchool),
                 Labelled("Level from", _gearLevelMin),
@@ -157,8 +158,7 @@ internal sealed partial class ManagerWindow {
                 SearchTick(_gearHasCards),
                 SearchTick(_gearInSet),
                 SearchTick(_gearRental),
-            },
-        };
+                GearStatFilters());
         var details = new ScrollViewer {
             Width = 430,
             Margin = new Thickness(14, 0, 0, 0),
@@ -171,7 +171,7 @@ internal sealed partial class ManagerWindow {
         var root = new DockPanel {
             Margin = new Thickness(24, 12, 24, 16),
             Children = {
-                WithDock(details, Dock.Right),
+                WithDock(_gearDrawer = DetailsDrawer("Item details", details, () => { _gearList.SelectedItem = null; ShowGear(null); }), Dock.Right),
                 WithDock(Fold("shield", "Gear", "Find gear",
                     "Search or filter by slot, school, level, stats or set bonus, then click an item to see it as the game shows it.",
                     MissingNote("the give-gear commands (.hat, .robe, .pet and the rest) are " + ServerSource.DefaultName +
@@ -180,7 +180,7 @@ internal sealed partial class ManagerWindow {
                         "tooltip as the game draws it, with its stats, item cards, sockets, the level it needs and its marks. Point at a " +
                         "mark or a stat icon to read what it means. Unnamed and test items are the game's own copies with no name, " +
                         "which players never see."),
-                    filters, GearStatFilters(), _gearCount, GearGuide()), Dock.Top),
+                    filters, _gearCount, GearGuide()), Dock.Top),
                 WithMargin(_gearList, new Thickness(0, 14, 0, 0)),
             },
         };
@@ -381,6 +381,10 @@ internal sealed partial class ManagerWindow {
     // ---------------------------------------------------------------------
 
     private void ShowGear(GearItem? item) {
+        if (_gearDrawer is not null) {
+            _gearDrawer.IsVisible = item is not null;
+        }
+
         _gearPicked = item;
         _gearCards.Children.Clear();
         _gearDetails.Children.Clear();
