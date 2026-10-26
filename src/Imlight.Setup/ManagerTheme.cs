@@ -154,10 +154,15 @@ internal static class ManagerTheme {
     internal static IBrush Brush(Color color, byte alpha = 255) => new SolidColorBrush(Color.FromArgb(alpha, color.R, color.G, color.B));
 
     internal static readonly IBrush BACKGROUND_BRUSH = Brush(BACKGROUND);
-    internal static readonly IBrush SIDEBAR_BRUSH = Brush(SIDEBAR);
-    internal static readonly IBrush SURFACE_BRUSH = Brush(SURFACE);
-    internal static readonly IBrush SURFACE_HIGH_BRUSH = Brush(SURFACE_HIGH);
-    internal static readonly IBrush LINE_BRUSH = Brush(LINE);
+
+    // Glass and glow (Niduus, 2026-10-26: "Push glass and glow"): the panels are see-through white over the window's
+    // slowly drifting colours (ManagerWindow.Glass.cs), so the colours glow through them. Pop-ups keep solid colours.
+    internal static IBrush Glass(byte alpha) => Brush(Colors.White, alpha);
+
+    internal static readonly IBrush SIDEBAR_BRUSH = Glass(9);
+    internal static readonly IBrush SURFACE_BRUSH = Glass(13);
+    internal static readonly IBrush SURFACE_HIGH_BRUSH = Glass(19);
+    internal static readonly IBrush LINE_BRUSH = Glass(30);
     internal static readonly IBrush TEXT_BRUSH = Brush(TEXT);
     internal static readonly IBrush MUTED_BRUSH = Brush(MUTED);
 
@@ -435,6 +440,17 @@ internal static class ManagerTheme {
         },
     };
 
+    /// <summary>A soft light around a control, in a colour.</summary>
+    internal static IEffect Glow(Color color, double blur, double opacity) => new DropShadowEffect {
+        Color = color, BlurRadius = blur, OffsetX = 0, OffsetY = 2, Opacity = opacity,
+    };
+
+    /// <summary>A see-through glass panel with a faint bright edge.</summary>
+    internal static Border GlassPanel(Control child, double radius = RADIUS) => new() {
+        Background = Glass(12), BorderBrush = Glass(34), BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(radius), Child = child,
+    };
+
     /// <summary>A page of the side bar: its icon tile, its name, and a short line of what is inside.</summary>
     internal static Control NavHeader(string icon, IBrush accent, string title, string line) => new StackPanel {
         Orientation = Orientation.Horizontal, Spacing = 12,
@@ -537,11 +553,11 @@ internal static class ManagerTheme {
 
         // Buttons: secondary ones are a raised grey, primary ones the accent.
         yield return ("ButtonPadding", new Thickness(14, 7));
-        yield return ("ButtonBackground", Brush(SURFACE_HIGH));
-        yield return ("ButtonBackgroundPointerOver", Brush(SURFACE_HOVER));
-        yield return ("ButtonBackgroundPressed", Brush(SURFACE));
-        yield return ("ButtonBackgroundDisabled", Brush(SURFACE_HIGH, 120));
-        yield return ("ButtonBorderBrush", Brush(LINE_STRONG));
+        yield return ("ButtonBackground", Glass(20));
+        yield return ("ButtonBackgroundPointerOver", Glass(34));
+        yield return ("ButtonBackgroundPressed", Glass(12));
+        yield return ("ButtonBackgroundDisabled", Glass(8));
+        yield return ("ButtonBorderBrush", Glass(40));
         yield return ("ButtonBorderBrushPointerOver", Brush(Mix(LINE_STRONG, Colors.White, 0.15)));
         yield return ("ButtonBorderBrushPressed", Brush(LINE_STRONG));
         yield return ("ButtonBorderBrushDisabled", Brush(LINE));
@@ -613,11 +629,11 @@ internal static class ManagerTheme {
 
         // The side bar's tabs.
         yield return ("TabItemHeaderBackgroundUnselected", Brushes.Transparent);
-        yield return ("TabItemHeaderBackgroundUnselectedPointerOver", Brush(SURFACE));
-        yield return ("TabItemHeaderBackgroundUnselectedPressed", Brush(SURFACE));
-        yield return ("TabItemHeaderBackgroundSelected", Brush(SURFACE_HIGH));
-        yield return ("TabItemHeaderBackgroundSelectedPointerOver", Brush(SURFACE_HOVER));
-        yield return ("TabItemHeaderBackgroundSelectedPressed", Brush(SURFACE_HIGH));
+        yield return ("TabItemHeaderBackgroundUnselectedPointerOver", Glass(14));
+        yield return ("TabItemHeaderBackgroundUnselectedPressed", Glass(14));
+        yield return ("TabItemHeaderBackgroundSelected", Glass(26));
+        yield return ("TabItemHeaderBackgroundSelectedPointerOver", Glass(32));
+        yield return ("TabItemHeaderBackgroundSelectedPressed", Glass(26));
         yield return ("TabItemHeaderForegroundUnselected", Brush(TEXT_SOFT));
         yield return ("TabItemHeaderForegroundUnselectedPointerOver", Brush(TEXT));
         yield return ("TabItemHeaderForegroundUnselectedPressed", Brush(TEXT));
@@ -643,6 +659,14 @@ internal static class ManagerTheme {
     private static IEnumerable<IStyle> Styles() {
         yield return new Style(x => x.OfType<Button>()) {
             Setters = { new Setter(TemplatedControl.FontWeightProperty, FontWeight.Medium) },
+        };
+
+        // Primary buttons glow in the accent, brighter when pointed at.
+        yield return new Style(x => x.OfType<Button>().Class("accent")) {
+            Setters = { new Setter(Visual.EffectProperty, Glow(ACCENT, 16, 0.55)) },
+        };
+        yield return new Style(x => x.OfType<Button>().Class("accent").Class(":pointerover")) {
+            Setters = { new Setter(Visual.EffectProperty, Glow(ACCENT_LIGHT, 24, 0.8)) },
         };
 
         // Danger: a red-tinted button for what cannot be undone.

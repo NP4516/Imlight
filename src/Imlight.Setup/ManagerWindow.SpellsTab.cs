@@ -227,7 +227,7 @@ internal sealed partial class ManagerWindow {
                     .FirstOrDefault(f => f is not null && File.Exists(Path.Combine(f, "Root.wad")));
                 if (folder is null) {
                     throw new PanelException("Wizard101's game files could not be found, so the spell cards can't be shown. " +
-                        "Click \"Update Ahziael\" on the Tools tab once so the app can find Wizard101, or read them on the Game Files tab.");
+                        "Click \"Update Ahziael\" at the top of the app once so the app can find Wizard101, or read them on the Game Files tab.");
                 }
 
                 var book = await Task.Run(() => SpellBook.Load(folder));

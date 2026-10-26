@@ -383,7 +383,7 @@ internal sealed partial class ManagerWindow {
     private void RenderQuestTree() {
         if (_qtWorlds.Count == 0) {
             _qtList.ItemsSource = null;
-            _qtCount.Text = "The quest tree isn't built into this copy of Ahziael. Update Ahziael on the Tools tab.";
+            _qtCount.Text = "The quest tree isn't built into this copy of Ahziael. Update Ahziael at the top of the window.";
 
             return;
         }
