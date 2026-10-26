@@ -393,7 +393,7 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
 
         wizard.IncrementQuestGoal(qInstance.QuestName, gTemplate.m_goalName);
 
-        var goalMax = gTemplate.m_tallyCounter?.m_count ?? 1;
+        var goalMax = GetGoalTotal(gTemplate, 1);
         if (gInstance.CurrentProgress >= goalMax) {
             CompleteGoal(qInstance, gTemplate, showCompletionDialogue: !message.SuppressCompletionDialog);
 
@@ -650,7 +650,7 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
                 state = "done";
             }
             else {
-                var total = gTemplate.m_tallyCounter?.m_count ?? 0;
+                var total = GetGoalTotal(gTemplate, 0);
                 state = total > 0 ? $"active {gInstance.CurrentProgress}/{total}" : "active";
             }
 
@@ -1298,9 +1298,9 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
             GoalStatus = 0,                      // *** ACTIVE on retail captures ***
             GoalCount = gInstance.CurrentProgress,
             UseTally = (byte) (gTemplate.m_tallyCounter is not null ? 1 : 0),
-            GoalTotal = gTemplate.m_tallyCounter?.m_count ?? 0,
+            GoalTotal = GetGoalTotal(gTemplate, 0),
             TallyText = gTemplate.m_tallyCounter?.m_descriptor ?? "",
-            SubscriberGoalTotal = gTemplate.m_tallyCounter?.m_count ?? 0,
+            SubscriberGoalTotal = GetGoalTotal(gTemplate, 0),
             SendType = sendType,                 // 0=resume/start-of-zone, 1=start, 2=progress
             GoalMadlibs = madLibData,
             ClientTags = clientTagData,
@@ -1331,6 +1331,18 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
         SendToSocket(qRemoveMsg);
     }
 
+    /// <summary>
+    /// The number of items/kills/uses a goal needs. A scavenge-style goal keeps it in m_itemTotal and leaves
+    /// the tally counter at 0, so it takes priority over the tally counter's count.
+    /// </summary>
+    private static int GetGoalTotal(GoalTemplate gTemplate, int fallback) {
+        if (gTemplate is ScavengeGoalTemplate scavengeGoal && scavengeGoal.m_itemTotal > 0) {
+            return (int) scavengeGoal.m_itemTotal;
+        }
+
+        return gTemplate.m_tallyCounter?.m_count ?? fallback;
+    }
+
     private void ProcessCombatGoal(Wizard wizard,
                                    QuestInstance qInstance,
                                    BountyGoalTemplate goalTemplate,
@@ -1359,7 +1371,7 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
             }
         }
 
-       if (shouldIncrement) {
+        if (shouldIncrement) {
             wizard.IncrementQuestGoal(qInstance.QuestName, goalTemplate.m_goalName);
 
             var goalMax = goalTemplate.m_tallyCounter?.m_count ?? 0;

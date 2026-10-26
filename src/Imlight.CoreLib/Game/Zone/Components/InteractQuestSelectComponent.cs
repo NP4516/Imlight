@@ -137,7 +137,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
         foreach (var (quest, goal, goalProgress) in activeGoals) {
             // Two goals that share a completion dialog show it once.
             var suppressDialog = false;
-            var willComplete = goalProgress.CurrentProgress + 1 >= (goal.m_tallyCounter?.m_count ?? 1);
+            var willComplete = goalProgress.CurrentProgress + 1 >= GetGoalTotal(goal, 1);
             var dialogKey = CompletionDialogKey(goal);
             if (willComplete && dialogKey is not null) {
                 suppressDialog = !shownDialogs.Add(dialogKey);
@@ -156,7 +156,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
         // run when it is used for the goal.
         Entity.GetComponentOfType<InteractObjectStateComponent>()?.ApplyGoalOptions(playerActor, playerObject);
 
-        var goalMax = activeGoals.Max(g => g.Goal.m_tallyCounter?.m_count ?? 1);
+        var goalMax = activeGoals.Max(g => GetGoalTotal(g.Goal, 1));
 
         // Collection goals (tally count > 1, e.g. the Triton cogs) consume the object:
         // each use removes that instance from the world. Single-use objects (levers,
@@ -236,6 +236,13 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
             return true;
         }
 
+        // The client tag "Fairy_Cage" names the Bone Cages of "Freedom!"; the cage objects themselves are
+        // called WC-FairyCage, WC-FairyCage02 ... Matching here keeps the client tags (and the quest arrow) untouched.
+        string objectName = gameObjectTemplate.m_objectName;
+        if (clientTags is not null && clientTags.Contains("Fairy_Cage") && objectName is not null && objectName.StartsWith("WC-FairyCage")) {
+            return true;
+        }
+
         if (InteractOptions(gameObjectTemplate).Any(option => RequiresGoal(option, questName, goal.m_goalName))) {
             return true;
         }
@@ -243,6 +250,14 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
         return goal is ScavengeGoalTemplate scavengeGoal
             && gameObjectTemplate.m_adjectiveList is not null
             && scavengeGoal.m_itemAdjectives?.Any(gameObjectTemplate.m_adjectiveList.Contains) == true;
+    }
+
+    private static int GetGoalTotal(GoalTemplate goal, int fallback) {
+        if (goal is ScavengeGoalTemplate scavengeGoal && scavengeGoal.m_itemTotal > 0) {
+            return (int) scavengeGoal.m_itemTotal;
+        }
+
+        return goal.m_tallyCounter?.m_count ?? fallback;
     }
 
     /// <summary>
