@@ -601,7 +601,12 @@ internal sealed partial class ManagerWindow {
         }
 
         if (block.Spec == "D.AddCharm") {
-            refreshNote = () => view.Note(AddCharmWarning(block));
+            refreshNote = () => {
+                view.Note(AddCharmWarning(block));
+                if (_auraPickers.TryGetValue(block, out var aura)) {
+                    aura.IsVisible = block.Text("Kind") == "Aura";
+                }
+            };
             refreshNote();
         }
 
@@ -622,6 +627,13 @@ internal sealed partial class ManagerWindow {
             }
         }
 
+        // A field its sentence forgets still gets a box at the end (remove effects' "even protected ones" had none,
+        // Niduus 2026-10-26).
+        var shown = new HashSet<string>(parts.Where((_, i) => i % 2 == 1));
+        foreach (var field in spec.Fields.Where(f => !shown.Contains(f.Key))) {
+            view.Field(FieldFor(board, rule, block, field, Changed));
+        }
+
         return view;
     }
 
@@ -633,7 +645,7 @@ internal sealed partial class ManagerWindow {
     /// </summary>
     private string? AddCharmWarning(CheatBlock block) {
         var kind = block.Text("Kind");
-        if (kind is "DoT" or "HoT") {
+        if (kind is "DoT" or "HoT" or "Aura") {
             return null;
         }
 
@@ -645,7 +657,7 @@ internal sealed partial class ManagerWindow {
         var target = block.Text("Target");
         var onCaster = global || target.Equals("Self", StringComparison.OrdinalIgnoreCase)
                        || target.Length == 0 && kind is not ("Weakness" or "Trap");
-        static string SchoolWord(string s) => string.IsNullOrWhiteSpace(s) || s.Equals("All", StringComparison.OrdinalIgnoreCase) ? "all-school" : s;
+        static string SchoolWord(string s) => string.IsNullOrWhiteSpace(s) || s.Equals("All", StringComparison.OrdinalIgnoreCase) ? "universal" : s;
         static string A(string w) => "aeiou".Contains(char.ToLowerInvariant(w[0])) ? $"an {w}" : $"a {w}";
         string shown;
         string shownSchool;
@@ -728,6 +740,8 @@ internal sealed partial class ManagerWindow {
                 });
             case CheatFieldType.Enchants:
                 return EnchantsField(block, changed);
+            case CheatFieldType.AuraStats:
+                return AuraStatsField(block, changed);
             // One list of targets for boss and player cheats alike (the .c1 circles are in it).
             case CheatFieldType.Target or CheatFieldType.PlayerTarget:
                 return BlockFields.Choice(CheatSpecs.TARGETS, block.Text(field.Key), v => Set(field.Key, v));
@@ -927,12 +941,24 @@ internal sealed partial class ManagerWindow {
     // Rounds: every round, round N, every N rounds, or round N then every M rounds.
     private static Control RoundsField(CheatBlock block, Action changed) {
         var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-        var round = BlockFields.Number(Math.Max(1, block.Number("Round")), n => { block.Set("Round", n); changed(); }, 1, 999, 48);
-        var every = BlockFields.Number(Math.Max(2, block.Number("Every")), n => { block.Set("Every", n); changed(); }, 1, 999, 48);
-        var then = new TextBlock { Text = "then every", Foreground = BlockColors.TEXT, VerticalAlignment = VerticalAlignment.Center };
-        var rounds = new TextBlock { Text = "rounds", Foreground = BlockColors.TEXT, VerticalAlignment = VerticalAlignment.Center };
         var mode = block.Number("Round") > 0 && block.Number("Every") > 0 ? "both" : block.Number("Round") > 0 ? "round"
             : block.Number("Every") > 1 ? "every" : "each";
+        // A box writes only while its pick shows it (Niduus, 2026-10-26: "At the start of" kept changing): a hidden one
+        // must not bring its number back into the rule. Every shows the rule's own number (1 stays 1).
+        var round = BlockFields.Number(Math.Max(1, block.Number("Round")), n => {
+            if (mode is "round" or "both") {
+                block.Set("Round", n);
+                changed();
+            }
+        }, 1, 999, 48);
+        var every = BlockFields.Number(block.Number("Every") > 0 ? block.Number("Every") : 2, n => {
+            if (mode is "every" or "both") {
+                block.Set("Every", n);
+                changed();
+            }
+        }, 1, 999, 48);
+        var then = new TextBlock { Text = "then every", Foreground = BlockColors.TEXT, VerticalAlignment = VerticalAlignment.Center };
+        var rounds = new TextBlock { Text = "rounds", Foreground = BlockColors.TEXT, VerticalAlignment = VerticalAlignment.Center };
         void Show(string m) {
             round.IsVisible = m is "round" or "both";
             every.IsVisible = m is "every" or "both";
@@ -940,14 +966,13 @@ internal sealed partial class ManagerWindow {
             rounds.IsVisible = m is "every" or "both";
         }
 
-        var choice = BlockFields.Choice([("each", "every round"), ("round", "round"), ("every", "every"), ("both", "round")], mode, m => {
+        var choice = BlockFields.Choice([("each", "every round"), ("round", "round …"), ("every", "every … rounds"), ("both", "round … then every …")], mode, m => {
+            mode = m;
             block.Set("Round", m is "round" or "both" ? Math.Max(1, int.TryParse(round.Text, out var r) ? r : 1) : 0);
-            block.Set("Every", m is "every" or "both" ? Math.Max(1, int.TryParse(every.Text, out var e) ? e : 2) : 0);
+            block.Set("Every", m is "every" or "both" ? Math.Max(m == "every" ? 2 : 1, int.TryParse(every.Text, out var e) ? e : 2) : 0);
             Show(m);
             changed();
         });
-        // Two choices read "round": the second one is "round N, then every M".
-        choice.ItemsSource = new[] { "every round", "round …", "every … rounds", "round … then every …" };
         Show(mode);
         panel.Children.Add(choice);
         panel.Children.Add(round);
@@ -1036,6 +1061,7 @@ internal sealed partial class ManagerWindow {
                             },
                         },
                     };
+                    SpellCardTip(row, spell.Id, spell.School);
                     row.Click += (_, _) => {
                         block.Set("Spell", spell.Name);
                         block.Set("SpellID", spell.Id);
@@ -1123,6 +1149,144 @@ internal sealed partial class ManagerWindow {
         _enchantPickers.AddOrUpdate(block, button);
 
         return button;
+    }
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<CheatBlock, Control> _auraPickers = [];
+
+    // The stats an aura can have: the server's word for each (CombatResolver.AuraStats) and what it does, in plain words.
+    private static readonly (string Value, string Label)[] s_auraStatChoices = [
+        ("damage", "more damage"), ("resist", "more resist"), ("accuracy", "more accuracy"), ("pierce", "more pierce"),
+        ("critical", "more critical"), ("block", "more critical block"), ("heal", "more healing given"),
+        ("healing in", "more healing taken"), ("stun resist", "more stun resist"), ("power pip", "more power pip chance"),
+    ];
+
+    private static readonly System.Text.RegularExpressions.Regex s_auraStat = new(@"^(?<w>[a-zA-Z ]+?)\s*(?<n>[+-]?\d+)\s*%?$");
+
+    /// <summary>"resist 20, fire pierce 15": each stat, its school ("" = the block's) and its number.</summary>
+    internal static List<(string Stat, string School, int Amount)> ReadAuraStats(string text) {
+        var stats = new List<(string, string, int)>();
+        foreach (var part in (text ?? "").Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
+            var m = s_auraStat.Match(part);
+            if (!m.Success || !int.TryParse(m.Groups["n"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)) {
+                continue;
+            }
+
+            var word = m.Groups["w"].Value.Trim().ToLowerInvariant();
+            var school = "";
+            var first = word.Split(' ', 2);
+            if (first.Length == 2 && (first[0] is "all" or "chromatic" || CheatSpecs.SCHOOLS.Any(x => x.Value.Equals(first[0], StringComparison.OrdinalIgnoreCase)))) {
+                school = first[0] switch {
+                    "all" => "All",
+                    "chromatic" => "Chromatic",
+                    _ => CheatSpecs.SCHOOLS.First(x => x.Value.Equals(first[0], StringComparison.OrdinalIgnoreCase)).Value,
+                };
+                word = first[1].Trim();
+            }
+
+            stats.Add((word, school, n));
+        }
+
+        return stats;
+    }
+
+    internal static string WriteAuraStats(IEnumerable<(string Stat, string School, int Amount)> stats)
+        => string.Join(", ", stats.Select(s => $"{(s.School.Length > 0 ? s.School.ToLowerInvariant() + " " : "")}{s.Stat} {s.Amount.ToString(CultureInfo.InvariantCulture)}"));
+
+    // A stat's school: the block's own, all schools, or one.
+    private static readonly (string Value, string Label)[] s_auraStatSchools = [("", "block's school"), ("All", "all schools"), .. CheatSpecs.SCHOOLS[1..],
+        ("Chromatic", "Chromatic: the school of whoever has the aura")];
+
+    /// <summary>
+    /// An aura's stats (Niduus, 2026-10-26: "walk the player into what stats they want"): a pop-up of steps, one row a
+    /// stat (what it boosts and by how much, a minus number lowers it), and a button for another. Kept as the words the
+    /// server reads ("resist 20, accuracy 15"), so older cheats keep working.
+    /// </summary>
+    private Control AuraStatsField(CheatBlock block, Action changed) {
+        Button? button = null;
+        string Shown() {
+            var stats = ReadAuraStats(block.Text("AuraStats"));
+            if (stats.Count == 0) {
+                return "aura stats: pick them";
+            }
+
+            string Label(string stat) => s_auraStatChoices.FirstOrDefault(c => c.Value == stat).Label?.Replace("more ", "") ?? stat;
+
+            return "aura stats: " + string.Join(", ", stats.Select(s => $"{(s.Amount < 0 ? "" : "+")}{s.Amount}% {(s.School.Length > 0 ? s.School + " " : "")}{Label(s.Stat)}"));
+        }
+
+        void Save(List<(string Stat, string School, int Amount)> stats) {
+            block.Set("AuraStats", WriteAuraStats(stats));
+            BlockFields.SetPicker(button!, new TextBlock { Text = "🌀", VerticalAlignment = VerticalAlignment.Center }, Shown());
+            changed();
+        }
+
+        button = BlockFields.Picker(new TextBlock { Text = "🌀", VerticalAlignment = VerticalAlignment.Center }, Shown(),
+            _ => AuraStatsEditor(ReadAuraStats(block.Text("AuraStats")), Save), "Click to pick the aura's stats, one by one");
+        button.IsVisible = block.Spec == "D.Aura" || block.Text("Kind") == "Aura";
+        _auraPickers.AddOrUpdate(block, button);
+
+        return button;
+    }
+
+    // The steps of the aura stats pop-up: a row a stat (pick it, how much, ✕), and a button for one more.
+    private static Control AuraStatsEditor(List<(string Stat, string School, int Amount)> stats, Action<List<(string Stat, string School, int Amount)>> save) {
+        var rows = new StackPanel { Spacing = 6 };
+        void Render() {
+            rows.Children.Clear();
+            if (stats.Count == 0) {
+                rows.Children.Add(Sub("No stats yet. Click \"Add a stat\" below."));
+            }
+
+            for (var i = 0; i < stats.Count; i++) {
+                var at = i;
+                var school = BlockFields.Choice(s_auraStatSchools, stats[at].School, v => {
+                    stats[at] = (stats[at].Stat, v, stats[at].Amount);
+                    save(stats);
+                }, 140);
+                var stat = BlockFields.Choice(s_auraStatChoices, stats[at].Stat, v => {
+                    stats[at] = (v, stats[at].School, stats[at].Amount);
+                    save(stats);
+                }, 200);
+                var amount = BlockFields.Number(stats[at].Amount, n => {
+                    stats[at] = (stats[at].Stat, stats[at].School, n);
+                    save(stats);
+                }, -1000, 1000, 64);
+                var remove = new Button { Content = "✕", Padding = new Thickness(8, 2), MinHeight = 26 };
+                ToolTip.SetTip(remove, "Take this stat off the aura");
+                remove.Click += (_, _) => {
+                    stats.RemoveAt(at);
+                    save(stats);
+                    Render();
+                };
+                rows.Children.Add(new StackPanel {
+                    Orientation = Orientation.Horizontal, Spacing = 6,
+                    Children = {
+                        new TextBlock { Text = $"{at + 1}.", Width = 20, VerticalAlignment = VerticalAlignment.Center },
+                        school, stat, new TextBlock { Text = "by", VerticalAlignment = VerticalAlignment.Center }, amount,
+                        new TextBlock { Text = "%", VerticalAlignment = VerticalAlignment.Center }, remove,
+                    },
+                });
+            }
+        }
+
+        var add = new Button { Content = "+ Add a stat", Padding = new Thickness(12, 4) };
+        add.Click += (_, _) => {
+            var next = s_auraStatChoices.Select(c => c.Value).FirstOrDefault(v => stats.All(s => s.Stat != v)) ?? "damage";
+            stats.Add((next, "", 10));
+            save(stats);
+            Render();
+        };
+        Render();
+
+        return new StackPanel {
+            Spacing = 8, Width = 560,
+            Children = {
+                Sub("Step 1: click \"Add a stat\" for each stat the aura gives."),
+                Sub("Step 2: in each row, pick the school (such as Shadow for Shadow damage, Fire for Fire pierce), the stat, and type how much. A minus number lowers it instead (such as -20 resist)."),
+                Sub("The number at the start of the block is extra damage on top. Set it to 0 for none."),
+                rows, add,
+            },
+        };
     }
 
     // A creature of the game, or one of the customs.

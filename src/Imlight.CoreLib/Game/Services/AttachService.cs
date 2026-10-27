@@ -252,6 +252,8 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
         // Tiny anti-cheat measure. When the character object is created, we recalculate the game stats.
         CharacterHelper.RecalculateGameStats(_wizard);
+        // That dropped every effect the gear doesn't give, the pet's look (Play as Pet) among them.
+        Commands.Protocols.CommandPetFormProtocol.RestoreAfterZoneChange(_wizard);
 
         // Get the best game server for this user.
         var gameServer = GetGameServer();
@@ -400,6 +402,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
     private void TellMemberBenefits() {
         var lines = Tools.MemberBenefits.GreetingFor(_wizard.AccountId);
         lines.AddRange(Events.GameEvents.GreetingFor(_wizard.AccountId));
+        lines.AddRange(Imlight.CoreLib.Auth.AutoAccounts.GreetingFor(_wizard.AccountId));
         if (lines.Count == 0) {
             return;
         }
@@ -602,6 +605,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             CurrentZone = zoneName,
             CurrentRealm = realmName,
             ActorPath = playerActor.Path.ToString(),
+            WizardName = wizard.PlayerNameBehavior?.GetWizardName(),
         };
 
         OnlinePlayerCollection.AddOnlinePlayer(onlinePlayerRef);

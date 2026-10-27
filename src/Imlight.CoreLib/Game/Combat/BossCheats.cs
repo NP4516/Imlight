@@ -507,6 +507,9 @@ internal static class BossCheats {
         public string Side { get; set; } = "";
         public int CostMin { get; set; }
         public int CostMax { get; set; }
+        // School: "" = of School, "Rival" = of School's rival (Ice -> Fire), "RivalOfIt" = of the rival of the cheat's
+        // own one's school (Niduus, 2026-10-26).
+        public string Match { get; set; } = "";
     }
 
     /// <summary>One spell of a cheat's Casts.</summary>
@@ -560,6 +563,8 @@ internal static class BossCheats {
         public string Who { get; set; } = "";
         // For AddCharm: the cast animation of the spell cast for it ("" normal, Sun, Shadow, Moon, Star, or a school).
         public string Look { get; set; } = "";
+        // AddCharm Aura: its stats, "damage 50, resist 20, accuracy 10" (Niduus, 2026-10-26).
+        public string AuraStats { get; set; } = "";
         // For FirstTurn: Us (the cheat's own side acts first) or Them (the other side).
         public string Side { get; set; } = "";
         // The enchantments picked for an enchanted FreeCast, put on in this order (none: the best one that fits).
@@ -600,6 +605,19 @@ internal static class BossCheats {
     // casts go to the game as interrupts (CombatAction.m_interrupt), out of the turn order, as the game's own boss cheats;
     // sent as plain casts, the game took each for the caster's turn and played its over-time ticks again.
     internal static bool CastsAsInterrupt => ConfigurationManager.GetValue("BossCheats.CastsAsInterrupt", true);
+
+    // [BossCheats] GlobalsInTurn: a cheat's global (bubble) cast goes in the turn order, not as an interrupt; as one the
+    // game never put the bubble up (Niduus, 2026-10-26).
+    internal static bool GlobalsInTurn => ConfigurationManager.GetValue("BossCheats.GlobalsInTurn", true);
+
+    // [BossCheats] ShowOwnValue (Niduus, 2026-10-26: "get the game to render custom values like a 666 blade"): AddCharm's
+    // lookalike cast carries its own size in Spell.m_paramOverrides, so the game can show that number.
+    internal static bool ShowOwnValue => ConfigurationManager.GetValue("BossCheats.ShowOwnValue", true);
+
+    // [BossCheats] ShowOwnValueGlobals: the same for a global (bubble), on its own switch. Sent as an interrupt the game
+    // never drew a cheat's bubble, with or without its own size; in the turn order (GlobalsInTurn) it does, so the own
+    // size is on again (Niduus, 2026-10-27: "globals should display like this"). Off: the real bubble closest to the size.
+    internal static bool ShowOwnValueGlobals => ConfigurationManager.GetValue("BossCheats.ShowOwnValueGlobals", true);
 
     private static readonly JsonSerializerOptions s_options = new() {
         PropertyNameCaseInsensitive = true,

@@ -399,6 +399,18 @@ public static class AccountCollection {
         return UpdateAccount(username, account => {
             var passwordHash = DatabaseUtilities.CreateHashedPassword(newPassword);
             account.PasswordHash = passwordHash;
+            account.PasswordNotSet = false;
+        });
+    }
+
+    /// <summary>
+    /// Sets an account's own password (.setpassword). An account Create Account on Login made is checked like any other
+    /// from then on.
+    /// </summary>
+    public static bool ChangePassword(ulong accountId, string newPassword) {
+        return UpdateAccount(accountId, account => {
+            account.PasswordHash = DatabaseUtilities.CreateHashedPassword(newPassword);
+            account.PasswordNotSet = false;
         });
     }
 

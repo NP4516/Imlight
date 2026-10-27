@@ -256,12 +256,46 @@ internal static class QuestMadlibs {
         return s_personaTemplates.GetOrAdd(personaName, name => {
             const string suffix = "_Persona";
             var objectName = name.EndsWith(suffix, StringComparison.Ordinal) ? name[..^suffix.Length] : name;
-            var file = "/" + objectName + ".xml";
 
-            return CoreObjectFactory.TryGetCoreTemplateID(
-                location => location is not null && ((string) location.m_filename)?.EndsWith(file, StringComparison.OrdinalIgnoreCase) == true,
-                out var id) ? id : 0;
+            return TemplatesByFileName().GetValueOrDefault(objectName);
         });
+    }
+
+    private static readonly object s_fileNamesLock = new();
+    private static System.Collections.Generic.Dictionary<string, uint> s_templatesByFileName;
+
+    // Every template by its file's name without the folder and ".xml", the first one in the manifest when two share a
+    // name. Built once: a scan of all 137,000 templates for each persona held Ravenwood's NPCs ~4 s after a start.
+    private static System.Collections.Generic.Dictionary<string, uint> TemplatesByFileName() {
+        if (Volatile.Read(ref s_templatesByFileName) is { } known) {
+            return known;
+        }
+
+        lock (s_fileNamesLock) {
+            if (s_templatesByFileName is { } built) {
+                return built;
+            }
+
+            var byName = new System.Collections.Generic.Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+            var templates = CoreObjectFactory.TemplateManifest?.m_serializedTemplates;
+            if (templates is null) {
+                return byName;
+            }
+
+            foreach (var location in templates) {
+                var path = (string) location?.m_filename;
+                if (path is null || !path.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) {
+                    continue;
+                }
+
+                var name = path[(path.LastIndexOf('/') + 1)..^4];
+                byName.TryAdd(name, location.m_id);
+            }
+
+            Volatile.Write(ref s_templatesByFileName, byName);
+
+            return byName;
+        }
     }
 
     private static readonly object s_speakerLock = new();
@@ -290,6 +324,12 @@ internal static class QuestMadlibs {
             var madlibs = new System.Collections.Generic.List<ActorMadlib>();
 
             foreach (var entry in dialog.m_dialogEntries.OfType<NPCDialogEntry>().Where(e => e.m_nameSTKey.IsEmpty)) {
+                // A line the game names itself (m_nameOverride, a key of its name tables: "Old Judd", "Gamma") keeps that
+                // name; giving it a persona's name over it named Old Judd for whoever else shows his picture.
+                if (HasGameName(entry.m_nameOverride)) {
+                    continue;
+                }
+
                 // The persona says who speaks; the actor template ID can be another NPC's ("pesky Skeletal Pirates" is
                 // Olivia Dawnwillow's persona with Ceren Nightchant's template; Niduus, 2026-10-25).
                 ulong templateId = SpeakerTemplateOf(entry.m_personaName, entry.m_actorTemplateID);
@@ -349,6 +389,9 @@ internal static class QuestMadlibs {
             }
         }
     }
+
+    private static bool HasGameName(string nameKey)
+        => !string.IsNullOrEmpty(nameKey) && !string.IsNullOrEmpty(Locale.GetEnglishName(nameKey));
 
     private static Dictionary<string, string> s_picturePersonas;
 

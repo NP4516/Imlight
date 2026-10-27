@@ -105,9 +105,13 @@ internal static class PetMayCasts {
     /// <param name="mayCast">The May Cast.</param>
     /// <param name="inDeckathalon">Whether the battle is a Deckathalon floor: the [PetCasting] Deckathalon chances,
     /// when set, are used there instead of every other chance (Niduus, 2026-10-25: "add to maycast section in the
-    /// manager for Deckathalon's OWN % chance to casts").</param>
+    /// manager for Deckathalon's OWN % chance to casts"). Each May Cast can also have its own Deckathalon chances,
+    /// [PetCastingDeckathalon] &lt;card&gt;, which come before those (Niduus, 2026-10-27: "I want separat values of each
+    /// Maycast for Deckathalon").</param>
     internal static (int Cast, int Damage, int Heal, int Pass) Chances(MayCast mayCast, bool inDeckathalon = false) {
-        var text = (inDeckathalon && !string.IsNullOrWhiteSpace(s_deckathalon) ? s_deckathalon
+        var own = inDeckathalon ? ConfigurationManager.GetSetting($"PetCastingDeckathalon.{mayCast.Key}") : null;
+        var text = (!string.IsNullOrWhiteSpace(own) ? own
+            : inDeckathalon && !string.IsNullOrWhiteSpace(s_deckathalon) ? s_deckathalon
             : ConfigurationManager.GetSetting($"PetCasting.{mayCast.Key}"))?.Trim();
         if (string.IsNullOrEmpty(text)) {
             return (s_onCast, s_onDamage, s_onHeal, s_onPass);
@@ -126,16 +130,7 @@ internal static class PetMayCasts {
     private static MayCast Resolve(PetTalentTemplate talent) {
         try {
             string talentName = talent.m_talentName;
-            string descriptionKey = talent.m_description;
-            var description = string.IsNullOrEmpty(descriptionKey) ? "" : Locale.GetEnglishName(descriptionKey);
-            var match = s_bracket.Match(description ?? "");
-            string displayKey = talent.m_displayName;
-            var shownName = (string.IsNullOrEmpty(displayKey) ? "" : Locale.GetEnglishName(displayKey)).Trim().TrimEnd('.');
-            var cardName = match.Success ? match.Groups[1].Value.Trim() : shownName;
-            if (cardName.Length == 0) {
-                cardName = talentName;
-            }
-
+            var cardName = CardNameOf(talent);
             var spellName = FindCard(cardName, talent);
             var spell = spellName is null ? null : SpellFactory.GetSpell(spellName);
             if (spell is null) {
@@ -153,6 +148,33 @@ internal static class PetMayCasts {
         catch (Exception e) {
             Logger.Error("Pet May Cast {0} could not be read: {1}", Logger.Args((string) talent.m_talentName, e));
 
+            return null;
+        }
+    }
+
+    /// <summary>The card a May Cast talent names: the one in [brackets] in its description, else its shown name.</summary>
+    private static string CardNameOf(PetTalentTemplate talent) {
+        string descriptionKey = talent.m_description;
+        var description = string.IsNullOrEmpty(descriptionKey) ? "" : Locale.GetEnglishName(descriptionKey);
+        var match = s_bracket.Match(description ?? "");
+        string displayKey = talent.m_displayName;
+        var shownName = (string.IsNullOrEmpty(displayKey) ? "" : Locale.GetEnglishName(displayKey)).Trim().TrimEnd('.');
+        var cardName = match.Success ? match.Groups[1].Value.Trim() : shownName;
+
+        return cardName.Length > 0 ? cardName : (string) talent.m_talentName;
+    }
+
+    /// <summary>
+    /// The spell a May Cast talent casts, without writing to the log (the Manager's pet talent list), or null when the
+    /// talent is not a May Cast or its card was not found.
+    /// </summary>
+    internal static string SpellOf(PetTalentTemplate talent) {
+        try {
+            return talent?.m_effectList?.Any(effect => effect is ProvideCombatTriggerInfo) == true
+                ? FindCard(CardNameOf(talent), talent)
+                : null;
+        }
+        catch (Exception) {
             return null;
         }
     }

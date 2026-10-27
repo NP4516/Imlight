@@ -95,6 +95,10 @@ public class Account {
     public ulong LastLoginMachineId { get; set; }
     public string LastLoginIp { get; set; }
     public bool IsLocked { get; set; }
+    // Made by Create Account on Login: no password yet (the game never sends it), so only the computer it was made on
+    // gets in until the player sets one with .setpassword (or the Accounts tab sets one).
+    public bool PasswordNotSet { get; set; }
+    public ulong FirstLoginMachineId { get; set; }
     public int PurchasedCharacterSlots { get; set; }
     public int Crowns { get; set; }
     public AccountSharedBank SharedBank { get; set; } = new();

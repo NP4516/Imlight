@@ -61,11 +61,6 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
     private static readonly TimeSpan s_locationSaveEvery = TimeSpan.FromSeconds(5);
     private DateTime _lastLocationSave;
 
-    // [Trainers] TrainingPointPerLevel: every level gained also gives TrainingPointsPerLevel training points.
-    private static int s_trainingPointsPerLevel => ConfigurationManager.GetValue("Trainers.TrainingPointPerLevel", false)
-            ? Math.Clamp(ConfigurationManager.GetValue("Trainers.TrainingPointsPerLevel", 1), 0, 100)
-            : 0;
-
     private Wizard _activeWizard;
     private CoreObject _activeWizardGameObject;
 
@@ -115,7 +110,7 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
             return;
         }
 
-        GiveLevelTrainingPoints(_activeWizard.MagicSchoolBehavior.Level - beforeLevel);
+        GiveLevelTrainingPoints(beforeLevel, _activeWizard.MagicSchoolBehavior.Level);
 
         var levelUpMessage = new WIZARD_12_PROTOCOL.MSG_LEVELUP {
             GlobalID = _activeWizard.GameObjectID,
@@ -124,53 +119,61 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         };
         ZoneBroadcast(levelUpMessage, false);
 
-        // Leveling up the player will set their new stats and heal them.
-        // We need to do the code below to echo those changes to the client.
-        var magicSchool = _activeWizard.MagicSchoolBehavior.MagicSchool;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, message.NewLevel);
-
-        // Update health — heal to full and sync server state with what the client was told.
-        _activeWizard.UpdateHealth(_activeWizard.GameStats.m_baseHitpoints);
-        var healthMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
-            CharacterID = _activeWizardGameObject.m_globalID,
-            NewHealth = baseStats.m_hitpoints,
-            NewHealthMax = baseStats.m_hitpoints,
-            DisplayDiff = 1,
-        };
-        SendToSocket(healthMessage);
-
-        // Update mana.
-        _activeWizard.UpdateMana(_activeWizard.GameStats.m_baseMana);
-        var manaMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
-            Mana = baseStats.m_mana,
-            MaxMana = baseStats.m_mana,
-            DisplayDiff = 1,
-        };
-        SendToSocket(manaMessage);
-
-        // Update power pips
-        var powerPipsMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEPOWERPIP() { PowerPip = baseStats.m_pipChance };
-        SendToSocket(powerPipsMessage);
-
-        // Update energy.
-        _activeWizard.UpdateEnergy(baseStats.m_petEnergy);
-        var petEnergyMessage = new PET_9_PROTOCOL.MSG_PETENERGYMAX() {
-            MaxEnergy = baseStats.m_petEnergy
-        };
-        SendToSocket(petEnergyMessage);
-
+        SendLevelUpStats(_activeWizard.MagicSchoolBehavior.Level);
         AnnounceLevelChange();
     }
 
     /// <summary>
-    /// Gives the training points [Trainers] TrainingPointPerLevel grants for the levels just gained.
+    /// After a level up: the new maximums, and with [Character] FullRestoreOnLevelUp (on, like the real game) full health,
+    /// mana and energy, gear and pets included. The game adds gear itself, so the maximums sent leave it out
+    /// (GetClientTypeAlternative), as the refill commands do; sending the level table's health as the current health left
+    /// the bars short of full for any wizard wearing gear.
     /// </summary>
-    private void GiveLevelTrainingPoints(int levelsGained) {
-        if (s_trainingPointsPerLevel <= 0 || levelsGained <= 0) {
+    private void SendLevelUpStats(int level) {
+        var stats = _activeWizard.GameStats;
+        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(_activeWizard.MagicSchoolBehavior.MagicSchool, level);
+        var clientStats = stats.GetClientTypeAlternative();
+        var restore = ConfigurationManager.GetValue("Character.FullRestoreOnLevelUp", true);
+
+        if (restore) {
+            _activeWizard.UpdateHealth(stats.m_baseHitpoints);
+            _activeWizard.UpdateMana(stats.m_baseMana);
+            _activeWizard.UpdateEnergy(stats.m_energyMax);
+        }
+
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
+            CharacterID = _activeWizardGameObject.m_globalID,
+            NewHealth = stats.m_currentHitpoints,
+            NewHealthMax = clientStats.m_baseHitpoints,
+            DisplayDiff = 1,
+        });
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
+            Mana = stats.m_currentMana,
+            MaxMana = clientStats.m_baseMana,
+            DisplayDiff = 1,
+        });
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEPOWERPIP() { PowerPip = baseStats.m_pipChance });
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETENERGYMAX() { MaxEnergy = clientStats.m_energyMax });
+        if (_activeWizard.PetOwnerBehavior is { } petOwner) {
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
+                GlobalID = _activeWizardGameObject.m_globalID,
+                Energy = petOwner.Energy,
+                MaxEnergy = clientStats.m_energyMax,
+                TickTime = (int) petOwner.LastEnergyTickEpoch,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Gives the training points the levels just gained bring: the game's own and the [Trainers] rules (LevelTrainingPoints).
+    /// </summary>
+    private void GiveLevelTrainingPoints(int beforeLevel, int afterLevel) {
+        var points = LevelTrainingPoints.ForLevels(_activeWizard.MagicSchoolBehavior.MagicSchool, beforeLevel, afterLevel);
+        if (points <= 0) {
             return;
         }
 
-        var newTrainingPoints = _activeWizard.MagicSchoolBehavior.TrainingPoints + (levelsGained * s_trainingPointsPerLevel);
+        var newTrainingPoints = _activeWizard.MagicSchoolBehavior.TrainingPoints + points;
         _activeWizard.UpdateTrainingPoints(newTrainingPoints);
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATETRAINING() {
             TrainingPoints = newTrainingPoints
@@ -187,7 +190,7 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         var afterLevel = _activeWizard.MagicSchoolBehavior.Level;
 
         if (beforeLevel != afterLevel) {
-            GiveLevelTrainingPoints(afterLevel - beforeLevel);
+            GiveLevelTrainingPoints(beforeLevel, afterLevel);
 
             // The player leveled up. AddExperiencePoints already called SetLevel internally,
             // so we just need to broadcast the level-up and send stat updates to the client.
@@ -198,39 +201,7 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
             };
             ZoneBroadcast(levelUpMessage, false);
 
-            // Send stat updates to client (health, mana, power pips, energy).
-            var magicSchool = _activeWizard.MagicSchoolBehavior.MagicSchool;
-            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, afterLevel);
-
-            // Heal to full and sync server state with what the client was told.
-            _activeWizard.UpdateHealth(_activeWizard.GameStats.m_baseHitpoints);
-            var healthMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
-                CharacterID = _activeWizardGameObject.m_globalID,
-                NewHealth = baseStats.m_hitpoints,
-                NewHealthMax = baseStats.m_hitpoints,
-                DisplayDiff = 1,
-            };
-            SendToSocket(healthMessage);
-
-            _activeWizard.UpdateMana(_activeWizard.GameStats.m_baseMana);
-            var manaMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
-                Mana = baseStats.m_mana,
-                MaxMana = baseStats.m_mana,
-                DisplayDiff = 1,
-            };
-            SendToSocket(manaMessage);
-
-            var powerPipsMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEPOWERPIP() {
-                PowerPip = baseStats.m_pipChance
-            };
-            SendToSocket(powerPipsMessage);
-
-            _activeWizard.UpdateEnergy(baseStats.m_petEnergy);
-            var petEnergyMessage = new PET_9_PROTOCOL.MSG_PETENERGYMAX() {
-                MaxEnergy = baseStats.m_petEnergy
-            };
-            SendToSocket(petEnergyMessage);
-
+            SendLevelUpStats(afterLevel);
             AnnounceLevelChange();
         }
 

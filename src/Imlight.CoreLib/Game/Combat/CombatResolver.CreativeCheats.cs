@@ -69,6 +69,7 @@ using System.Text.RegularExpressions;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Spells;
+using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Resources;
 
 namespace Imlight.CoreLib.Game.Combat;
@@ -210,6 +211,10 @@ public partial class CombatResolver {
             "everyenemy" or "allenemies" => (enemies, 'e'),
             "everyally" or "allallies" => (allies, 'e'),
             "everyone" => (standing, 'e'),
+            // Niduus, 2026-10-27: every wizard (ALL PLAYERS), without whoever's cheat it is, or any one of them.
+            "allplayers" => ([.. standing.Where(c => c.IsHumanPlayer)], 'e'),
+            "allplayersbutself" => ([.. standing.Where(c => c.IsHumanPlayer && c != boss && c != _cheatOwner)], 'e'),
+            "anyplayer" => ([.. standing.Where(c => c.IsHumanPlayer)], 'a'),
             "enemyside" => (enemies, 's'),
             "allyside" => (allies, 's'),
             "bothsides" => (standing, 's'),
@@ -243,6 +248,15 @@ public partial class CombatResolver {
 
         return found is not null;
     }
+
+    // A school's rival (its opposite): Fire and Ice, Storm and Myth, Life and Death. Balance and the astral and shadow
+    // schools have none.
+    private static MagicSchool RivalOf(MagicSchool school) => school switch {
+        MagicSchool.Fire => MagicSchool.Ice, MagicSchool.Ice => MagicSchool.Fire,
+        MagicSchool.Storm => MagicSchool.Myth, MagicSchool.Myth => MagicSchool.Storm,
+        MagicSchool.Life => MagicSchool.Death, MagicSchool.Death => MagicSchool.Life,
+        _ => MagicSchool.None,
+    };
 
     private bool IsTrueOf(CombatDuelSubCircle boss, BossCheats.CheatCondition c, CombatDuelSubCircle trigger, CombatDuelSubCircle receiver,
                           Func<CombatDuelSubCircle, bool> test) {
@@ -405,8 +419,22 @@ public partial class CombatResolver {
                 return Measured(boss, c, trigger, receiver, w => PipsOfKind(w, c.Kind));
             case "level":
                 return Measured(boss, c, trigger, receiver, w => w.ParticipantGameStats.Level, average: true);
-            case "school":
+            case "school": {
+                var match = (c.Match ?? "").Trim();
+                if (match.Equals("RivalOfIt", StringComparison.OrdinalIgnoreCase)) {
+                    var rival = RivalOf(boss.SchoolNow);
+
+                    return rival != MagicSchool.None && IsTrueOf(boss, c, trigger, receiver, w => w.SchoolNow == rival);
+                }
+
+                if (match.Equals("Rival", StringComparison.OrdinalIgnoreCase)) {
+                    var rival = Enum.TryParse<MagicSchool>(c.School.Trim(), true, out var picked) ? RivalOf(picked) : MagicSchool.None;
+
+                    return rival != MagicSchool.None && IsTrueOf(boss, c, trigger, receiver, w => w.SchoolNow == rival);
+                }
+
                 return IsTrueOf(boss, c, trigger, receiver, w => c.School.Trim().Equals(w.SchoolNow.ToString(), StringComparison.OrdinalIgnoreCase));
+            }
             case "name":
                 return IsTrueOf(boss, c, trigger, receiver, w => c.Name.Trim().Length > 0 && FighterName(w).Contains(c.Name.Trim(), StringComparison.OrdinalIgnoreCase));
             case "creature":
@@ -445,6 +473,25 @@ public partial class CombatResolver {
         var duel = _duel.m_duelID.Full;
 
         switch (step.Do.ToLowerInvariant()) {
+            case "lockcircle" or "unlockcircle": {
+                // Niduus, 2026-10-27 ("add a lock zones block so I can like lock the moon slot or gem in battle"): no one
+                // new takes the circle (no wizard or creature joining, no minion summoned) for Rounds rounds (0: the rest
+                // of the battle; from this one when the round is under way). Kind: the circle's symbol (Dagger, Key, Gem,
+                // Spiral on the creature side; Sun, Eye, Star, Moon on the wizards'), OwnSide, OtherSide or All.
+                var locking = step.Is("LockCircle");
+                var circles = CirclesNamed(boss, step.Kind);
+                foreach (var circle in circles) {
+                    circle.LockedUntil = !locking ? 0
+                        : step.Rounds <= 0 ? int.MaxValue : BattleRound + step.Rounds - (_cheatAtRoundStart ? 1 : 0);
+                }
+
+                Logger.Information("Duel {0} | {1}: {2} circle {3} ({4}){5}.", Logger.Args(duel, bossName, locking ? "locked" : "unlocked",
+                    string.Join(", ", circles.Select(c => c.Symbol)), step.Kind,
+                    locking ? step.Rounds <= 0 ? " for the rest of the battle" : $" for {step.Rounds} rounds" : ""));
+
+                return true;
+            }
+
             case "setvar": {
                 if (string.IsNullOrWhiteSpace(step.Var)) {
                     return true;
@@ -715,6 +762,22 @@ public partial class CombatResolver {
             Logger.Information("Duel {0} | Slot {1} | Extra turn: {2} again{3}, last in the round.", Logger.Args(_duel.m_duelID.Full, who.SlotIndex,
                 spell, code is null ? "" : $" on {code}"));
         }
+    }
+
+    // The circles a LockCircle names: a symbol (or several, commas between), its own side's, the other side's, or all.
+    private List<CombatDuelSubCircle> CirclesNamed(CombatDuelSubCircle boss, string names) {
+        var all = _subCircles.Where(c => c is not null).ToList();
+        var found = new List<CombatDuelSubCircle>();
+        foreach (var name in (names ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
+            found.AddRange(name.ToLowerInvariant() switch {
+                "all" => all,
+                "ownside" => all.Where(c => c.SlotType == boss.SlotType),
+                "otherside" => all.Where(c => c.SlotType != boss.SlotType),
+                _ => all.Where(c => c.Symbol.Equals(name, StringComparison.OrdinalIgnoreCase)),
+            });
+        }
+
+        return [.. found.Distinct()];
     }
 
 }

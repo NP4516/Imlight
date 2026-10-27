@@ -35,6 +35,8 @@ internal enum CheatFieldType {
     VersionChoice, MatchCount, PlayerTarget,
     // The enchantments picked for an enchanted free cast (a list of names), shown while its Enchant box is ticked.
     Enchants,
+    // An aura's stats, picked one by one ("resist 20, accuracy 15"), shown while its kind is Aura.
+    AuraStats,
 }
 
 /// <summary>A box of a cheat block: the cheat file's name for it, its type, its first value and, for a Choice, its choices.</summary>
@@ -547,6 +549,27 @@ internal sealed class CheatRule {
             if (spec == "D.Cast") {
                 dispelProof |= values["DispelImmune"] is not JsonValue d || !d.TryGetValue<bool>(out var immune) || immune;
                 values.Remove("DispelImmune");
+            }
+
+            // An aura made with "add an effect of your own size" is now the aura block (Niduus, 2026-10-26: "Make them their
+            // own blocks instead"); its amount was its damage.
+            if (spec == "D.AddCharm" && BossChanges.FindIn(values, "Kind") is JsonValue kind && kind.ToString().Equals("Aura", StringComparison.OrdinalIgnoreCase)) {
+                spec = "D.Aura";
+                var stats = BossChanges.FindIn(values, "AuraStats") is JsonValue st ? st.ToString() : "";
+                var amount = BossChanges.FindIn(values, "Amount") is JsonValue am && am.TryGetValue<int>(out var n) ? n : 0;
+                var school = BossChanges.FindIn(values, "School") is JsonValue sc ? sc.ToString().Trim().ToLowerInvariant() : "";
+                if (amount != 0 && !System.Text.RegularExpressions.Regex.IsMatch(stats, @"(^|,|\s)damage\s", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) {
+                    var damage = $"{(school.Length > 0 ? school + " " : "")}damage {amount}";
+                    stats = stats.Trim().Length > 0 ? $"{damage}, {stats.Trim()}" : damage;
+                }
+
+                foreach (var key in new[] { "Kind", "Amount", "School", "Look", "AuraStats" }) {
+                    if (values.FirstOrDefault(p => p.Key.Equals(key, StringComparison.OrdinalIgnoreCase)).Key is { } k) {
+                        values.Remove(k);
+                    }
+                }
+
+                values["AuraStats"] = stats;
             }
 
             if (spec is null) {

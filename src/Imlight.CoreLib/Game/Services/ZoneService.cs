@@ -764,6 +764,16 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
+        // Only a world the Spiral Door listed for this wizard (WorldAccess).
+        WorldAccess.Remember(GetActiveWizard());
+        var world = message.World.ToString();
+        if (!WorldAccess.OpenWorlds(GetActiveWizard()).Contains(world.Split('/')[0])) {
+            Logger.Warning("{0} asked the Spiral Door for {1}, which their quests have not opened.",
+                Logger.Args(GetActiveWizard().CharId, world));
+
+            return;
+        }
+
         var zoneMap = WorldHubZones.GetHubForZone(message.World);
         if (zoneMap is null) {
             Logger.Error("{0} tried to teleport to an invalid world: {1}",
@@ -1566,6 +1576,11 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         actorRef.Tell(addMsg);
         foreach (var speedMsg in SharedSpeed.CurrentMessages(wizard)) {
             actorRef.Tell(speedMsg);
+        }
+
+        // A wizard playing as their pet looks like it to players who arrive later too.
+        if (Commands.Protocols.CommandPetFormProtocol.LookMessage(wizard) is { } petLook) {
+            actorRef.Tell(petLook);
         }
     }
 

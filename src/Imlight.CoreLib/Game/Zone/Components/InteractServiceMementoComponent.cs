@@ -232,6 +232,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         if (serviceComponent is null) {
             Logger.Warning("No component owns service index {0} for NPC {1} with service name {2}",
                 Logger.Args(serviceIndex, Entity.ActiveGameObject.m_debugName, serviceName));
+            EndTalk(playerActor, $"nothing at option {serviceIndex} ({serviceName})");
 
             return;
         }
@@ -284,9 +285,34 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         }
     }
 
+    /// <summary>Sends a player this NPC's options again without closing what the game shows (a quest dialog).</summary>
+    internal void SendServiceOptions(IActorRef playerActor)
+        => SendActorServiceOptions(playerActor);
+
     internal void ShowServiceOptions(IActorRef playerActor, int reinteract = 0) {
         SendLeaveServiceRange(playerActor);
         SendActorServiceOptions(playerActor, reinteract);
+    }
+
+    /// <summary>
+    /// Lets the game out of a talk that has nothing to show. A click (or the server's own step to the next quest)
+    /// that sends no dialog left the camera on the NPC until the player logged out (Niduus 2026-10-27, Sergeant
+    /// Muldoon after Firecat Alley's last talk). Clears the game's interactions, then gives the NPC's options back
+    /// so it can still be talked to.
+    /// </summary>
+    internal void EndTalk(IActorRef playerActor, string why) {
+        if (playerActor is null) {
+            return;
+        }
+
+        Logger.Warning("Ending an empty talk with NPC {0} for {1}: {2}",
+            Logger.Args(Entity.Info?.m_zoneTag is { Length: > 0 } tag ? tag : Entity.ActiveGameObject.m_debugName.ToString(),
+                playerActor.Path.Name, why));
+        playerActor.Tell(new WIZARD2_53_PROTOCOL.MSG_CLEARALLINTERACTIONS());
+        SendLeaveServiceRange(playerActor);
+        if (_playersInInteractionRange.ContainsValue(playerActor)) {
+            SendActorServiceOptions(playerActor);
+        }
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_WIZBANGUPDATEINTERVAL))]

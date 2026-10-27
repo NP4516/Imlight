@@ -128,15 +128,28 @@ internal sealed partial class ManagerWindow : Window {
         ("NoSpellRequirements", "No spell requirements", new() { OnContent = "On", OffContent = "Off" }),
         ("NoLevelRequirements", "No level requirements", new() { OnContent = "On", OffContent = "Off" }),
         ("FreeTraining", "Free training (no training points)", new() { OnContent = "On", OffContent = "Off" }),
-        ("TrainingPointPerLevel", "Training points for every level gained", new() { OnContent = "On", OffContent = "Off" }),
         ("PlayersCanGainTrainingPoints", "Players can type .gaintp <amount> to get training points", new() { OnContent = "On", OffContent = "Off" }),
         ("RespecAtTrainers", "Mr. Lincoln offers to reset training points", new() { OnContent = "On", OffContent = "Off" }),
+        ("VanillaTrainers", "Vanilla trainers: each trainer teaches only its real game spells, with real levels, costs and quests", new() { OnContent = "On", OffContent = "Off" }),
     ];
     private readonly Border _battleCard;
+    // [Battle] MaxMonsters: Off (0) keeps the wizards + 1 rule, 1 to 4 is the most monsters a battle holds.
+    private readonly ComboBox _maxMonsters = new() {
+        ItemsSource = new[] { "Off (normal rule)", "1", "2", "3", "4" }, SelectedIndex = 0, Width = 170,
+    };
+    // [Battle] EngageExtraReach: how much farther than the game's own reach walking into a monster starts a battle.
+    private static readonly int[] s_engageReaches = [0, 25, 50, 100, 150, 250];
+    private readonly ComboBox _engageReach = new() {
+        ItemsSource = new[] { "Game's own reach", "A little farther (+25)", "Farther (+50, default)", "Much farther (+100)",
+            "Very far (+150)", "Huge (+250)" },
+        SelectedIndex = 2, Width = 170,
+    };
     private readonly List<(string Section, string Key, string Name, ToggleSwitch Switch)> _battleSwitches = [
         ("Battle", "ManaOnFizzle", "Reduce mana even if fizzle", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "UnlimitedMana", "Unlimited mana (spells cost none, the Commons refills it)", new() { OnContent = "On", OffContent = "Off" }),
-        ("Battle", "BattleWisps", "Battles drop health, mana and gold wisps", new() { OnContent = "On", OffContent = "Off" }),
+        ("Battle", "BattleWisps", "Battles drop health, mana and gold wisps (how many per wizard under Settings, Battle)", new() { OnContent = "On", OffContent = "Off" }),
+        ("SecondChanceChest", "Enabled", "Bosses that cheat leave a Second Chance Chest (open it with Crowns for another roll of the boss's drops; cost and uses under Settings, SecondChanceChest)", new() { OnContent = "On", OffContent = "Off" }),
+        ("SecondChanceChest", "Free", "Second Chance Chests are free (no Crowns)", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "LateJoinersJoinImmediately", "A wizard who joins a battle late plays the current round (off: waits for the next one)", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "MobsJoinLate", "Monsters can join a battle late", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "ResetTimerWhenMobJoins", "Card timer starts over when a monster joins the battle", new() { OnContent = "On", OffContent = "Off" }),
@@ -145,6 +158,7 @@ internal sealed partial class ManagerWindow : Window {
         ("Battle", "FullPipConversion", "100% pip conversion (with Pip Conversion gear, a spell's school always turns a normal pip into a power pip)", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "NoPipsFromDaybreakerNightbringer", "Daybreaker and Nightbringer do not add pips to card", new() { OnContent = "On", OffContent = "Off" }),
         ("Archmastery", "AllLevels", "Archmastery at every level, not just 50 and up", new() { OnContent = "On", OffContent = "Off" }),
+        ("Archmastery", "FromLevel", "Archmastery from level 50 like the game (off: only from gear, jewels and pets)", new() { OnContent = "On", OffContent = "Off" }),
         ("Archmastery", "Creatures", "Creatures use their Archmastery too (school pips, and they set the pace)", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "SchoolPips", "School pips", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "AnySchoolPips", "School pips count as any school pips", new() { OnContent = "On", OffContent = "Off" }),
@@ -152,6 +166,7 @@ internal sealed partial class ManagerWindow : Window {
         ("Battle", "RandomSchoolPips", "Random school pips", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "ShadowPips", "Shadow pips (min, max and chance under Settings, Battle)", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "NaturalShadowPips", "Gain shadow pips without stats", new() { OnContent = "On", OffContent = "Off" }),
+        ("Battle", "ShadowMagicNeedsQuest", "Shadow pips only after the quest Shadow Dancer (or shadow pip rating gear), like the game", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "CreatureShadowPips", "Creatures can get shadow pips", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "RandomCreatureShadowPips", "Creatures get shadow magic only by chance (chance under Settings, Battle)", new() { OnContent = "On", OffContent = "Off" }),
         ("Randomizer", "Tame", "Randomizer: tame mode (creatures, their decks and pips stay normal so quests can be done)", new() { OnContent = "On", OffContent = "Off" }),
@@ -162,20 +177,25 @@ internal sealed partial class ManagerWindow : Window {
         ("Pets", "StartAtMaxStats", "New pets start with every stat at the server maximum (off: their own starting stats, like the real game)", new() { OnContent = "On", OffContent = "Off" }),
         ("Pets", "SkipGameRewards", "Skipping a pet game gives its XP and stats (off: only the snack counts)", new() { OnContent = "On", OffContent = "Off" }),
         ("Pets", "ItemFeedCostsEnergy", "Feeding an item to your pet costs pet energy where the game files say so (off: always free)", new() { OnContent = "On", OffContent = "Off" }),
+        ("Pets", "WillCasts", "Pet Will Casts: the pet's Will Cast button in battle casts its card (cooldown, uses and happiness from the game files)", new() { OnContent = "On", OffContent = "Off" }),
+        ("Pets", "WillCastsFreeReagents", "Will Casts don't cost reagents: locked Will Casts work right away and unlock for free", new() { OnContent = "On", OffContent = "Off" }),
+        ("Pets", "WillCastsCostHappiness", "Will Casts cost pet happiness, like the real game (off: free)", new() { OnContent = "On", OffContent = "Off" }),
         ("Jewels", "KeepShatteredJewels", "Jewels taken out of a socket go back to your backpack (off: they shatter unless they are No Shatter)", new() { OnContent = "On", OffContent = "Off" }),
         ("Battle", "DaybreakerNightbringerAddPips", "Daybreaker and Nightbringer add a pip to the card's cost (off: the card costs what it did)", new() { OnContent = "On", OffContent = "Off" }),
         ("Housing", "PlaceAnyAsDecoration", "Houses: place any furniture as decoration (vaults, signs, music players show but do not work yet)", new() { OnContent = "On", OffContent = "Off" }),
         ("Instance", "ResetWhenEmpty", "Dungeons start fresh once everyone has left (off: kept for 10 minutes)", new() { OnContent = "On", OffContent = "Off" }),
         ("Randomizer", "RandomizeShadowPips", "Randomizer: random shadow pip limits and creature shadow magic", new() { OnContent = "On", OffContent = "Off" }),
         ("Randomizer", "RandomizeItemCards", "Randomizer: random item cards (from gear and pets)", new() { OnContent = "On", OffContent = "Off" }),
+        ("Character", "FullRestoreOnLevelUp", "Leveling up fills health, mana and energy to full, like the real game", new() { OnContent = "On", OffContent = "Off" }),
         ("Character", "RefillCrowns", "Crowns refill to the starting amount (amount under Settings, Character)", new() { OnContent = "On", OffContent = "Off" }),
         ("Login Server", "DisableIdleKick", "Disable idle kick (never disconnect idle players)", new() { OnContent = "On", OffContent = "Off" }),
         ("World", "OpenAllDoors", "Open every door (no quest or level needed, such as Nightside)", new() { OnContent = "On", OffContent = "Off" }),
+        ("World", "AccessAllWorlds", "Access to all worlds: every character can pick every world at the Spiral Door and use every quest-locked teleporter", new() { OnContent = "On", OffContent = "Off" }),
+        ("World", "GoldWispsGiveCrowns", "Gold wisps give crowns as well as gold (how many under Settings, World)", new() { OnContent = "On", OffContent = "Off" }),
         ("Chat", "EnforceWhitelist", "Enforce chat whitelist: red (bad) words from open chat accounts show as \"...\" (off: they go through; text chat accounts stay filtered)", new() { OnContent = "On", OffContent = "Off" }),
         ("PvP", "DuelCircles", "Duel circles: wizards standing on both sides of a house's duel circle (or a Customs duel circle) duel each other", new() { OnContent = "On", OffContent = "Off" }),
         ("PvP", "HouseDuelTakesTurns", "House duel circles take turns, the PvP way (off: both sides act at once)", new() { OnContent = "On", OffContent = "Off" }),
     ];
-    private readonly NumericUpDown _pointsPerLevel = new() { Minimum = 0, Maximum = 100, Increment = 1, FormatString = "0", Width = 130 };
 
     // Settings.
     private readonly TextBox _settingSearch = new() { Watermark = "Search settings by name, what they do or their value" };
@@ -196,6 +216,9 @@ internal sealed partial class ManagerWindow : Window {
     // (Niduus, 2026-10-25: "shows in the same sequence the PvE | Deckathalon %'s next to one another").
     private const string PET_CHANCES = "Chances";
     private const string PET_DECKATHALON = "Deckathalon";
+    // Each May Cast's own Deckathalon chances; shown next to its [PetCasting] row, not as a section of their own.
+    private const string PET_CASTING_DECKATHALON = "PetCastingDeckathalon";
+    private readonly Dictionary<string, Setting> _petTowerSettings = new(StringComparer.OrdinalIgnoreCase);
     private static readonly (string Key, string Label)[] PET_CHANCE_ROWS =
         [("OnCast", "Casts a spell"), ("OnDamage", "Takes damage"), ("OnHeal", "Is healed"), ("OnPass", "Passes")];
     private readonly Dictionary<string, Setting> _petChanceSettings = new(StringComparer.OrdinalIgnoreCase);
@@ -282,10 +305,10 @@ internal sealed partial class ManagerWindow : Window {
             trainerRows.Children.Add(row);
         }
 
-        trainerRows.Children.Add(SwitchRow("Training points per level", _pointsPerLevel));
+        trainerRows.Children.Add(TrainingPointRows());
         // The two long lists of switches start folded shut: they are set once, not on every visit.
         _trainersCard = Shut(Fold("school", "Lookup", "Spell trainers",
-            "What trainers ask for before they teach a spell, with or without randomizer mode.",
+            "What trainers ask for before they teach a spell, with or without randomizer mode, and the training points leveling gives.",
             trainerRows));
         _trainersCard.IsVisible = false;
         var battleRows = new StackPanel { Spacing = 4 };
@@ -302,6 +325,12 @@ internal sealed partial class ManagerWindow : Window {
             }
 
             battleRows.Children.Add(row);
+            if (key == "MobsJoinLate") {
+                battleRows.Children.Add(SwitchRow("Most monsters in a battle", _maxMonsters,
+                    "Off: 2 for 1 wizard, 3 for 2, 4 for 3 or 4 (Unicorn Way 1 per wizard). 1 to 4: always that many at most."));
+                battleRows.Children.Add(SwitchRow("Reach to start a battle", _engageReach,
+                    "How close you must walk to a monster to start a battle. Farther makes walking into monsters start fights more easily."));
+            }
         }
 
         _battleCard = Shut(Fold("sword", "Bosses", "Battle and world",
@@ -324,7 +353,10 @@ internal sealed partial class ManagerWindow : Window {
             Tab("Gear", GearTab),
             Tab("Recipes", RecipesTab),
             Tab("Vendors", VendorsTab),
+            Tab("Pet Talents", PetTalentsTab),
+            Tab("Pet Derby", PetDerbyTab),
             Tab("Quest Tree", QuestTreeTab),
+            Tab("Quest Testing", QuestTestingTab),
             Tab("Bosses", BossesTab),
             Tab("Player Cheats", PlayerCheatsTab),
             Tab("Customs", CustomsTab),
@@ -426,13 +458,21 @@ internal sealed partial class ManagerWindow : Window {
             case "Lookup": await LoadLookupAsync(); break;
             case "Quests": LoadQuests(); break;
             case "Vendors": await LoadVendorsAsync(); break;
+            case "Pet Talents": await LoadPetTalentsAsync(_petTalentPage); break;
+            case "Pet Derby": await LoadPetTalentsAsync(_petDerbyPage); break;
             case "Quest Tree": await LoadQuestTreeAsync(); break;
+            case "Quest Testing": await LoadQuestTestingAsync(); break;
             case "Bosses": await LoadBossesAsync(); break;
             case "Player Cheats": ShowPlayerCheats(); break;
             case "Customs": await LoadCustomsAsync(); break;
             case "Quest Editor": LoadQuestEditor(); break;
             // The Make a custom wizard on the Guides tab searches the creature list.
             case "Guides":
+                // The wizard may be on the Customs tab's New custom page; it comes back here.
+                if (IsCustomPage("new")) {
+                    BackToCustoms();
+                }
+
                 await LoadBossesAsync();
                 UpdateCustomWizard();
                 break;
@@ -723,9 +763,15 @@ internal sealed partial class ManagerWindow : Window {
             };
         }
 
-        _pointsPerLevel.ValueChanged += async (_, _) => {
-            if (!_updatingRandomizer && _pointsPerLevel.Value is { } value) {
-                await Guard(() => SetPointsPerLevelAsync((int) value));
+        _engageReach.SelectionChanged += async (_, _) => {
+            if (!_updatingRandomizer && _engageReach.SelectedIndex >= 0) {
+                await Guard(() => SetEngageReachAsync(s_engageReaches[_engageReach.SelectedIndex]));
+            }
+        };
+
+        _maxMonsters.SelectionChanged += async (_, _) => {
+            if (!_updatingRandomizer && _maxMonsters.SelectedIndex >= 0) {
+                await Guard(() => SetMaxMonstersAsync(_maxMonsters.SelectedIndex));
             }
         };
 
@@ -747,6 +793,7 @@ internal sealed partial class ManagerWindow : Window {
             EventsCard(),
             LoyaltyStoreCard(),
             CrownShopCard(),
+            BazaarBotCard(),
             _trainersCard);
     }
 
@@ -1103,6 +1150,7 @@ internal sealed partial class ManagerWindow : Window {
                 SearchFilters(SearchFilter("Kind of line", _logLevel), SearchTick(_logRepeated)),
                 LogWell(_logScroll),
                 Row(Action(Plain("Copy all"), CopyLogAsync), Action(Plain("Save log to desktop"), SaveLogAsync)))),
+            BazaarBotLogCard(),
             Shut(Fold("log", "Logs", "Game log",
                 "The newest log Wizard101 wrote, updated every 2 seconds.",
                 _clientLogFile,
@@ -1322,9 +1370,15 @@ internal sealed partial class ManagerWindow : Window {
             toggle.IsEnabled = Has(section, key);
         }
 
-        if (!_pointsPerLevel.IsFocused) {
-            _pointsPerLevel.Value = int.TryParse(ini.GetValueOrDefault(("Trainers", "TrainingPointsPerLevel")), out var points) ? points : 1;
-        }
+        _maxMonsters.IsEnabled = Has("Battle", "MaxMonsters");
+        _maxMonsters.SelectedIndex = int.TryParse(ini.GetValueOrDefault(("Battle", "MaxMonsters")), out var maxMonsters)
+            && maxMonsters is >= 1 and <= 4 ? maxMonsters : 0;
+        _engageReach.IsEnabled = Has("Battle", "EngageExtraReach");
+        var reach = int.TryParse(ini.GetValueOrDefault(("Battle", "EngageExtraReach")), out var r) ? r : 50;
+        _engageReach.SelectedIndex = Array.IndexOf(s_engageReaches,
+            s_engageReaches.OrderBy(x => Math.Abs(x - reach)).First());
+        ShowCreateOnLogin(ini);
+        ShowTrainingPoints(ini);
 
         _updatingRandomizer = false;
     }
@@ -1488,15 +1542,28 @@ internal sealed partial class ManagerWindow : Window {
         }
     }
 
-    private Task SetPointsPerLevelAsync(int points) {
-        if (!_manager.HasSetting("Trainers", "TrainingPointsPerLevel")
-                || _manager.GetSetting("Trainers", "TrainingPointsPerLevel") == points.ToString()) {
+    private Task SetEngageReachAsync(int reach) {
+        if (!_manager.HasSetting("Battle", "EngageExtraReach") || _manager.GetSetting("Battle", "EngageExtraReach") == reach.ToString()) {
             return Task.CompletedTask;
         }
 
-        _manager.SaveSettings([new Setting("Trainers", "TrainingPointsPerLevel", points.ToString(), "")]);
+        _manager.SaveSettings([new Setting("Battle", "EngageExtraReach", reach.ToString(), "")]);
         _settings = [];
-        Say($"Each level now gives {points} training points while that switch is on. It applies right away.");
+        Say(reach == 0 ? "Walking into a monster now uses the game's own reach. It applies right away."
+            : $"Walking into a monster now starts a battle from {reach} farther than the game's own reach. It applies right away.");
+
+        return Task.CompletedTask;
+    }
+
+    private Task SetMaxMonstersAsync(int most) {
+        if (!_manager.HasSetting("Battle", "MaxMonsters") || _manager.GetSetting("Battle", "MaxMonsters") == most.ToString()) {
+            return Task.CompletedTask;
+        }
+
+        _manager.SaveSettings([new Setting("Battle", "MaxMonsters", most.ToString(), "")]);
+        _settings = [];
+        Say(most == 0 ? "Most monsters in a battle is off: the normal rule (wizards + 1, up to 4) is back. It applies right away."
+            : $"A battle now holds at most {most} monster{(most == 1 ? "" : "s")}. It applies right away.");
 
         return Task.CompletedTask;
     }
@@ -2005,7 +2072,14 @@ internal sealed partial class ManagerWindow : Window {
 
     private void LoadSettings() {
         // Each May Cast card's key gets what the card does, so it can be searched by kind (Niduus: typing Aura shows every aura).
-        _settings = _manager.ReadSettings()
+        var read = _manager.ReadSettings();
+        _petTowerSettings.Clear();
+        foreach (var tower in read.Where(group => group.Section == PET_CASTING_DECKATHALON).SelectMany(group => group.Settings)) {
+            _petTowerSettings[tower.Key] = tower;
+        }
+
+        _settings = read
+            .Where(group => group.Section != PET_CASTING_DECKATHALON)
             .Select(group => (group.Section, group.Section != PET_CASTING ? group.Settings : PetChanceTable(group.Settings
                 .Select(s => PetCastCards.Details.TryGetValue(s.Key, out var card)
                     ? s with { Help = s.Help.Length > 0 ? $"{card}\n{s.Help}" : card }
@@ -2041,7 +2115,9 @@ internal sealed partial class ManagerWindow : Window {
             }
 
             foreach (var setting in settings) {
-                var row = section == PET_CASTING && setting.Key == PET_CHANCES ? PetChancesRow() : SettingRow(setting);
+                var row = section == PET_CASTING && setting.Key == PET_CHANCES ? PetChancesRow()
+                    : section == PET_CASTING && _petTowerSettings.TryGetValue(setting.Key, out var tower) ? PetCastRow(setting, tower)
+                    : SettingRow(setting);
                 list.Add((setting, row));
                 (section == PET_CASTING ? _petCastRows : rows).Children.Add(row);
             }
@@ -2202,10 +2278,36 @@ internal sealed partial class ManagerWindow : Window {
             Children = {
                 grid,
                 Sub("Chance in percent, 0 to 100. PvE is used in every battle. Deckathalon is used only on Deckathalon floors, " +
-                    "for every May Cast there (also the cards with their own chances below). 0 turns May Casts off there; " +
+                    "for every May Cast there that has no Deckathalon chance of its own below. 0 turns May Casts off there; " +
                     "an empty Deckathalon box uses the PvE chance."),
             },
         };
+
+        return new Border { BorderBrush = LINE, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(0, 0, 0, 8), Child = row };
+    }
+
+    // A May Cast card's own chances: PvE ([PetCasting] <card>) and, next to it, Deckathalon ([PetCastingDeckathalon]
+    // <card>), each written as cast/damage/heal/pass. An empty Deckathalon box uses the Deckathalon chances above.
+    private Control PetCastRow(Setting normal, Setting tower) {
+        string Current(Setting setting)
+            => _pending.TryGetValue((setting.Section, setting.Key), out var changed) ? changed.Value : setting.Value;
+
+        var pve = new TextBox { Text = Current(normal), Watermark = "PvE: same as the chances above" };
+        pve.TextChanged += (_, _) => Change(normal, pve.Text ?? "");
+        var deckathalon = new TextBox { Text = Current(tower), Watermark = "Deckathalon: same as above" };
+        deckathalon.TextChanged += (_, _) => Change(tower, deckathalon.Text ?? "");
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("260,*,12,*"), Margin = new Thickness(0, 8) };
+        grid.Children.Add(new TextBlock { Text = normal.Key, FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
+        Grid.SetColumn(pve, 1);
+        grid.Children.Add(pve);
+        Grid.SetColumn(deckathalon, 3);
+        grid.Children.Add(deckathalon);
+
+        var row = new StackPanel { Children = { grid } };
+        if (normal.Help.Length > 0) {
+            row.Children.Add(Sub(normal.Help));
+        }
 
         return new Border { BorderBrush = LINE, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(0, 0, 0, 8), Child = row };
     }
@@ -2576,7 +2678,10 @@ internal sealed partial class ManagerWindow : Window {
         ["Gear"] = ("shield", "Every hat, robe, wand, mount, pet and bundle, as the game's item tooltip shows it."),
         ["Recipes"] = ("flask", "Every crafting recipe: what it needs, what it makes, and recipe vendors of your own."),
         ["Vendors"] = ("bag", "Every vendor and trainer of the game: where they stand, what they sell and what they teach."),
+        ["Pet Talents"] = ("star", "Every pet talent: May Casts, Will Casts, cards and stats, which pets have them, and buttons for your pet."),
+        ["Pet Derby"] = ("bolt", "Every pet derby racing talent, which pets have them, and buttons for your pet."),
         ["Quest Tree"] = ("flag", "Every world's main story in order, with the side quests each quest opens and which ones this server has."),
+        ["Quest Testing"] = ("check", "Every main story quest from start to finish: why it may not work here, what to do, what should happen, and a tick when it did."),
         ["Bosses"] = ("crown", "Change a boss's health, stats, spells and cheats."),
         ["Player Cheats"] = ("bolt", "Your own cheats in battle, made from the same blocks as a boss's."),
         ["Customs"] = ("puzzle", "Your own creatures and areas, built from the game's."),

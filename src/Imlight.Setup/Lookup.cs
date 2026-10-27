@@ -120,6 +120,8 @@ internal sealed class Lookup {
         Imlight("Set training points", ".mod settp <amount>", QA, "Sets your character's training points. Also .mod settrainingpoints."),
         Command("Gain training points", ".gaintp <amount>", "Every player", "Gives your character 1 to 100 training points. Also .trainingpoints. " +
             "Works for every player unless the server turned it off (Settings, Trainers, PlayersCanGainTrainingPoints)."),
+        Command("Version", ".ver", "Every player", "Shows the Ahziael version the running server was built by, the commit and when the server started. " +
+            "Use it after an update to check the server was restarted. Also .version."),
         Command("Reset training points", ".respec", "Every player", "Says how many training points you would get back and which spells you would lose. " +
             ".respec yes takes every spell you bought with training points out of your spellbook and decks and gives the points back. Also .resettp."),
         Imlight("Cantrip level up", ".mod clvlup", QA, "Raises your cantrip level by one. Also .mod cantriplevelup."),
@@ -132,14 +134,13 @@ internal sealed class Lookup {
         Imlight("Add spell for now", ".sb add <spell ID>", QA, "Gives you a spell until you log out, without learning it."),
         Imlight("Remove spell for now", ".sb remove <spell ID>", QA, "Takes away a spell added with .sb add."),
         Imlight("Learn all cantrips", ".sb allcantrips", QA, "Teaches your character every cantrip."),
-        Command("Deckathalon", ".deckathalon   or   .deckathalon start", ANYONE_AT_ALL, "Says which Deckathalon is on (the Events card of the Imlight app starts them) and climbs its tower: 30 floors, treasure cards only, no gear stats. .deckathalon leave stops, .deckathalon top shows the best wizards. Also .deck and .tower."),
         Command("Events and the Scroll of Fortune", ".events   or   .events claim", ANYONE_AT_ALL, "Lists the game events on (the Scroll of Fortune is always on; the Events card of the Imlight app queues the others), your points in each and the rewards waiting. .events claim claims every reward you have the points for, like the claim buttons of the event window. Also .scroll."),
-        Command("Deckathalon any tower", ".deckathalon start <school>", QA, "Testers can climb any school's tower at any time, such as .deckathalon start ice. These are practice climbs with their own scores."),
-        Command("Deckathalon leaderboard", ".leaderboard   or   .deckathalon top", ANYONE_AT_ALL, "Opens the game's leaderboard window of the Deckathalon that is on (the game's event window has no Leaderboard button for it) and lists the best wizards in chat. Also .lb."),
+        Command("Deckathalon leaderboard", ".leaderboard   or   .lb", ANYONE_AT_ALL, "Opens the game's leaderboard window of the Deckathalon that is on (the game's event window has no Leaderboard button for it) and lists the best wizards in chat. Also .lb."),
         Command("Deckathalon credits", ".credits   or   .credits 10", QA, "Shows your credits in the Deckathalon that is on. Each climb of its tower uses a credit, and the tower portal window has a Claim button for free credits (3 every 24 hours; [Deckathalon] ClaimCredits, ClaimHours and EntryCredits in Settings). .credits 10 gives you 10 more, .credits -5 takes 5 away."),
         Command("Loyalty Store", ".loyalty   or   .loyalty claim", ANYONE_AT_ALL, "Says what Majid (Shopping District) sells now for Loyalty Tokens and how long for, and your tokens. .loyalty go takes you to him. .loyalty claim gets this set's tokens, like the Claim button in his window. Also .majid. The Loyalty Store card of the Imlight app sets when his wares change."),
         Command("Loyalty Tokens", ".loyalty tokens <number>", QA, "Testers can set their account's Loyalty Tokens, such as .loyalty tokens 50."),
         Command("Loyalty Claim Reset", ".loyalty resetclaim", QA, "Testers can claim this month's Loyalty Tokens from Majid again."),
+        Command("Set your password", ".setpassword <password> <password again>", ANYONE_AT_ALL, "Sets your own account's password. An account made by Create Account on Login has none yet and only works on the computer it was made on until you set one. The password never shows in the server log."),
         Command("Rename window", ".rename", ANYONE_AT_ALL, "Opens the game's own Change Name or Style window, where you pick a new name from the game's lists (and can change your style too). The game only opens it at level 50 or higher. It is free here."),
         Command("Rename now", ".rename <new name>", ANYONE_AT_ALL, "Renames your wizard straight away. A name from the game's lists (such as .rename Walter Blanco) becomes a real game name; anything else becomes a custom name (up to 31 letters). Relog to see it."),
         Command("Custom name", ".name self <name> or .name pet <name>", QA, "Changes your wizard's name (relog to see it) or the name of the pet you are wearing. Use reset as the name to go back to the old one."),
@@ -240,6 +241,7 @@ internal sealed class Lookup {
         Command("Add Animus", ".tome animus <monster name or id> <number>", QA, "Adds Animus for a monster to your Monstrology tome, such as .tome animus Dishonored Samoorai 30, so you can test the tome's Create buttons."),
         Command("Shadow pip slots", ".sp slots <number>", QA, "Sets how many shadow pip slots your character has, from 1 to 8, such as .sp slots 2 for the second slot. Log out and back in to see it."),
         Command("Look like your pet (petform)", ".petform", QA, "Turns your wizard into the pet you are wearing, like a transformation elixir, and hides your pet meanwhile. The Play as Pet button beside your pet's picture does the same. Other players see it too. Type .petform again to turn back. It wears off when you log out."),
+        Command("Pet Will Casts", ".willcast   or   .willcast <number>   or   .willcast unlock", ANYONE_AT_ALL, "Lists the Will Casts of the pet you are wearing: what each costs, its wait and how often it can go. In a battle, .willcast <number> casts that one before your card this round, like the pet's Will Cast button. .willcast unlock unlocks locked Will Casts with their reagents (free when Settings, Pets, WillCastsFreeReagents is on)."),
         Command("Pet info", ".pet info", QA, "Shows the level, XP, stats and talents of the pet you are wearing."),
         Command("Feed your pet", ".pet feed <snack>", QA, "Feeds one snack from your snack bag to the pet you are wearing, by name or ID, for pet XP and stats. .pet feedall <snack> feeds the whole stack. Add snacks with .mod addsnack <id>."),
         Command("Pet XP", ".pet xp <amount>", QA, "Gives the pet you are wearing that much pet XP. It levels up and shows new talents on the way."),
@@ -567,7 +569,7 @@ internal sealed class Lookup {
     }
 
     // zone-details.json: zone -> [name, access, type, flags]. Empty when it is missing or cannot be read.
-    private static Dictionary<string, string[]> ReadZoneDetails(string? path) {
+    internal static Dictionary<string, string[]> ReadZoneDetails(string? path) {
         var result = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
         try {
             if (path is null || !File.Exists(path)) {

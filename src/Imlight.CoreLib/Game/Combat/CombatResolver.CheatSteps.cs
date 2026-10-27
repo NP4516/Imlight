@@ -17,10 +17,12 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Tools;
+using Imlight.CoreLib.Game.Spells;
 using Imlight.Common;
 
 namespace Imlight.CoreLib.Game.Combat;
@@ -378,7 +380,7 @@ public partial class CombatResolver {
     private CombatDuelSubCircle _cheatOwner;
 
     // Whether a hanging effect is of a kind: Shield, Trap, Blade, Weakness, Charm (any blade, weakness or other charm),
-    // Ward (any shield, trap or absorb), Aura, DoT or HoT.
+    // Ward (any shield, trap or absorb), Aura, DoT, HoT or Dispel.
     private static bool IsKind(SpellEffect e, string kind) {
         var good = CombatRequirements.IsBeneficial(e);
         var overTime = CombatRequirements.IsOverTime(e);
@@ -398,6 +400,8 @@ public partial class CombatResolver {
             "aura" => aura,
             "dot" => overTime && e.m_effectType != kSpellEffects.kHealOverTime,
             "hot" => e.m_effectType == kSpellEffects.kHealOverTime,
+            // Niduus, 2026-10-26: a Dispel (Fire Dispel...) hanging on someone.
+            "dispel" => e.m_effectType == kSpellEffects.kDispel,
             _ => false,
         };
     }
@@ -495,6 +499,230 @@ public partial class CombatResolver {
             .Replace("{round}", _duel.m_roundNum.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    // An aura's stats (Niduus, 2026-10-26: "support for aura's with multi stats"): "damage 50, resist 20, accuracy 10".
+    private static readonly (string Word, kSpellEffects Type, bool Minus)[] s_auraStats = [
+        ("damage", kSpellEffects.kModifyOutgoingDamage, false), ("resist", kSpellEffects.kModifyIncomingDamage, true),
+        ("healing in", kSpellEffects.kModifyIncomingHeal, false), ("heal", kSpellEffects.kModifyOutgoingHeal, false),
+        ("accuracy", kSpellEffects.kModifyAccuracy, false), ("pierce", kSpellEffects.kModifyOutgoingArmorPiercing, false),
+        ("critical", kSpellEffects.kCritBoost, false), ("block", kSpellEffects.kCritBlock, false),
+        ("stun resist", kSpellEffects.kStunResist, false), ("power pip", kSpellEffects.kModifyPowerPipChance, false),
+    ];
+
+    private static readonly string[] s_auraSchools = ["fire", "ice", "storm", "myth", "life", "death", "balance", "star", "sun", "moon", "shadow", "all"];
+
+    /// <summary>
+    /// "damage 50, fire pierce 20": each stat's effect type, its param (resist is less damage coming in) and its school
+    /// (the word before the stat, Niduus 2026-10-26: "Shadow Damage, Fire Pierce"; null: the block's school).
+    /// </summary>
+    internal static List<(kSpellEffects Type, int Param, string School)> AuraStats(string text, int damage) {
+        var stats = new List<(kSpellEffects, int, string)>();
+        foreach (var part in (text ?? "").Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
+            var m = Regex.Match(part, @"^(?<w>[a-zA-Z ]+?)\s*(?<n>[+-]?\d+)\s*%?$");
+            if (!m.Success) {
+                continue;
+            }
+
+            var word = m.Groups["w"].Value.Trim().ToLowerInvariant();
+            string school = null;
+            var first = word.Split(' ', 2);
+            if (first.Length == 2 && s_auraSchools.Contains(first[0])) {
+                school = first[0] == "all" ? "All" : char.ToUpperInvariant(first[0][0]) + first[0][1..];
+                word = first[1].Trim();
+            }
+
+            var stat = s_auraStats.FirstOrDefault(x => word == x.Word);
+            if (stat.Word is null) {
+                stat = s_auraStats.FirstOrDefault(x => word.StartsWith(x.Word, StringComparison.Ordinal));
+            }
+
+            if (stat.Word is null && word.Length >= 3) {
+                // A short word: "crit 20", "acc 10".
+                stat = s_auraStats.FirstOrDefault(x => x.Word.StartsWith(word, StringComparison.Ordinal));
+            }
+
+            if (stat.Word is null || !int.TryParse(m.Groups["n"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)) {
+                continue;
+            }
+
+            stats.Add((stat.Type, stat.Minus ? -n : n, school));
+        }
+
+        if (damage != 0 && stats.All(x => x.Item1 != kSpellEffects.kModifyOutgoingDamage)) {
+            stats.Insert(0, (kSpellEffects.kModifyOutgoingDamage, damage, null));
+        }
+
+        return stats;
+    }
+
+    // The game's aura that looks most like these stats: the most of them in its own effects, then the fewest others.
+    private static readonly Lazy<List<(SpellTemplate Template, uint Id)>> s_auraLooks = new(() => {
+        try {
+            return [.. SpellFactory.AllSpellTemplates()
+                .Where(t => ((string) t.Template.m_sTypeName ?? "").Equals("Aura", StringComparison.OrdinalIgnoreCase) && !t.Template.m_Treasure
+                            && t.Template.m_effects is { Count: > 0 } effects && effects.All(e => e is not null && e.GetType() == typeof(SpellEffect)
+                                && e.m_effectTarget == kEffectTarget.kSelf && e.m_numRounds > 0)
+                            && SpellFactory.Exists((string) t.Template.m_name))
+                .Select(t => (t.Template, SpellFactory.GetSpell((string) t.Template.m_name)?.m_templateID ?? 0u))
+                .Where(t => t.Item2 != 0)];
+        }
+        catch (Exception e) {
+            Logger.Error("Boss cheats | The auras could not be listed: {0}", Logger.Args(e));
+
+            return [];
+        }
+    });
+
+    // Whether two schools are the same, an empty one being every school ("All").
+    private static bool SameSchool(string a, string b)
+        => string.Equals(string.IsNullOrWhiteSpace(a) ? "All" : a.Trim(), string.IsNullOrWhiteSpace(b) ? "All" : b.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    // The game's aura that looks most like these stats (Niduus, 2026-10-27: "Aura doesn't want to work right or doesn't
+    // display properly"; an Ice damage aura was shown as Amplify, every school): the most stats it has of the same kind and
+    // school, then of the same kind, then the fewest others.
+    private static (SpellTemplate Template, uint Id) AuraLookalike(List<(kSpellEffects Type, int Param, string School)> stats, string school) {
+        int Exact(SpellTemplate t) => stats.Count(x => t.m_effects.Any(e => e.m_effectType == x.Type && SameSchool((string) e.m_sDamageType, x.School ?? school)));
+        int Kind(SpellTemplate t) => stats.Count(x => t.m_effects.Any(e => e.m_effectType == x.Type));
+
+        return s_auraLooks.Value
+            .OrderByDescending(t => Exact(t.Template))
+            .ThenByDescending(t => Kind(t.Template))
+            .ThenBy(t => t.Template.m_effects.Count - Math.Min(t.Template.m_effects.Count, stats.Count))
+            .ThenBy(t => ((string) t.Template.m_name).Contains(" - ", StringComparison.Ordinal))
+            .ThenBy(t => ((string) t.Template.m_name).Length)
+            .FirstOrDefault();
+    }
+
+    // Which of the lookalike's effects shows each stat: one of the same kind and school first, then of the same kind.
+    private static List<int> AuraShownAt(SpellTemplate look, List<(kSpellEffects Type, int Param, string School)> stats, string school) {
+        var used = new HashSet<int>();
+        var at = new List<int>();
+        foreach (var (type, _, own) in stats) {
+            var index = Enumerable.Range(0, look.m_effects.Count)
+                .Where(i => !used.Contains(i) && look.m_effects[i] is { } e && e.m_effectType == type)
+                .OrderByDescending(i => SameSchool((string) look.m_effects[i].m_sDamageType, own ?? school))
+                .DefaultIfEmpty(-1).First();
+            if (index >= 0) {
+                used.Add(index);
+            }
+
+            at.Add(index);
+        }
+
+        return at;
+    }
+
+    /// <summary>
+    /// AddCharm Aura: an aura of several stats (Stats, plus Amount as damage) on the target for Rounds rounds (the
+    /// lookalike's own if 0). On itself, the game's aura most like it (or "shown as") is cast so the game draws it, and the
+    /// aura it puts on is then made these stats; each stat the lookalike also has is told to the game with its own number
+    /// (ShowOwnValue). On another one, it goes on unseen.
+    /// </summary>
+    private float AddCustomAura(CombatDuelSubCircle boss, BossCheats.BossCheat cheat, BossCheats.CheatAction step, CombatDuelSubCircle trigger,
+                                CombatDuelSubCircle receiver, string bossName, List<string> lines, CombatActionListObj combatActionList,
+                                float cinematicTimeSoFar, bool custom) {
+        var stats = AuraStats(step.AuraStats, step.Amount);
+        if (stats.Count == 0) {
+            Logger.Information("Duel {0} | Slot {1} | {2}: the aura has no stats.", Logger.Args(_duel.m_duelID.Full, boss.SlotIndex, bossName));
+
+            return 0;
+        }
+
+        var school = string.IsNullOrWhiteSpace(step.School) ? "All" : step.School.Trim();
+        var aim = step.Target.Length > 0 ? step.Target : "Self";
+        var named = step.Spell.Length > 0 || step.SpellID != 0;
+        var (lookTemplate, lookId) = named ? FindSpell(step.Spell, step.SpellID) is var f && f.Template is not null ? (f.Template, f.Spell.m_templateID) : default
+            : AuraLookalike(stats, school);
+        SpellEffect Made(kSpellEffects type, int param, string own, int rounds) => CheatEffect(type, param, own ?? school, rounds,
+            good: type == kSpellEffects.kModifyIncomingDamage ? param <= 0 : param >= 0) with { m_spellTemplateID = lookId };
+        var cinematicTime = 0f;
+        var shownAt = lookTemplate is null ? [] : AuraShownAt(lookTemplate, stats, school);
+        var described = string.Join(", ", stats.Select(x => $"{x.School ?? school} {x.Type} {x.Param}"));
+        foreach (var target in StepTargets(boss, aim, null, trigger, receiver).Where(t => t?._hangingEffects is not null && t.IsAlive).ToList()) {
+            if (lookTemplate is null) {
+                // No aura to cast: unseen, one aura at a time as in the game.
+                var lasting = step.Rounds > 0 ? step.Rounds : 4;
+                target._hangingEffects.RemoveAll(CombatRequirements.IsAura);
+                foreach (var (type, param, own) in stats) {
+                    target._hangingEffects.Add(Made(type, param, own, lasting));
+                }
+
+                Logger.Information("Duel {0} | Slot {1} | {2}: an aura of {3} goes on slot {4} unseen.",
+                    Logger.Args(_duel.m_duelID.Full, boss.SlotIndex, bossName, described, target.SlotIndex));
+                continue;
+            }
+
+            // An aura is a spell on its caster: whoever gets it casts the lookalike on itself (as a CastBy), so the game
+            // draws it on them, and the aura it puts on is then made these stats.
+            var had = target._hangingEffects.ToHashSet(ReferenceEqualityComparer.Instance);
+            var sentBefore = combatActionList.m_actionList.Count;
+            var cast = step with { Do = "Cast", Spell = (string) lookTemplate.m_name, SpellID = lookId, Target = "Self" };
+            cinematicTime += CheatCast(target, cheat, cast, trigger, receiver, bossName, target == boss ? lines : [], combatActionList,
+                cinematicTimeSoFar + cinematicTime, custom);
+            var put = target._hangingEffects.Where(e => e is not null && !had.Contains(e) && e.m_spellTemplateID == lookId).ToList();
+            var rounds = step.Rounds > 0 ? step.Rounds : put.Select(e => e.m_numRounds).DefaultIfEmpty(4).Max();
+            CombatCharms.RemoveExact(target._hangingEffects, put);
+            foreach (var (type, param, own) in stats) {
+                target._hangingEffects.Add(Made(type, param, own, rounds));
+            }
+
+            // Each stat is shown with its own number on the lookalike's effect of that kind (and school); the lookalike's
+            // other effects, which the aura does not have, are shown as 0.
+            if (BossCheats.ShowOwnValue) {
+                var overrides = new List<SpellEffectParamOverride>();
+                for (var i = 0; i < stats.Count; i++) {
+                    if (shownAt[i] >= 0) {
+                        overrides.Add(new SpellEffectParamOverride { m_effectIndex = shownAt[i], m_paramValue = stats[i].Param });
+                    }
+                }
+
+                for (var i = 0; i < lookTemplate.m_effects.Count; i++) {
+                    if (!shownAt.Contains(i)) {
+                        overrides.Add(new SpellEffectParamOverride { m_effectIndex = i, m_paramValue = 0 });
+                    }
+                }
+
+                for (var i = sentBefore; i < combatActionList.m_actionList.Count; i++) {
+                    if (combatActionList.m_actionList[i]?.m_spell is { } sent && sent.m_templateID == lookId) {
+                        combatActionList.m_actionList[i].m_spell = sent with { m_paramOverrides = [.. overrides] };
+                    }
+                }
+            }
+
+            Logger.Information("Duel {0} | Slot {1} | {2}: {3} cast by slot {4} so the game shows the aura; it is made {5} for {6} rounds.",
+                Logger.Args(_duel.m_duelID.Full, boss.SlotIndex, bossName, (string) lookTemplate.m_name, target.SlotIndex, described, rounds));
+        }
+
+        return cinematicTime;
+    }
+
+    /// <summary>
+    /// The lookalike's casts just added (from index <paramref name="from"/>) carry the effect's own size in
+    /// Spell.m_paramOverrides ([BossCheats] ShowOwnValue), the list the game uses for a spell whose numbers differ from
+    /// its card, so the game can draw 666% for a 666% blade instead of the lookalike's own number.
+    /// </summary>
+    private static void ShowOwnValue(CombatActionListObj combatActionList, int from, uint lookId, SpellTemplate look, kSpellEffects type, int param) {
+        if (!BossCheats.ShowOwnValue) {
+            return;
+        }
+
+        var index = look.m_effects?.FindIndex(e => e is not null && e.m_effectType == type) ?? -1;
+        if (index < 0) {
+            return;
+        }
+
+        for (var i = Math.Max(0, from); i < combatActionList.m_actionList.Count; i++) {
+            var action = combatActionList.m_actionList[i];
+            if (action?.m_spell is null || action.m_spell.m_templateID != lookId) {
+                continue;
+            }
+
+            action.m_spell = action.m_spell with {
+                m_paramOverrides = [new SpellEffectParamOverride { m_effectIndex = index, m_paramValue = param }],
+            };
+            Logger.Debug("Cheat lookalike {0}: the game is told effect {1} is {2}.", Logger.Args(lookId, index, param));
+        }
+    }
+
     // The lookalike AddCharm casts (CheatLookalikes.cs): the one for its cast animation, else the plain one of its kind.
     private string LookalikeName(BossCheats.CheatAction step, bool onCaster, CombatDuelSubCircle boss, string bossName) {
         if (CheatLookalikes.WithCast(step.Kind, step.School, step.Look, onCaster) is { } look) {
@@ -522,6 +750,12 @@ public partial class CombatResolver {
         var param = kind == "gloomglobal" ? -amount : amount;
         var named = step.Spell.Length > 0 || step.SpellID != 0;
         var lookName = named ? step.Spell : LookalikeName(step, onCaster: true, boss, bossName);
+        if (!named && string.IsNullOrWhiteSpace(step.Look) && !BossCheats.ShowOwnValueGlobals
+            && ClosestGlobal(type, param, kind == "global" ? step.School : null) is { } closest) {
+            // The game draws a bubble only at its own size: the real one nearest to this size shows the nearest number.
+            lookName = closest;
+        }
+
         var look = lookName.Length > 0 || step.SpellID != 0 ? FindSpell(lookName, named ? step.SpellID : 0) : default;
         var bubbles = _duel.m_duelModifier.m_battlefieldEffects;
         var cinematicTime = 0f;
@@ -531,7 +765,11 @@ public partial class CombatResolver {
             var had = bubbles.ToHashSet(ReferenceEqualityComparer.Instance);
             // A global aims at no one; the cast goes on the caster's own circle.
             var cast = step with { Do = "Cast", Spell = (string) look.Template.m_name, SpellID = lookId, Target = "Self" };
+            var sentBefore = combatActionList.m_actionList.Count;
             cinematicTime = CheatCast(boss, cheat, cast, trigger, receiver, bossName, lines, combatActionList, cinematicTimeSoFar, custom);
+            if (BossCheats.ShowOwnValueGlobals) {
+                ShowOwnValue(combatActionList, sentBefore, lookId, look.Template, type, param);
+            }
             for (var i = 0; i < bubbles.Count; i++) {
                 var e = bubbles[i];
                 if (e is null || had.Contains(e) || e.m_spellTemplateID != lookId) {
@@ -568,6 +806,102 @@ public partial class CombatResolver {
         }
 
         return cinematicTime;
+    }
+
+    // Every real bubble: one global effect and nothing else, as the game casts and draws them.
+    private static readonly Lazy<List<(string Name, SpellEffect Effect)>> s_globalLooks = new(() => {
+        try {
+            return [.. SpellFactory.AllSpellTemplates()
+                .Where(t => t.Template.m_effects is [{ } e] && e.GetType() == typeof(SpellEffect) && e.m_effectTarget == kEffectTarget.kGlobal
+                            && e.m_effectType is kSpellEffects.kModifyOutgoingDamage or kSpellEffects.kModifyOutgoingHeal
+                            && SpellFactory.Exists((string) t.Template.m_name))
+                .Select(t => ((string) t.Template.m_name, t.Template.m_effects[0]))];
+        }
+        catch (Exception e) {
+            Logger.Error("Boss cheats | The globals could not be listed: {0}", Logger.Args(e));
+
+            return [];
+        }
+    });
+
+    // The real bubble of this type and school (null: any school for a healing one; blank: All) whose own size is nearest.
+    private static string? ClosestGlobal(kSpellEffects type, int param, string? school) {
+        var wanted = school is null ? null : string.IsNullOrWhiteSpace(school) ? "All" : school.Trim();
+
+        return s_globalLooks.Value
+            .Where(g => g.Effect.m_effectType == type && Math.Sign(g.Effect.m_effectParam) == Math.Sign(param)
+                        && (wanted is null || string.Equals((string) g.Effect.m_sDamageType, wanted, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(g => Math.Abs(g.Effect.m_effectParam - param))
+            .ThenBy(g => g.Name.Length)
+            .Select(g => g.Name)
+            .FirstOrDefault();
+    }
+
+    // The kinds of "add an effect of your own size" past blade, weakness, shield, trap, absorb, DoT, HoT and the globals
+    // (Niduus, 2026-10-26: "get expansive on the custom effects like being able to do pierce, flat and so on"): each
+    // one's effect, the sign of its amount and whether it helps whoever has it.
+    private static readonly Dictionary<string, (kSpellEffects Type, int Sign, bool Good)> s_moreKinds = new(StringComparer.OrdinalIgnoreCase) {
+        ["PierceBlade"] = (kSpellEffects.kModifyOutgoingArmorPiercing, 1, true),
+        ["PierceWeakness"] = (kSpellEffects.kModifyOutgoingArmorPiercing, -1, false),
+        ["PierceTrap"] = (kSpellEffects.kModifyIncomingArmorPiercing, 1, false),
+        ["PierceShield"] = (kSpellEffects.kModifyIncomingArmorPiercing, -1, true),
+        ["FlatBlade"] = (kSpellEffects.kModifyOutgoingDamageFlat, 1, true),
+        ["FlatWeakness"] = (kSpellEffects.kModifyOutgoingDamageFlat, -1, false),
+        ["FlatShield"] = (kSpellEffects.kModifyIncomingDamageFlat, -1, true),
+        ["FlatTrap"] = (kSpellEffects.kModifyIncomingDamageFlat, 1, false),
+        ["Accuracy"] = (kSpellEffects.kModifyAccuracy, 1, true),
+        ["Smoke"] = (kSpellEffects.kModifyAccuracy, -1, false),
+        ["Critical"] = (kSpellEffects.kCritBoost, 1, true),
+        ["CritBlock"] = (kSpellEffects.kCritBlock, 1, true),
+        ["HealBoost"] = (kSpellEffects.kModifyOutgoingHeal, 1, true),
+        ["HealWeakness"] = (kSpellEffects.kModifyOutgoingHeal, -1, false),
+        ["HealIn"] = (kSpellEffects.kModifyIncomingHeal, 1, true),
+        ["Infection"] = (kSpellEffects.kModifyIncomingHeal, -1, false),
+        ["FlatHeal"] = (kSpellEffects.kModifyOutgoingHealFlat, 1, true),
+        ["FlatHealIn"] = (kSpellEffects.kModifyIncomingHealFlat, 1, true),
+        ["DotShield"] = (kSpellEffects.kModifyIncomingDamageOverTime, -1, true),
+        ["DotTrap"] = (kSpellEffects.kModifyIncomingDamageOverTime, 1, false),
+        ["StunBlock"] = (kSpellEffects.kStunBlock, 1, true),
+        ["StunResist"] = (kSpellEffects.kStunResist, 1, true),
+        ["DamageCap"] = (kSpellEffects.kMaximumIncomingDamage, 1, true),
+        ["PowerPip"] = (kSpellEffects.kModifyPowerPipChance, 1, true),
+        ["PipConversion"] = (kSpellEffects.kPipConversion, 1, true),
+        ["DispelBlock"] = (kSpellEffects.kDispelBlock, 1, true),
+    };
+
+    // Every one-effect charm or ward of the game: what a new kind casts so the game draws it.
+    private static readonly Lazy<List<(string Name, SpellEffect Effect)>> s_charmLooks = new(() => {
+        try {
+            return [.. SpellFactory.AllSpellTemplates()
+                .Where(t => t.Template.m_effects is [{ } e] && e.GetType() == typeof(SpellEffect) && e.m_numRounds == 0
+                            && e.m_effectTarget is kEffectTarget.kSelf or kEffectTarget.kFriendlySingle or kEffectTarget.kEnemySingle
+                                or kEffectTarget.kFriendlySingleNotMe
+                            && SpellFactory.Exists((string) t.Template.m_name))
+                .Select(t => ((string) t.Template.m_name, t.Template.m_effects[0]))];
+        }
+        catch (Exception e) {
+            Logger.Error("Boss cheats | The charms and wards could not be listed: {0}", Logger.Args(e));
+
+            return [];
+        }
+    });
+
+    /// <summary>
+    /// The game's own one-effect spell of this effect type and sign (one aimed at a friend for a helpful one, at an
+    /// enemy for a harmful one when there is), its school first ("All" next), nearest in size. Null when the game has none.
+    /// </summary>
+    private static string? AutoLookalike(kSpellEffects type, int param, string? school, bool good) {
+        var wanted = string.IsNullOrWhiteSpace(school) ? "All" : school.Trim();
+
+        return s_charmLooks.Value
+            .Where(c => c.Effect.m_effectType == type && Math.Sign(c.Effect.m_effectParam) == Math.Sign(param))
+            .OrderByDescending(c => (c.Effect.m_effectTarget == kEffectTarget.kEnemySingle) != good)
+            .ThenByDescending(c => string.Equals((string) c.Effect.m_sDamageType, wanted, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(c => string.Equals((string) c.Effect.m_sDamageType, "All", StringComparison.OrdinalIgnoreCase))
+            .ThenBy(c => Math.Abs(c.Effect.m_effectParam - param))
+            .ThenBy(c => c.Name.Length)
+            .Select(c => c.Name)
+            .FirstOrDefault();
     }
 
     // A player's cheat global helps only the players' side ("+666% to all ally spells"). The game draws the lookalike at its
@@ -687,6 +1021,11 @@ public partial class CombatResolver {
 
                     return true;
                 }
+                case "aura":
+                case "addcharm" when (step.Kind ?? "").Trim().Equals("Aura", StringComparison.OrdinalIgnoreCase):
+                    cinematicTime = AddCustomAura(boss, cheat, step, trigger, receiver, bossName, lines, combatActionList, cinematicTimeSoFar, custom);
+
+                    return true;
                 case "addcharm" when CheatLookalikes.IsGlobal(step.Kind):
                     cinematicTime = AddCustomGlobal(boss, cheat, step, trigger, receiver, bossName, lines, combatActionList, cinematicTimeSoFar, custom);
 
@@ -699,7 +1038,10 @@ public partial class CombatResolver {
                     var overRounds = step.Rounds > 0 ? step.Rounds : 3;
                     // As a real one: m_effectParam the whole amount, m_paramPerRound each round's share.
                     var perRound = amount / overRounds;
-                    var effect = (step.Kind ?? "").ToLowerInvariant() switch {
+                    var isMore = s_moreKinds.TryGetValue((step.Kind ?? "").Trim(), out var more);
+                    var effect = isMore
+                        ? CheatEffect(more.Type, more.Sign * amount, step.School, 0, more.Good)
+                        : (step.Kind ?? "").ToLowerInvariant() switch {
                         "dot" => CheatEffect(kSpellEffects.kDamageOverTime, amount, step.School, overRounds, good: false) with { m_paramPerRound = perRound },
                         "hot" => CheatEffect(kSpellEffects.kHealOverTime, amount, step.School, overRounds, good: true) with { m_paramPerRound = perRound },
                         "weakness" => CheatEffect(kSpellEffects.kModifyOutgoingDamage, -amount, step.School, 0, good: false),
@@ -711,7 +1053,9 @@ public partial class CombatResolver {
                     var fallback = effect.m_disposition == kHangingDisposition.kHarmful ? "Caster" : "Self";
                     var named = step.Spell.Length > 0 || step.SpellID != 0;
                     var aim = step.Target.Length > 0 ? step.Target : fallback;
-                    var lookName = named ? step.Spell : LookalikeName(step, aim.Equals("Self", StringComparison.OrdinalIgnoreCase), boss, bossName);
+                    var lookName = named ? step.Spell
+                        : isMore ? AutoLookalike(effect.m_effectType, effect.m_effectParam, step.School, more.Good) ?? ""
+                        : LookalikeName(step, aim.Equals("Self", StringComparison.OrdinalIgnoreCase), boss, bossName);
 
                     var look = lookName.Length > 0 || step.SpellID != 0 ? FindSpell(lookName, named ? step.SpellID : 0) : default;
 
@@ -729,7 +1073,9 @@ public partial class CombatResolver {
                             Do = "Cast", Spell = (string) look.Template.m_name, SpellID = lookId,
                             Target = aim,
                         };
+                        var sentBefore = combatActionList.m_actionList.Count;
                         cinematicTime = CheatCast(boss, cheat, cast, trigger, receiver, bossName, lines, combatActionList, cinematicTimeSoFar, custom);
+                        ShowOwnValue(combatActionList, sentBefore, lookId, look.Template, effect.m_effectType, effect.m_effectParam);
                         var resized = 0;
                         foreach (var (circle, had) in before) {
                             var hanging = circle._hangingEffects;

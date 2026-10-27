@@ -556,6 +556,9 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
         public Dictionary<IActorRef, CoreObject> StartingParticipants;
 
+        // Circles that were asked and already had a battle running; the next closest free one is asked instead.
+        public HashSet<IActorRef> BusySigils;
+
     }
 
     /// <summary>
@@ -1112,6 +1115,26 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     public sealed class MSG_BATTLEDROPEXPIRED : IServerMessage {
 
         public byte MessageOrder { get; } = 90;
+        public byte ServiceID { get; } = 102;
+
+    }
+
+    /// <summary>
+    /// Timer-fired message that sends a wisp dropped after a battle off to a new spot near where it fell.
+    /// </summary>
+    public sealed class MSG_BATTLEDROPWANDER : IServerMessage {
+
+        public byte MessageOrder { get; } = 105;
+        public byte ServiceID { get; } = 102;
+
+    }
+
+    /// <summary>
+    /// Timer-fired message that brings a wandering battle wisp's server location up to where the game draws it.
+    /// </summary>
+    public sealed class MSG_BATTLEDROPTICK : IServerMessage {
+
+        public byte MessageOrder { get; } = 106;
         public byte ServiceID { get; } = 102;
 
     }

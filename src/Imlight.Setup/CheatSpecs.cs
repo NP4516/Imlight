@@ -39,6 +39,10 @@ internal static class CheatSpecs {
 
     internal static readonly (string Value, string Label)[] TARGETS = [
         ("", "where the spell aims"),
+        // Niduus, 2026-10-27: "blocks to state "ALL PLAYERS" with "ALL PLAYERS (Excluding self)" as an option": every
+        // wizard standing, on either side; the second without whoever's cheat it is.
+        ("AllPlayers", "ALL PLAYERS"),
+        ("AllPlayersButSelf", "ALL PLAYERS (Excluding self)"),
         ("Self", "itself"),
         ("Caster", "the attacker"),
         ("Receiver", "whoever that spell was aimed at"),
@@ -119,7 +123,19 @@ internal static class CheatSpecs {
     private static readonly (string, string)[] s_announceWho = [("", "everyone in the battle"), ("Players", "only the players' side")];
     private static readonly (string, string)[] s_addKinds = [("Blade", "blade"), ("Weakness", "weakness"), ("Shield", "shield"), ("Trap", "trap"), ("Absorb", "absorb"),
         ("DoT", "damage over time"), ("HoT", "heal over time"), ("Global", "global (more damage)"), ("HealGlobal", "global (more healing)"),
-        ("GloomGlobal", "global (less healing)")];
+        ("GloomGlobal", "global (less healing)"),
+        ("PierceBlade", "pierce boost (spear)"), ("PierceWeakness", "less pierce"), ("PierceTrap", "pierce trap (more pierce taken)"),
+        ("PierceShield", "pierce shield (less pierce taken)"), ("FlatBlade", "flat damage boost"), ("FlatWeakness", "flat damage weakness"),
+        ("FlatShield", "flat shield"), ("FlatTrap", "flat trap"), ("Accuracy", "accuracy boost"), ("Smoke", "accuracy loss (smoke)"),
+        ("Critical", "critical boost"), ("CritBlock", "critical block boost"), ("HealBoost", "healing given boost"),
+        ("HealWeakness", "less healing given"), ("HealIn", "more healing taken"), ("Infection", "less healing taken (infection)"),
+        ("FlatHeal", "flat healing given"), ("FlatHealIn", "flat healing taken"), ("DotShield", "less damage over time taken"),
+        ("DotTrap", "more damage over time taken"), ("StunBlock", "stun block"), ("StunResist", "stun resist"),
+        ("DamageCap", "damage cap (most damage a hit can do)"), ("PowerPip", "power pip chance"), ("PipConversion", "pip conversion"),
+        ("DispelBlock", "dispel block")];
+    // The kinds whose amount is a number, not a percent.
+    private static readonly HashSet<string> s_flatKinds = ["Absorb", "FlatBlade", "FlatWeakness", "FlatShield", "FlatTrap", "FlatHeal", "FlatHealIn",
+        "StunBlock", "DamageCap", "PipConversion", "DispelBlock"];
     private static readonly (string, string)[] s_boostKinds = [("Damage", "damage"), ("Resist", "resist"), ("Heal", "healing"), ("Accuracy", "accuracy")];
     private static readonly (string, string)[] s_timings = [
         ("Now", "right away"), ("Before", "before my card"), ("After", "after my card"), ("First", "first in the round"), ("Last", "last in the round"),
@@ -136,11 +152,36 @@ internal static class CheatSpecs {
     private static readonly (string, string)[] s_hasKinds = [
         ("", "charm, ward or aura"), ("Shield", "shield"), ("Trap", "trap (jinx)"), ("Blade", "blade"), ("Weakness", "weakness (curse)"), ("Charm", "charm (any)"),
         ("Ward", "ward (any)"), ("Aura", "aura"), ("DoT", "damage over time"), ("HoT", "heal over time"),
+        ("Dispel", "dispel"),
     ];
+    // Niduus, 2026-10-26: a school, or its rival (opposite).
+    private static readonly (string, string)[] s_schoolMatch = [("", "the school"), ("Rival", "the rival of"), ("RivalOfIt", "the rival of its own school (box not used):")];
     private static readonly (string, string)[] s_markWho = [("Caster", "the attacker"), ("Receiver", "whoever that spell was aimed at"), ("Self", "it"), ("AnyEnemy", "someone on the other side"),
         ("AllEnemies", "every player")];
     private static readonly (string, string)[] s_castBy = [("Creature", "this creature:"), ("Ally", "a random ally"), ("WeakestAlly", "its weakest ally"), ("StrongestAlly", "its strongest ally"), ("Summoner", "whoever summoned it")];
-    private static readonly (string, string)[] s_anySchool = [("", "every school"), .. SCHOOLS[1..]];
+    // Chromatic (Niduus, 2026-10-27: "Chromatic SELF (Meaning gain a blade of that targets school) Chromatic ENEMY (Give a
+    // weakness on that enemy specifically for their school) ... COVER ALL CORNERS"): a school the server picks when the
+    // block runs, from the fighters (CombatResolver.Chromatic.cs).
+    internal static readonly (string Value, string Label)[] CHROMATIC = [
+        ("Chromatic", "Chromatic: each target's own school"),
+        ("ChromaticRival", "Chromatic: the rival of each target's school"),
+        ("ChromaticTrigger", "Chromatic: the school of whoever set it off"),
+        ("ChromaticReceiver", "Chromatic: the school of whoever the spell was aimed at"),
+        ("ChromaticFoes", "Chromatic: one of each school on the other side"),
+        ("ChromaticAllies", "Chromatic: one of each school on its own side"),
+        ("ChromaticLast", "Chromatic: the school of the block before's target"),
+        ("ChromaticOwn", "Chromatic: its own school"),
+        ("ChromaticOwnRival", "Chromatic: the rival of its own school"),
+    ];
+    private static readonly (string, string)[] s_anySchool = [("", "universal (every school)"), .. SCHOOLS[1..], .. CHROMATIC];
+    // Niduus, 2026-10-27 ("add a lock zones block so I can like lock the moon slot or gem in battle"): the circles of a
+    // battle by the symbol the game draws on them.
+    private static readonly (string, string)[] s_circles = [
+        ("Sun", "Sun (wizards' circle 1)"), ("Eye", "Eye (wizards' circle 2)"), ("Star", "Star (wizards' circle 3)"), ("Moon", "Moon (wizards' circle 4)"),
+        ("Dagger", "Dagger (creatures' circle 1)"), ("Key", "Key (creatures' circle 2)"), ("Gem", "Gem (creatures' circle 3)"), ("Spiral", "Spiral (creatures' circle 4)"),
+        ("OwnSide", "every circle on its own side"), ("OtherSide", "every circle on the other side"), ("All", "every circle")];
+    private static string CircleName(string kind) => s_circles.FirstOrDefault(c => c.Item1.Equals(kind, StringComparison.OrdinalIgnoreCase)).Item2 ?? kind;
+    private static readonly (string, string)[] s_changeSchools = [.. SCHOOLS[1..], .. CHROMATIC];
     // Niduus, 2026-10-25 ("Expand on existing cheats"): the blocks of CombatResolver.MoreCheats.cs.
     private static readonly (string, string)[] s_removedFrom = [("", "it"), ("AnyAlly", "someone on its side"), ("AnyEnemy", "someone on the other side"), ("Anyone", "anyone")];
     private static readonly (string, string)[] s_spellDoes = [
@@ -161,7 +202,8 @@ internal static class CheatSpecs {
     // Niduus, 2026-10-26 ("You can legit do anything"): the conditions (each one entry of the cheat's Conditions, with NOT
     // and OR groups) and the creative Do blocks (the server's CombatResolver.CreativeCheats.cs).
     internal static readonly (string Value, string Label)[] COND_WHO = [
-        ("", "it"), ("Caster", "the attacker"), ("Receiver", "whoever that spell was aimed at"), ("Matched", "the one the If found"),
+        ("", "it"), ("AllPlayers", "ALL PLAYERS"), ("AllPlayersButSelf", "ALL PLAYERS (Excluding self)"), ("AnyPlayer", "any player"),
+        ("Caster", "the attacker"), ("Receiver", "whoever that spell was aimed at"), ("Matched", "the one the If found"),
         ("LastAttacker", "the last one who hurt it"), ("Summoner", "whoever summoned it"),
         ("AnyEnemy", "someone on the other side"), ("AnyAlly", "someone on its side"), ("Anyone", "anyone"),
         ("EveryEnemy", "everyone on the other side"), ("EveryAlly", "everyone on its side"), ("Everyone", "everyone"),
@@ -170,11 +212,11 @@ internal static class CheatSpecs {
         ("e1", "the other side's circle 1"), ("e2", "the other side's circle 2"), ("e3", "the other side's circle 3"), ("e4", "the other side's circle 4"),
     ];
     private static readonly (string, string)[] s_ops = [(">=", "at least"), ("<=", "at most"), (">", "more than"), ("<", "less than"), ("=", "exactly"), ("!=", "anything but")];
-    private static readonly (string, string)[] s_casters = [("", "anyone"), ("Self", "it"), ("Allies", "its side"), ("OtherAllies", "its allies"),
+    private static readonly (string, string)[] s_casters = [("", "anyone"), ("AllPlayers", "ALL PLAYERS"), ("AllPlayersButSelf", "ALL PLAYERS (Excluding self)"), ("Self", "it"), ("Allies", "its side"), ("OtherAllies", "its allies"),
         ("Enemies", "the other side"), ("Caster", "the attacker"), ("e1", "the other side's circle 1"), ("e2", "the other side's circle 2"),
         ("e3", "the other side's circle 3"), ("e4", "the other side's circle 4"), ("p1", "its side's circle 1"), ("p2", "its side's circle 2"),
         ("p3", "its side's circle 3"), ("p4", "its side's circle 4")];
-    private static readonly (string, string)[] s_onWho = [("", "anyone"), ("Self", "it"), ("AnyAlly", "someone on its side"), ("AnyEnemy", "someone on the other side"),
+    private static readonly (string, string)[] s_onWho = [("", "anyone"), ("AllPlayers", "ALL PLAYERS"), ("AllPlayersButSelf", "ALL PLAYERS (Excluding self)"), ("Self", "it"), ("AnyAlly", "someone on its side"), ("AnyEnemy", "someone on the other side"),
         ("Caster", "the attacker"), ("Receiver", "whoever that spell was aimed at")];
     private static readonly (string, string)[] s_results = [("", "landed or not"), ("Landed", "landed"), ("Crit", "landed as a critical"), ("Fizzled", "fizzled")];
     private static readonly (string, string)[] s_within = [("", "this battle"), ("Round", "this round"), ("LastRound", "last round")];
@@ -251,7 +293,12 @@ internal static class CheatSpecs {
     private static string CreatureList(List<string> ids) => ids.Count == 0 ? "(no creatures picked)"
         : string.Join(", ", ids.Select(w => uint.TryParse(w, out var id) && CreatureNames?.Invoke(id) is { } name ? name : w));
 
-    private static string SchoolWord(CheatBlock b) => b.Text("School").Length > 0 ? b.Text("School") + " " : "";
+    private static string SchoolWord(CheatBlock b) => b.Text("School").Length > 0 ? SchoolName(b.Text("School")) + " " : "";
+
+    // A school as a sentence says it: a Chromatic one by its words ("chromatic (rival of each target's school)").
+    internal static string SchoolName(string school)
+        => CHROMATIC.FirstOrDefault(c => c.Value.Equals(school, StringComparison.OrdinalIgnoreCase)).Label is { } label
+            ? "chromatic (" + label["Chromatic: ".Length..] + ")" : school;
 
     /// <summary>The kind of card a When such as "a player heals" stands for (as the server's s_castWhens).</summary>
     internal static string CastWhenKind(string spec) => spec switch {
@@ -502,9 +549,10 @@ internal static class CheatSpecs {
         Cond("C.Level", "user", "level", "Someone's level (a side added up: their average). Example: the attacker is at most level 30 — go easy on low levels.",
             "If {Who} is level {Op} {Value}", [WhoField(), OpField(), F("Value", CheatFieldType.Number, 50, max: 200)],
             b => $"if {Who(b)} is level {Op(b)} {b.Number("Value")}"),
-        Cond("C.School", "sparkle", "school of someone", "Someone is of this school (a wizard's school, or a creature's).",
-            "If {Who} is of {School}", [WhoField(), F("School", CheatFieldType.School, "Fire")],
-            b => $"if {Who(b)} is {(b.Text("School").Length > 0 ? b.Text("School") : "of any school")}"),
+        Cond("C.School", "sparkle", "school of someone", "Someone is of this school (a wizard's school, or a creature's). \"The rival of\" is that school's opposite: Fire and Ice, Storm and Myth, Life and Death (Balance, Sun, Moon, Star and Shadow have none). Example: \"the attacker is of the rival of Ice\" is true for a Fire wizard. \"The rival of its own school\" skips the school box and uses the school of whose cheat it is: an Ice boss then picks out Fire wizards.",
+            "If {Who} is of {Match} {School}", [WhoField(), F("Match", CheatFieldType.Choice, "", s_schoolMatch), F("School", CheatFieldType.School, "Fire")],
+            b => b.Text("Match") == "RivalOfIt" ? $"if {Who(b)} is of its rival school"
+                : $"if {Who(b)} is {(b.Text("Match") == "Rival" ? "of the rival of " : "")}{(b.Text("School").Length > 0 ? b.Text("School") : "of any school")}"),
         Cond("C.Name", "quote", "name has", "Someone's name has these words (a wizard's name, a custom's, or the creature's as the game shows it).",
             "If {Who}'s name has {Name}", [WhoField(), F("Name", CheatFieldType.Words)],
             b => $"if {Who(b)}'s name has \"{b.Text("Name")}\""),
@@ -547,7 +595,7 @@ internal static class CheatSpecs {
             "Remove {Count} {Kind} wards from {Target} made by {Spell}", [F("Count", CheatFieldType.Number, 0, max: 99), F("Kind", CheatFieldType.Choice, "All", s_charmKinds), F("Target", CheatFieldType.Target, "AllEnemies"), F("Spell", CheatFieldType.Words, "")],
             b => $"remove {(b.Number("Count") > 0 ? N(b.Number("Count")) : "all")} {LabelOf(s_charmKinds, b.Text("Kind")).Replace("of any", "")} {(b.Text("Spell").Length > 0 ? b.Text("Spell") + " " : "")}wards{Target(b).Replace(" on ", " from ")}".Replace("  ", " ")),
         new("D.RemoveEffects", BlockKind.Do, "broom", "remove effects", "Takes hanging effects of a kind (shields, traps, blades, weaknesses, any charm or ward, auras, damage or heal over time) off the target, newest first. 0 means all of them. Name a spell to take off only its effects (any version). Protected ones (Aegis, Indemnity) stay, unless \"even protected ones\" is ticked. Example: a player's spell lands, \"remove 1 blade from the receiver made by Balanceblade\" (even protected ones), then \"only if something came off\" and \"add an effect of your own size\": it destroys their blade and takes a bigger one.",
-            "Remove {Count} {Kind} from {Target} made by {Spell}", [F("Count", CheatFieldType.Number, 0, max: 99), F("Kind", CheatFieldType.Choice, "Ward", s_hasKinds), F("Target", CheatFieldType.Target, "Self"), F("Spell", CheatFieldType.Words, ""),
+            "Remove {Count} {Kind} from {Target} made by {Spell} {Bypass}", [F("Count", CheatFieldType.Number, 0, max: 99), F("Kind", CheatFieldType.Choice, "Ward", s_hasKinds), F("Target", CheatFieldType.Target, "Self"), F("Spell", CheatFieldType.Words, ""),
              new("Bypass", CheatFieldType.Toggle, false, Label: "even protected ones")],
             b => $"remove {(b.Number("Count") > 0 ? N(b.Number("Count")) : "all")} {(b.Text("Spell").Length > 0 ? b.Text("Spell") + " " : "")}{LabelOf(s_hasKinds, b.Text("Kind"))}{Target(b).Replace(" on ", " from ")}{(b.Flag("Bypass") ? " (even protected ones)" : "")}".Replace("  ", " ")),
         new("D.RemoveAuras", BlockKind.Do, "broom", "remove auras", "Takes auras (and boosts from cheats) off.",
@@ -555,20 +603,28 @@ internal static class CheatSpecs {
         new("D.AddEffects", BlockKind.Do, "shield", "add a spell's charms", "The charms and wards of a spell (Tower Shield, Fire Blade, Feint...) go on at once, with no casting.",
             "Put the charms and wards of {Spell} on {Target}", [F("Spell", CheatFieldType.Spell), F("Target", CheatFieldType.Target, "Self")],
             b => $"put the effects of {SpellName(b)}{Target(b)}"),
-        new("D.AddCharm", BlockKind.Do, "shield", "add an effect of your own size", "A blade, weakness, shield, trap or absorb of your own size goes on at once, and is used up like a real one: the amount is a percent (hit points for an absorb), so \"55, Storm, blade\" is a +55% Storm blade. A damage or heal over time is the amount in all, spread over the rounds (3 if 0); pick its school. The game only draws an effect it sees cast, so a real spell of that kind and school is cast for it (Shadowblade for a Shadow blade, Balanceblade for all schools...) and then made your size: the game shows the real spell's number, the server uses yours. \"Shown as\" (optional) picks that spell yourself; two of the same spell then count once on a hit, as real ones do. A damage or heal over time is not drawn. After \"remove effects\" and \"only if something came off\" it is a reward: \"Clear DoT on the target for +55% Storm blade on me\". Cast animation: the game plays the casting of the cast spell's own school, so Sun or Shadow casts a real Sun or Shadow spell of that kind (example: 666, Shadow, blade, on me, Sun animation casts Sun Blade, then makes it a +666% Shadow blade; the game shows the Sun Blade's icon). Sun has a blade, shield and absorb, Shadow all five kinds, Moon a blade, Star a blade, shield and absorb; any other pick is cast normally. With \"shown as\" filled in, that spell's school decides. A global is a battlefield bubble: it takes the current one's place, as a real one does, and its school's real bubble is cast for it (Wyldfire, Balefrost, Darkwind, Blood Moon, Circle of Thorns, Deadzone, Balance of Power, Shadow; Power Play for all schools; Sanctuary for more healing, Doom and Gloom for less), then made your size: \"100, Storm, global\" is a +100% Storm global. The target does not matter for a global. A yellow note shows when the game will show an effect of another school than yours (it then uses it on other hits than the server does).",
-            "Put a {Amount} {School} {Kind} on {Target} for {Rounds} rounds, shown as {Spell}, with the {Look} cast animation", [F("Amount", CheatFieldType.Percent, 50, max: 100_000), F("School", CheatFieldType.Choice, "", s_anySchool), F("Kind", CheatFieldType.Choice, "Blade", s_addKinds), F("Target", CheatFieldType.Target, "Self"), F("Rounds", CheatFieldType.Number, 0, max: 99), F("Spell", CheatFieldType.Words, ""), F("Look", CheatFieldType.Choice, "", s_castLooks)],
-            b => b.Text("Kind") is "Global" or "HealGlobal" or "GloomGlobal"
+        new("D.AddCharm", BlockKind.Do, "shield", "add an effect of your own size", "A blade, weakness, shield, trap or absorb of your own size goes on at once, and is used up like a real one: the amount is a percent (hit points for an absorb), so \"55, Storm, blade\" is a +55% Storm blade. A damage or heal over time is the amount in all, spread over the rounds (3 if 0); pick its school. The game only draws an effect it sees cast, so a real spell of that kind and school is cast for it (Shadowblade for a Shadow blade, Balanceblade for all schools...) and then made your size: the game shows the real spell's number, the server uses yours. \"Shown as\" (optional) picks that spell yourself; two of the same spell then count once on a hit, as real ones do. A damage or heal over time is not drawn. After \"remove effects\" and \"only if something came off\" it is a reward: \"Clear DoT on the target for +55% Storm blade on me\". Cast animation: the game plays the casting of the cast spell's own school, so Sun or Shadow casts a real Sun or Shadow spell of that kind (example: 666, Shadow, blade, on me, Sun animation casts Sun Blade, then makes it a +666% Shadow blade; the game shows the Sun Blade's icon). Sun has a blade, shield and absorb, Shadow all five kinds, Moon a blade, Star a blade, shield and absorb; any other pick is cast normally. With \"shown as\" filled in, that spell's school decides. A global is a battlefield bubble: it takes the current one's place, as a real one does, and its school's real bubble is cast for it (Wyldfire, Balefrost, Darkwind, Blood Moon, Circle of Thorns, Deadzone, Balance of Power, Shadow; Power Play for all schools; Sanctuary for more healing, Doom and Gloom for less), then made your size: \"100, Storm, global\" is a +100% Storm global. The target does not matter for a global. A yellow note shows when the game will show an effect of another school than yours (it then uses it on other hits than the server does). Silent: the spell cast for it plays no casting animation; the effect still shows. More kinds: pierce boost (spear) and less pierce, pierce trap and pierce shield, flat damage boost and weakness, flat shield and trap, accuracy boost and loss, critical and critical block boosts, healing given or taken (more or less, percent or flat), damage over time taken (more or less), stun block, stun resist, damage cap (the most a hit can do), power pip chance, pip conversion and dispel block. For each, the game's own spell of that kind closest in school and size is cast so the game draws it, then made your size. Flat kinds, absorb, stun block, damage cap, pip conversion and dispel block are a number, not a percent (the % sign is then ignored). Aura (several stats): an aura that changes several stats at once for its rounds (the aura's own if 0), never used up, one aura at a time as in the game. The amount is its damage; \"aura stats\" adds more, with commas: damage, resist, heal, healing in, accuracy, pierce, critical, block, stun resist, power pip, each with a number (minus lowers it). Example: 50, Fire, aura, stats \"resist 20, accuracy 15, pierce 10\" is +50% Fire damage, 20% less damage taken, +15% accuracy and +10% pierce. On itself, the game's aura most like it is cast so it shows (or \"shown as\"), with your numbers on the stats it has; on another one it goes on unseen. Chromatic schools are picked when the block runs: \"each target's own school\" puts a Fire weakness on a Fire wizard and an Ice one on an Ice wizard (ALL PLAYERS: each gets their own); \"the school of whoever set it off\" gives itself a blade of the attacker's school; \"one of each school on the other side\" gives one of each players' schools.",
+            "Put a {Amount} {School} {Kind} on {Target} for {Rounds} rounds, shown as {Spell}, with the {Look} cast animation {Silent} {AuraStats}", [F("Amount", CheatFieldType.Percent, 50, max: 100_000), F("School", CheatFieldType.Choice, "", s_anySchool), F("Kind", CheatFieldType.Choice, "Blade", s_addKinds), F("Target", CheatFieldType.Target, "Self"), F("Rounds", CheatFieldType.Number, 0, max: 99), F("Spell", CheatFieldType.Words, ""), F("Look", CheatFieldType.Choice, "", s_castLooks),
+             new("Silent", CheatFieldType.Toggle, false, Label: "silent"), F("AuraStats", CheatFieldType.AuraStats, "")],
+            b => b.Text("Kind") == "Aura"
+                ? $"put an aura of {(b.Number("Amount") != 0 ? $"damage {b.Number("Amount")}%" : "")}{(b.Text("AuraStats").Length > 0 ? (b.Number("Amount") != 0 ? ", " : "") + b.Text("AuraStats") : "")}{(SchoolWord(b).Length > 0 ? $" ({SchoolWord(b).Trim()})" : "")}{Target(b)} for {(b.Number("Rounds") > 0 ? RoundsFor(b) : "its own rounds")}{(b.Flag("Silent") ? ", silent" : "")}"
+                : b.Text("Kind") is "Global" or "HealGlobal" or "GloomGlobal"
                 ? $"put up a {(b.Text("Kind") == "GloomGlobal" ? "-" : "+")}{b.Number("Amount")}% {(b.Text("Kind") == "Global" ? SchoolWord(b) : "")}{LabelOf(s_addKinds, b.Text("Kind"))}{(b.Text("Spell").Length > 0 ? $" (shown as {b.Text("Spell")})" : "")}{(b.Text("Look").Length > 0 && b.Text("Spell").Length == 0 ? $", {b.Text("Look")} cast" : "")}"
                 : b.Text("Kind") is "DoT" or "HoT"
                 ? $"put a {N(b.Number("Amount"))} {SchoolWord(b)}{LabelOf(s_addKinds, b.Text("Kind"))} over {Math.Max(1, b.Number("Rounds") > 0 ? b.Number("Rounds") : 3)} rounds{Target(b)}{(b.Text("Spell").Length > 0 ? $" (shown as {b.Text("Spell")})" : "")}"
-                : $"put a {b.Number("Amount")}{(b.Text("Kind") == "Absorb" ? "" : "%")} {SchoolWord(b)}{LabelOf(s_addKinds, b.Text("Kind"))}{Target(b)}{(b.Text("Spell").Length > 0 ? $" (shown as {b.Text("Spell")})" : "")}{(b.Text("Look").Length > 0 && b.Text("Spell").Length == 0 ? $", {b.Text("Look")} cast" : "")}"),
+                : $"put a {b.Number("Amount")}{(s_flatKinds.Contains(b.Text("Kind")) ? "" : "%")} {SchoolWord(b)}{LabelOf(s_addKinds, b.Text("Kind"))}{Target(b)}{(b.Text("Spell").Length > 0 ? $" (shown as {b.Text("Spell")})" : "")}{(b.Text("Look").Length > 0 && b.Text("Spell").Length == 0 ? $", {b.Text("Look")} cast" : "")}"),
+        new("D.Aura", BlockKind.Do, "sparkle", "aura", "An aura of its own: one or more stats at once for its rounds (the shown aura's own if 0), never used up, and one aura at a time as in the game (a new one takes the old one's place). Pick each stat in the 🌀 list: its school (\"block's school\" = all), the stat (damage, resist, accuracy, pierce, critical, critical block, healing given, healing taken, stun resist, power pip chance) and how much; a minus number lowers it. Example: Shadow damage 100, Fire resist 20, accuracy 15. Works on bosses, creatures and players alike. On itself, the game's aura most like it is cast so the game draws it (or \"shown as\"), with your numbers on the stats that aura has; on anyone else it goes on unseen. Silent: no casting animation.",
+            "Put an aura on {Target} for {Rounds} rounds {AuraStats} shown as {Spell} {Silent}",
+            [F("Target", CheatFieldType.Target, "Self"), F("Rounds", CheatFieldType.Number, 0, max: 99), F("AuraStats", CheatFieldType.AuraStats, "damage 25"),
+             F("Spell", CheatFieldType.Words, ""), new("Silent", CheatFieldType.Toggle, false, Label: "silent")],
+            b => $"put an aura of {(b.Text("AuraStats").Length > 0 ? b.Text("AuraStats") : "no stats")}{Target(b)} for {(b.Number("Rounds") > 0 ? $"{b.Number("Rounds")} rounds" : "its own rounds")}{(b.Text("Spell").Length > 0 ? $" (shown as {b.Text("Spell")})" : "")}{(b.Flag("Silent") ? ", silent" : "")}"),
         new("D.IfCleared", BlockKind.Do, "broom", "only if something came off", "Put it after \"remove effects\" (or remove charms, wards or auras): the next blocks (how many) go off only if at least this many effects came off. With \"once for each\" they go off once for each effect that came off. Example, Reap the Whirlwind's \"Clear DoT for +55% Storm blade\": remove 1 damage over time from whoever the spell was aimed at, then this block (next 1 block), then put a 55% Storm blade on itself.",
             "Do the next {Count} blocks only if at least {Amount} effects came off {Each}", [new("Count", CheatFieldType.Number, 1, Max: 20, Min: 1), new("Amount", CheatFieldType.Number, 1, Max: 99, Min: 1), new("Each", CheatFieldType.Toggle, false, Label: "once for each")],
             b => b.Flag("Each") ? $"(the next {Math.Max(1, b.Number("Count"))} once for each effect that came off)"
                 : $"(the next {Math.Max(1, b.Number("Count"))} only if {Math.Max(1, b.Number("Amount"))} or more came off)"),
         new("D.Boost", BlockKind.Do, "bolt", "boost or enrage", "Raises (or with a minus number, lowers) its damage, resist, healing or accuracy for some rounds; 0 rounds is the rest of the battle. It is never used up and stacks: on a \"from round … on\" cheat it is an enrage.",
             "Change the {Kind} of {Target} by {Amount} for {School} spells for {Rounds} rounds", [F("Kind", CheatFieldType.Choice, "Damage", s_boostKinds), F("Target", CheatFieldType.Target, "Self"), new("Amount", CheatFieldType.Number, 10, Max: 1000, Min: -100), F("School", CheatFieldType.Choice, "", s_anySchool), F("Rounds", CheatFieldType.Number, 0, max: 99)],
-            b => $"{LabelOf(s_boostKinds, b.Text("Kind"))} {(b.Number("Amount") >= 0 ? "+" : "")}{b.Number("Amount")}%{(b.Text("School").Length > 0 ? $" ({b.Text("School")})" : "")}{Target(b)} for {RoundsFor(b)}"),
+            b => $"{LabelOf(s_boostKinds, b.Text("Kind"))} {(b.Number("Amount") >= 0 ? "+" : "")}{b.Number("Amount")}%{(b.Text("School").Length > 0 ? $" ({SchoolName(b.Text("School"))})" : "")}{Target(b)} for {RoundsFor(b)}"),
         new("D.Immune", BlockKind.Do, "shield", "become immune", "No damage from that school (or any) for some rounds; 0 rounds is the rest of the battle. Pierce still gets through, as against a shield.",
             "Make {Target} immune to {School} damage for {Rounds} rounds", [F("Target", CheatFieldType.Target, "Self"), F("School", CheatFieldType.Choice, "Fire", s_anySchool), F("Rounds", CheatFieldType.Number, 2, max: 99)],
             b => $"immune to {SchoolWord(b)}damage{Target(b)} for {RoundsFor(b)}"),
@@ -601,6 +657,10 @@ internal static class CheatSpecs {
             "Say {Line}", [F("Line", CheatFieldType.Line)], b => $"say \"{b.Text("Line")}\""),
         new("D.Chat", BlockKind.Do, "chat", "chat message", "Any words you like, sent to every player's chat window (in a player cheat, to your own). {boss}, {player}, {round} and a variable's name such as {rage} are filled in.",
             "Tell every player in chat: {Text}", [F("Text", CheatFieldType.Words, "")], b => $"tell everyone \"{b.Text("Text")}\""),
+        // Niduus, 2026-10-26: "custom boss words that appear over me and in combat".
+        new("D.Bubble", BlockKind.Do, "quote", "speech bubble", "Any words you like, in a chat bubble over whoever you pick (itself, the attacker, a player...) while the round plays, and in every player's chat window with their name. Works for bosses and for you in a player cheat. {boss}, {player}, {round} and a variable's name such as {rage} are filled in. Unlike \"say a line\" (only the game's own lines, in the boss's speech box), these can be any words.",
+            "Say {Text} in a bubble over {Target}", [F("Text", CheatFieldType.Words, ""), F("Target", CheatFieldType.Target, "Self")],
+            b => $"say \"{b.Text("Text")}\" in a bubble{Target(b, " over itself").Replace(" on ", " over ")}"),
         new("D.Announce", BlockKind.Do, "chat", "announce to the battle", "A server announcement, as the Announcement card sends it, but only to the wizards in this battle: a message box with \"Announcement\" on top, an \"Announcement:\" chat line, or both. {boss} in the words is the boss (or you, in a player cheat), {player} the wizard who set it off, {round} the round. Example: a Round 3 cheat that does this with \"The ground trembles...\" as a box. Unlike \"say a line\" (a game line over the boss) and \"chat message\" (chat with the boss's name in front), it reads as from the server. A variable's name in braces, such as {rage}, is its number.",
             "Announce {Text} to {Who} {Style}", [F("Text", CheatFieldType.Words, ""), F("Who", CheatFieldType.Choice, "", s_announceWho), F("Style", CheatFieldType.Choice, "Box", s_announceStyles)],
             b => $"announce \"{b.Text("Text")}\" to {LabelOf(s_announceWho, b.Text("Who"))} {LabelOf(s_announceStyles, b.Text("Style").Length > 0 ? b.Text("Style") : "Box")}"),
@@ -712,8 +772,14 @@ internal static class CheatSpecs {
             "Give {Target} {Amount} pips a round, {Power} % power pips, for {Rounds} rounds", [F("Target", CheatFieldType.Target, "Self"), F("Amount", CheatFieldType.Number, 2, max: 14), F("Power", CheatFieldType.Words), F("Rounds", CheatFieldType.Number, 0, max: 99)],
             b => $"{b.Number("Amount")} pips a round{Target(b)}{(b.Text("Power").Length > 0 ? $", {b.Text("Power").TrimEnd('%')}% power" : "")}{(b.Number("Rounds") > 0 ? $" for {b.Number("Rounds")} rounds" : "")}"),
         new("D.ChangeSchool", BlockKind.Do, "school", "change school", "Someone counts as another school for this many rounds (0: the rest of the battle; from this one when the round is under way): for school Ifs, spell needs, school pips, mastery and archmastery. Ticked: its boosts and resists of its own school and the new one trade places. The game shows nothing; only the battle counts it.",
-            "Make {Target} count as {School} for {Rounds} rounds {Stats}", [F("Target", CheatFieldType.Target, "Self"), F("School", CheatFieldType.School, "Fire"), F("Rounds", CheatFieldType.Number, 3, max: 99), new("Stats", CheatFieldType.Toggle, false, Label: "boosts and resists too")],
-            b => $"counts as {b.Text("School")}{Target(b)}{(b.Number("Rounds") > 0 ? $" for {b.Number("Rounds")} rounds" : "")}{(b.Flag("Stats") ? " (stats too)" : "")}"),
+            "Make {Target} count as {School} for {Rounds} rounds {Stats}", [F("Target", CheatFieldType.Target, "Self"), F("School", CheatFieldType.Choice, "Fire", s_changeSchools), F("Rounds", CheatFieldType.Number, 3, max: 99), new("Stats", CheatFieldType.Toggle, false, Label: "boosts and resists too")],
+            b => $"counts as {SchoolName(b.Text("School"))}{Target(b)}{(b.Number("Rounds") > 0 ? $" for {b.Number("Rounds")} rounds" : "")}{(b.Flag("Stats") ? " (stats too)" : "")}"),
+        new("D.LockCircle", BlockKind.Do, "lock", "lock a circle", "Locks a battle circle for this many rounds (0: the rest of the battle; from this one when the round is under way): no one can join the battle there, no walking-in monster or wizard and no summoned minion. Whoever already stands on it stays. Works the same for a wizard's cheat and a creature's. The game draws nothing on a locked circle.",
+            "Lock the {Kind} for {Rounds} rounds", [F("Kind", CheatFieldType.Choice, "Moon", s_circles), F("Rounds", CheatFieldType.Number, 0, max: 99)],
+            b => $"locks {CircleName(b.Text("Kind"))}{(b.Number("Rounds") > 0 ? $" for {b.Number("Rounds")} rounds" : " for the battle")}"),
+        new("D.UnlockCircle", BlockKind.Do, "unlock", "unlock a circle", "Opens a circle a lock block closed, before its rounds run out.",
+            "Unlock the {Kind}", [F("Kind", CheatFieldType.Choice, "Moon", s_circles)],
+            b => $"unlocks {CircleName(b.Text("Kind"))}"),
         new("D.Other", BlockKind.Do, "puzzle", "something else", "An action this app does not know, kept as the file has it.",
             "Do {Do}", [F("Do", CheatFieldType.Words)], b => $"do {b.Text("Do")}"),
     ];

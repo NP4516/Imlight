@@ -186,6 +186,9 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
 
         public int UsedPips;
         public string[] MobAdjectives;
+
+        /// <summary>The adjectives of each defeated mob on its own, so a quest step counts a mob once.</summary>
+        public string[][] MobAdjectivesPerMob;
         public ulong[] MobTemplateIds;
 
         /// <summary>What each defeated mob drops by: a custom's key (Customs.cs) or its template id.</summary>
@@ -457,6 +460,25 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
         public byte ServiceID => 106;
 
         public uint School;
+        public IActorRef Actor;
+
+    }
+
+    /// <summary>
+    /// A pet Will Cast: the game's Will Cast button (MSG_PETWILLCAST) or `.willcast` in a battle. Talent picks one by
+    /// its talent id (0: the one the game's card names, else the first ready one); List only says each one's state.
+    /// </summary>
+    internal sealed class MSG_PETWILLCASTREQUEST : IServerMessage {
+
+        public byte MessageOrder => 38;
+        public byte ServiceID => 106;
+
+        // What the game sent as PetCastingSpell, or null from the command.
+        public byte[] GameData;
+        // What the game sent as Target, or -1.
+        public int Target = -1;
+        public uint Talent;
+        public bool List;
         public IActorRef Actor;
 
     }

@@ -1003,9 +1003,27 @@ public partial class CombatResolver {
 
         foreach (var action in combatActionList.m_actionList) {
             if (action is not null && !had.Contains(action)) {
-                action.m_interrupt = true;
+                action.m_interrupt = CastsAsInterrupt(action);
             }
         }
+    }
+
+    /// <summary>
+    /// Whether a cheat's action goes to the game as an interrupt. A global (bubble) does not ([BossCheats]
+    /// GlobalsInTurn): sent as an interrupt the game played its cast but never put the bubble up (Niduus, 2026-10-26:
+    /// "no global still. if it helps, it's a shadow global").
+    /// </summary>
+    internal static bool CastsAsInterrupt(CombatAction action) {
+        if (!BossCheats.CastsAsInterrupt) {
+            return false;
+        }
+
+        if (!BossCheats.GlobalsInTurn || action?.m_spell is not { } spell) {
+            return true;
+        }
+
+        return CoreObjectFactory.GetCoreTemplate(spell.m_templateID) is not SpellTemplate template
+               || template.m_effects?.Any(e => e is not null && e.m_effectTarget == kEffectTarget.kGlobal) != true;
     }
 
     // A cheat's steps, in order. A Wait step keeps the ones after it for the start of a later round (WaitedCheats).
@@ -1075,6 +1093,20 @@ public partial class CombatResolver {
                 continue;
             }
 
+            // Chromatic (CombatResolver.Chromatic.cs): the school is picked now from the fighters, and the step goes once
+            // for each target (or school) when each gets their own.
+            if (IsChromatic(step)) {
+                var picked = ChromaticSteps(boss, step, trigger, receiver, bossName);
+                steps = [.. steps.Take(s), .. picked, .. steps.Skip(s + 1)];
+                if (picked.Count == 0) {
+                    s--;
+
+                    continue;
+                }
+
+                step = steps[s];
+            }
+
             switch (step.Do.ToLowerInvariant()) {
                 case "form" or "sethealth":
                     break;
@@ -1126,6 +1158,12 @@ public partial class CombatResolver {
                     _bossPhases[boss] = (step.Phase, (int) _duel.m_roundNum + 1);
                     Logger.Information("Duel {0} | Slot {1} | Boss moves on to phase {2}.",
                         Logger.Args(_duel.m_duelID.Full, boss.SlotIndex, step.Phase));
+                    break;
+                case "bubble":
+                    // Any words in a chat bubble over the speaker (Niduus, 2026-10-26: "custom boss words that appear over
+                    // me and in combat"). The game shows only its own lines as a boss line, so these go as local chat from
+                    // the speaker, timed for when the round gets to this point.
+                    SpeakBubble(boss, step, trigger, receiver, cinematicTimeSoFar + cinematicTime);
                     break;
                 case "say":
                     if (step.Line.Length > 0) {
@@ -1266,6 +1304,7 @@ public partial class CombatResolver {
             "removeauras" => $"remove auras{on}",
             "announce" => $"announce \"{step.Text}\" to the battle ({(step.Style.Length > 0 ? step.Style : "Box")}{(step.Who.Length > 0 ? $", {step.Who}" : "")})",
             "removeeffects" => $"remove {(step.Kind.Length > 0 ? step.Kind : "all")} effects x{(step.Count > 0 ? step.Count : "all")}{(step.Bypass ? " (even protected)" : "")}{on}",
+            "aura" => $"put an aura of {step.AuraStats}{on}",
             "addcharm" when CheatLookalikes.IsGlobal(step.Kind)
                 => $"put up a {(step.Kind.Equals("GloomGlobal", StringComparison.OrdinalIgnoreCase) ? -Math.Abs(step.Amount) : Math.Abs(step.Amount))}% {SchoolText(step.School)}{CheatLookalikes.KindWord(step.Kind)}{(step.Look.Length > 0 && step.Spell.Length == 0 ? $" ({step.Look} cast)" : "")}",
             "addcharm" => step.Kind.ToLowerInvariant() is "dot" or "hot"
@@ -1606,6 +1645,32 @@ public partial class CombatResolver {
     }
 
     // Say's Text: the words go to every player's chat. They are the cheat's own words, so the Announcements tab leaves them.
+    private void SpeakBubble(CombatDuelSubCircle boss, BossCheats.CheatAction step, CombatDuelSubCircle trigger, CombatDuelSubCircle receiver,
+                             float afterSeconds) {
+        var said = AnnounceText(step.Text, boss, trigger);
+        if (said.Length == 0) {
+            return;
+        }
+
+        var speakers = StepTargets(boss, step.Target.Length > 0 ? step.Target : "Self", null, trigger, receiver)
+            .Where(c => c?.ParticipantObject is not null).ToList();
+        var players = _subCircles.Where(c => c is not null && c.Occupied && c.IsHumanPlayer && c.ParticipantActor is not null)
+            .Select(c => c.ParticipantActor).ToList();
+        foreach (var speaker in speakers) {
+            var message = new GAME_5_PROTOCOL.MSG_RADIALCHAT {
+                Message = (Imcodec.IO.ByteString) said, SourceID = speaker.ParticipantObject.m_globalID, SourceName = (Imcodec.IO.ByteString) FighterName(speaker), Filter = 2,
+            };
+            var delay = TimeSpan.FromSeconds(Math.Max(0, afterSeconds));
+            _ = System.Threading.Tasks.Task.Delay(delay).ContinueWith(_ => {
+                foreach (var player in players) {
+                    player.Tell(message);
+                }
+            });
+            Logger.Information("Duel {0} | Slot {1} says \"{2}\" in a bubble, {3:0.0} s into the round's play.",
+                Logger.Args(_duel.m_duelID.Full, speaker.SlotIndex, said, delay.TotalSeconds));
+        }
+    }
+
     private void TellPlayers(string text) {
         Tools.ServerMessages.Own(text);
         foreach (var player in _subCircles.Where(c => c is not null && c.Occupied && c.IsHumanPlayer && c.ParticipantActor is not null)) {
@@ -1742,7 +1807,7 @@ public partial class CombatResolver {
         // A step on itself does not count as "the block before": a Brace on itself after a spell on a wizard still
         // lets the next block look at that wizard.
         var found = TargetsFor(code, boss, template, trigger, receiver, enemies, allies, others);
-        if (code is not ("self" or "me")) {
+        if (code is not ("self" or "me") && !code.StartsWith("slot:", StringComparison.Ordinal)) {
             _lastStepTargets = found;
         }
 
@@ -1788,6 +1853,13 @@ public partial class CombatResolver {
             // Niduus, 2026-10-26: both sides standing, with or without itself.
             "everyone" => [.. allies.Concat(enemies).OrderBy(c => c.SlotIndex)],
             "everyoneelse" => [.. others.Concat(enemies).OrderBy(c => c.SlotIndex)],
+            // Niduus, 2026-10-27: ALL PLAYERS (every wizard standing, on either side) and ALL PLAYERS (Excluding self),
+            // without whoever's cheat it is.
+            "allplayers" => [.. allies.Concat(enemies).Where(c => c.IsHumanPlayer).OrderBy(c => c.SlotIndex)],
+            "allplayersbutself" => [.. allies.Concat(enemies).Where(c => c.IsHumanPlayer && c != boss && c != _cheatOwner).OrderBy(c => c.SlotIndex)],
+            "anyplayer" => [.. allies.Concat(enemies).Where(c => c.IsHumanPlayer).OrderBy(_ => Random.Shared.Next()).Take(1)],
+            // One fighter picked by its circle (a Chromatic block run once for each target, CombatResolver.Chromatic.cs).
+            _ when code.StartsWith("slot:", StringComparison.Ordinal) => [.. allies.Concat(enemies).Where(c => code == $"slot:{c.SlotIndex}")],
             _ when template is null => [boss],
             _ => [trigger is not null && trigger.OccupiedTeam != boss.OccupiedTeam
                   && Flatten(template).Any(e => s_enemyTargets.Contains(e.m_effectTarget))

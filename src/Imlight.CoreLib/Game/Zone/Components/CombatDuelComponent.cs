@@ -323,6 +323,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         var bossGroup = Duel.m_roundNum == 0 && (bossOfThisFight || HasBossInBattle());
         if (bossGroup ? GetAvailableSubCircleTeamCreature() is null : !IsSlotAvailable(CombatTeam.Monster)) {
             Refused(bossGroup ? $"the enemy side is full ({CreatureCount} monsters); it vanishes"
+                : s_maxMonsters is >= 1 and <= 4 ? $"the battle is full ({CreatureCount} monsters, MaxMonsters is {s_maxMonsters}); it vanishes"
                 : IsNewbieSigil
                 ? $"starter street circle, one monster per wizard ({CreatureCount} monsters, {PlayerCount} wizards); it vanishes"
                 : $"the battle is full ({CreatureCount} monsters for {PlayerCount} wizards); it vanishes");
@@ -466,6 +467,16 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL))]
     private void ReceiveDuelStart(ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL message) {
         if (_isActive) {
+            // Someone else's battle runs here: the zone asks the next closest free circle (ZoneSigilSupervisor), so a
+            // wizard who walks into a monster beside a busy circle still gets a fight. A wizard already in this battle
+            // starts nothing.
+            var players = message.StartingParticipants?.Values.Where(x => x?.m_templateID == 1).Select(x => x.m_globalID).ToList();
+            if (!IsPvPDuel && players is { Count: > 0 }
+                && !SubCircles.Any(c => c?.ParticipantObject is { } o && players.Contains(o.m_globalID))) {
+                (message.BusySigils ??= []).Add(Self);
+                ZoneActor.Tell(message);
+            }
+
             return;
         }
 
@@ -679,6 +690,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         SendCombatPips();
         SendCombatHealth();
         SendCombatUI(PlanningSeconds);
+        // The game's pet Will Cast button for each wizard whose pet has one (CombatDuelComponent.WillCasts.cs).
+        SendPetCards();
         LogRoundPipsAndHealth();
         _planningStartedAt = DateTime.UtcNow;
 
@@ -856,7 +869,6 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Logger.Args(SigilId, Duel.m_roundNum, waitSeconds, actions?.m_actionList?.Count ?? 0));
         _roundWait = (Duel.m_roundNum, cinematicTimeInSeconds, waitSeconds, DateTime.UtcNow);
         _gameLogWatch = waitSeconds > 0 ? GameLogWatch.Start(Duel.m_duelID.Full, CombatResolver.SpellSeconds) : null;
-        _waitingForGameSince = null;
         var actionExecutionTime = TimeSpan.FromSeconds(waitSeconds);
         Duel.m_executionPhaseTimer = (float) actionExecutionTime.TotalSeconds;
 
@@ -880,7 +892,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         ZoneBroadcast(msg);
         ScheduleHealthGlobes();
 
-        Timers.StartSingleTimer(RESOUTION_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_ROUNDRESOLUTION(), actionExecutionTime);
+        Timers.StartSingleTimer(RESOUTION_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_ROUNDRESOLUTION(), FirstRoundWait(actionExecutionTime));
     }
 
     // [Battle] AnimationExtraSeconds: seconds added to every round's wait for its animations (0 to 10).
@@ -889,15 +901,37 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     // The round whose animations are playing: its estimate, what the duel waits, and when the actions went out.
     private (int Round, float Estimate, float Wait, DateTime Sent)? _roundWait;
 
-    // The game's log on this PC, read when the estimate runs out (GameLogWatch.cs), and since when the round has
-    // waited past the estimate for the game to finish.
+    // The game's log on this PC (GameLogWatch.cs), when the estimate for the round runs out, since when the round has
+    // waited past it for the game to finish, and whether the round ended before it because the game was done.
     private GameLogWatch _gameLogWatch;
+    private DateTime _roundEstimateEnds;
     private DateTime? _waitingForGameSince;
+    private bool _endedWithGame;
+
+    // [Battle] EndRoundWhenGameDone: a round ends as soon as the game on this PC has played it, before the estimate.
+    private static bool s_endRoundWhenGameDone => ConfigurationManager.GetValue("Battle.EndRoundWhenGameDone", true);
+    // Seconds into a round before the game's log is first read for an early end (the round's first spell is playing).
+    private const double GAME_LOG_FIRST_LOOK_SECONDS = 5;
+    private static readonly TimeSpan s_gameLogLookEvery = TimeSpan.FromSeconds(0.5);
+
+    /// <summary>The first wait for a round's actions: the estimate, or the first look at the game's log.</summary>
+    private TimeSpan FirstRoundWait(TimeSpan estimate) {
+        _roundEstimateEnds = DateTime.UtcNow + estimate;
+        _waitingForGameSince = null;
+        _endedWithGame = false;
+        if (_gameLogWatch is null || !s_endRoundWhenGameDone || estimate.TotalSeconds <= GAME_LOG_FIRST_LOOK_SECONDS) {
+            return estimate;
+        }
+
+        return TimeSpan.FromSeconds(GAME_LOG_FIRST_LOOK_SECONDS);
+    }
 
     /// <summary>
-    /// When the estimate for the round's animations runs out while the game on this PC is still playing them (its log
-    /// shows a spell playing), the round waits on in steps of half a second, until the game is done or [Battle]
-    /// WaitForGameSeconds have passed (Niduus, 2026-10-26: "Sometimes turns just immediately rush").
+    /// Follows the game on this PC through the round's animations (Niduus, 2026-10-26: "Sometimes turns just
+    /// immediately rush", then "Animations might need a bit more tightening"). Before the estimate runs out, the round
+    /// ends as soon as the game has played its last spell ([Battle] EndRoundWhenGameDone). When the estimate runs out
+    /// while the game is still playing, the round waits on in steps of half a second, until the game is done or [Battle]
+    /// WaitForGameSeconds have passed.
     /// </summary>
     /// <returns>Whether the round waits on.</returns>
     private bool KeepWaitingForGame() {
@@ -906,8 +940,34 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         try {
-            var state = watch.Check();
-            var waited = _waitingForGameSince is { } since ? (DateTime.UtcNow - since).TotalSeconds : 0;
+            var now = DateTime.UtcNow;
+            var pastEstimate = now >= _roundEstimateEnds - TimeSpan.FromMilliseconds(50);
+            var state = watch.Check(pastEstimate);
+            if (!pastEstimate) {
+                if (state == GameLogWatch.State.Done && s_endRoundWhenGameDone) {
+                    Logger.Information("Duel {0} | Round {1} | the game has played the round, {2:0.0} s before the estimate.",
+                        Logger.Args(SigilId, Duel.m_roundNum, (_roundEstimateEnds - now).TotalSeconds));
+                    _endedWithGame = true;
+                    _gameLogWatch = null;
+                    SendHealthGlobesNow();
+
+                    return false;
+                }
+
+                if (state == GameLogWatch.State.NotWatching) {
+                    // The game here is not in this battle: the estimate as before, and a look when it runs out.
+                    Timers.StartSingleTimer(RESOUTION_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_ROUNDRESOLUTION(), _roundEstimateEnds - now);
+
+                    return true;
+                }
+
+                var next = _roundEstimateEnds - now < s_gameLogLookEvery ? _roundEstimateEnds - now : s_gameLogLookEvery;
+                Timers.StartSingleTimer(RESOUTION_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_ROUNDRESOLUTION(), next);
+
+                return true;
+            }
+
+            var waited = _waitingForGameSince is { } since ? (now - since).TotalSeconds : 0;
             if (state != GameLogWatch.State.Playing) {
                 if (_waitingForGameSince is not null) {
                     Logger.Information("Duel {0} | Round {1} | the game finished its animations {2:0.0} s after the estimate.",
@@ -928,12 +988,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             }
 
             if (_waitingForGameSince is null) {
-                _waitingForGameSince = DateTime.UtcNow;
+                _waitingForGameSince = now;
                 Logger.Information("Duel {0} | Round {1} | the game is still playing its spells; waiting for it (up to {2:0} s more).",
                     Logger.Args(SigilId, Duel.m_roundNum, GameLogWatch.MaxExtraSeconds));
             }
 
-            Timers.StartSingleTimer(RESOUTION_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_ROUNDRESOLUTION(), TimeSpan.FromSeconds(0.5));
+            Timers.StartSingleTimer(RESOUTION_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_ROUNDRESOLUTION(), s_gameLogLookEvery);
 
             return true;
         }
@@ -959,7 +1019,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             _roundWait = null;
             Logger.Information("Duel {0} | Round {1} | animations done after {2:0.0} s (estimate {3:0.0} s, {4}{5}).",
                 Logger.Args(SigilId, wait.Round, (DateTime.UtcNow - wait.Sent).TotalSeconds, wait.Estimate,
-                    _waitingForGameSince is null ? "by timer" : "waited for the game",
+                    _endedWithGame ? "ended with the game" : _waitingForGameSince is null ? "by timer" : "waited for the game",
                     s_animationExtraSeconds > 0 ? $", +{s_animationExtraSeconds:0.#} s extra" : ""));
         }
         catch (Exception e) {
@@ -998,6 +1058,16 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Logger.Debug("Duel {0} | Round {1} | Health globes: {2}",
                 Logger.Args(SigilId, Duel.m_roundNum, string.Join(", ", CombatResolver.HealthBeats
                     .Select(b => $"slot {b.Circle.SlotIndex} {b.Health} at {b.Seconds:0.0} s"))));
+        }
+    }
+
+    /// <summary>A round that ends before its estimate: each wizard's globe goes to where the round left it now.</summary>
+    private void SendHealthGlobesNow() {
+        CancelHealthGlobes();
+        foreach (var beat in CombatResolver.HealthBeats.GroupBy(b => b.Circle).Select(g => g.OrderBy(b => b.Seconds).Last())) {
+            if (beat.Circle._wizard is { } wizard && beat.Circle.ParticipantActor is { } actor) {
+                SendHealthGlobe(new COMBAT_106_PROTOCOL.MSG_HEALTHGLOBEDUE { Actor = actor, Wizard = wizard, Health = beat.Health });
+            }
         }
     }
 
@@ -1260,6 +1330,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // Determine which team goes up first. Tutorial duels override this with the golems first.
         Duel.m_firstTeamToAct = (int) DetermineFirstTeam();
+        // In the Deckathalon tower the wizards go first ([Deckathalon] PlayersFirst, read live; Niduus, 2026-10-27:
+        // "In Deckathalon, add a config where the player ALWAYS goes first").
+        if (Events.Deckathalon.IsFloorZone(Entity.Zone?.ZonePath) && ConfigurationManager.GetValue("Deckathalon.PlayersFirst", true)) {
+            Duel.m_firstTeamToAct = (int) CombatTeam.Player;
+        }
+
         _tutorialDirector.OnDuelCreated(Duel);
 
         // When the duel is created, it must be created by two suspects: the player and the creature.
@@ -1655,7 +1731,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     private CombatDuelSubCircle GetAvailableSubCircleTeamCreature() {
         for (int i = 0; i < 4; i++) {
-            if (!SubCircles[i].Occupied) {
+            if (SubCircles[i].Free) {
                 return SubCircles[i];
             }
         }
@@ -1668,7 +1744,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     private CombatDuelSubCircle GetAvailableSubCircleTeamPlayer() {
         for (int i = 4; i < 8; i++) {
-            if (!SubCircles[i].Occupied) {
+            if (SubCircles[i].Free) {
                 return SubCircles[i];
             }
         }
@@ -1803,7 +1879,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     // The free enemy circle nearest to where a creature stands, or null when none is free.
     private CombatDuelSubCircle NearestFreeCreatureCircle(CoreObject creature)
-        => SubCircles.Take(4).Where(c => c is not null && !c.Occupied)
+        => SubCircles.Take(4).Where(c => c is not null && c.Free)
             .OrderBy(c => (c.WorldPosition - creature.m_location).LengthSquared())
             .FirstOrDefault();
 
@@ -1835,7 +1911,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return null;
         }
 
-        bool Free(CombatDuelSubCircle c) => !c.Occupied && (allowed?.Invoke(c) ?? true);
+        bool Free(CombatDuelSubCircle c) => c.Free && (allowed?.Invoke(c) ?? true);
 
         return Free(wanted) ? wanted
             : side.Where(Free).OrderBy(c => (c.WorldPosition - wanted.WorldPosition).LengthSquared())
@@ -1858,7 +1934,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // A passive circle wins over where it stands (preferred).
         var subCircle = isPlayer ? ChoosePlayerSubCircle(participantObject)
             : PassiveCircle(true, PassiveCircleOf(participantObject))
-              ?? (preferred is { Occupied: false } ? preferred : GetAvailableSubCircleTeamCreature());
+              ?? (preferred is { Free: true } ? preferred : GetAvailableSubCircleTeamCreature());
         if (subCircle is null) {
             if (isPlayer && _groupReservations.Count > 0) {
                 Logger.Debug("Duel {DuelId} | Every free circle is held for a group; {Participant} cannot join.",
@@ -3678,6 +3754,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             var victoryMsg = new COMBAT_106_PROTOCOL.MSG_COMBATWIN() {
                 UsedPips = circle._usedPipsForExperienceGain,
                 MobAdjectives = [.. adjectivesOfDefeatedMobs],
+                MobAdjectivesPerMob = [.. adjectivesPerDefeatedMob.Select(a => a.ToArray())],
                 MobTemplateIds = [.. templateIdsOfDefeatedMobs],
                 MobLootKeys = [.. lootKeysOfDefeatedMobs],
                 AllyCharIds = [.. allyCharIds],
@@ -3689,8 +3766,18 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         PostMonsterKilledEvents(adjectivesPerDefeatedMob);
 
-        // A won battle (not one everybody fled) leaves health, mana and gold wisps behind.
-        BattleDrops.Spawn(Entity.ZoneRef, Entity.ActiveGameObject.m_location);
+        // A won battle (not one everybody fled) leaves health, mana and gold wisps behind, some for each wizard.
+        var wizards = 0;
+        EnactActionOnSubCircles(circle => {
+            if (circle.IsHumanPlayer) {
+                wizards++;
+            }
+        });
+        BattleDrops.Spawn(Entity.ZoneRef, Entity.ActiveGameObject.m_location, wizards);
+
+        // A beaten boss that cheats leaves a Second Chance Chest for the wizards of the battle (Niduus, 2026-10-27).
+        Imlight.CoreLib.Game.DropTables.SecondChanceChests.Spawn(Entity.ZoneRef, Entity.ActiveGameObject.m_location,
+            lootKeysOfDefeatedMobs, allyCharIds);
     }
 
     private void CountRoundForTamedDrops() {
@@ -3855,6 +3942,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     // m_unknown_uint_4 = 1122, while Colossus Boulevard, Triton Avenue, Firecat Alley and the Sunken City leave both 0.
     private bool IsNewbieSigil => _combatSigilObjectInfo is { m_unknown_uint_4: not 0 };
 
+    // [Battle] MaxMonsters (Niduus, 2026-10-26, a player's suggestion: "change how many mobs can join a fight at max ...
+    // 1.. 2.. 3.. or 4"): 1 to 4 is how many monsters a battle holds, however many wizards are in it and on Unicorn Way
+    // too, in place of the size rule below. 0 (off) keeps the size rule. Like that rule, it only turns away monsters
+    // that walk in: a boss fight's own group, encounters and .joinme are not cut down.
+    private static int s_maxMonsters => ConfigurationManager.GetValue("Battle.MaxMonsters", 0);
+
     private bool IsSlotAvailable(CombatTeam team) {
         var IsNewbieZone = IsNewbieSigil;
         var IsDangerousZone = false;
@@ -3863,7 +3956,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // Dangerous zones (like Sunken City) can have 3 creatures as a base.
         // Every player in the duel also allocates 1 more creature slot.
         var baseCreatureCount = IsNewbieZone ? 1 : IsDangerousZone ? 3 : 2;
-        var maxCreatures = baseCreatureCount + (PlayerCount - 1);
+        var maxCreatures = s_maxMonsters is >= 1 and <= 4 ? s_maxMonsters : baseCreatureCount + (PlayerCount - 1);
 
         var slotAvailable = (team == CombatTeam.Player)
             ? PlayerCount < 4
