@@ -223,6 +223,7 @@ internal sealed partial class ManagerWindow {
         var cards = new List<Control> {
             hero,
             HomeWhosOnline(),
+            HomeCreateOnLogin(),
             HomeWhatsNew(),
             Fold("search", HOME, "Search everything",
                 "Every page, setting, command, item, spell, creature, zone and quest at once.",

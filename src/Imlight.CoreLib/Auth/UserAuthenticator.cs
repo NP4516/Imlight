@@ -136,6 +136,14 @@ internal static class UserAuthenticator {
 
         // Check if we can find the account.
         var matchedAccount = AccountCollection.GetAccountForCharacterList(username);
+        var madeNow = false;
+        // Create Account on Login: an unknown username makes its account, except from a banned computer.
+        if (matchedAccount is null && AutoAccounts.On
+                && !InfractionCollection.IsMachineBanned(authMessage.MachineID) && !InfractionCollection.IsIpBanned(sessionActor.Ip)) {
+            matchedAccount = AutoAccounts.Create(username, authMessage.MachineID, sessionActor.Ip);
+            madeNow = matchedAccount is not null;
+        }
+
         if (matchedAccount is null) {
             Logger.Warning("SessionActor {0} was rejected: account not found.", Logger.Args(sessionId));
             details._result = UserAuthenResult.AuthenFailed;
@@ -178,8 +186,19 @@ internal static class UserAuthenticator {
 
         details._account = matchedAccount;
 
-        var doesPasswordMatch = ClientKey.VerifyCK1(matchedAccount.PasswordHash, sessionId, offerTime, offerMilli, clientKey1);
+        // An account Create Account on Login made has no password yet, so its own computer gets in without one.
+        var noPassword = AutoAccounts.LetsIn(matchedAccount, authMessage.MachineID);
+        var doesPasswordMatch = noPassword
+            || ClientKey.VerifyCK1(matchedAccount.PasswordHash, sessionId, offerTime, offerMilli, clientKey1);
         if (doesPasswordMatch) {
+            if (noPassword) {
+                AutoAccounts.LoggedInWithoutPassword(matchedAccount.AccountId);
+                if (!madeNow) {
+                    Logger.Information("SessionActor {0}: account {1} has no password yet; let in from the computer that made it.",
+                        Logger.Args(sessionId, matchedAccount.Username));
+                }
+            }
+
             // Create a new session key and store it in the database.
             var sessionKey = ClientKey.HashSessionKey(sessionId, offerTime, offerMilli);
             ClientKeyCollection.AddSessionKey(matchedAccount.AccountId, authMessage.MachineID, sessionKey);

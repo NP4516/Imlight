@@ -126,7 +126,11 @@ internal sealed class PlayerAccounts : IDisposable {
             throw new AccountException("Enter a new password.");
         }
 
-        return UpdateAsync(username, doc => doc["PasswordHash"] = HashPassword(password));
+        return UpdateAsync(username, doc => {
+            doc["PasswordHash"] = HashPassword(password);
+            // An account Create Account on Login made is checked like any other once it has a password.
+            doc["PasswordNotSet"] = false;
+        });
     }
 
     /// <summary>
