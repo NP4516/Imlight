@@ -174,7 +174,8 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
             SelectedAccount = message.SelectedAccount
         };
 
-        Logger.Information("{0} Uses command: {1}", Logger.Args(accountContext.Username, message.CommandText));
+        var shownText = HidePasswords(message.CommandText.ToString());
+        Logger.Information("{0} Uses command: {1}", Logger.Args(accountContext.Username, shownText));
 
         // Log the use of this command to the database.
         var chatLog = new ChatLog() {
@@ -182,7 +183,7 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
             ZoneName = characterContext.Zone,
             CharacterId = characterContext.CharId,
             AccountId = accountContext.AccountId,
-            Message = message.CommandText.ToString(),
+            Message = shownText,
         };
         CommandLogCollection.AddCommandLog(chatLog);
 
@@ -203,6 +204,17 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
                                         $"An error occurred while executing the command. " +
                                         $"Exception: {exception.Message}<br><br> {prettyTrace}");
         }
+    }
+
+    // Passwords typed in a command never reach the log or the command history.
+    private static string HidePasswords(string text) {
+        var words = text.TrimStart('.', ' ').Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var keep = words.Length > 0 && words[0].Equals("setpassword", StringComparison.OrdinalIgnoreCase) ? 1
+            : words.Length > 1 && words[0].Equals("account", StringComparison.OrdinalIgnoreCase)
+                && words[1].Equals("password", StringComparison.OrdinalIgnoreCase) ? 3
+            : words.Length;
+
+        return words.Length <= keep ? text : string.Join(' ', words[..keep]) + " (password hidden)";
     }
 
     private void InformSenderClient(CommandContext context, string reason)

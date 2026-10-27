@@ -1370,6 +1370,7 @@ internal sealed partial class ManagerWindow : Window {
         var reach = int.TryParse(ini.GetValueOrDefault(("Battle", "EngageExtraReach")), out var r) ? r : 50;
         _engageReach.SelectedIndex = Array.IndexOf(s_engageReaches,
             s_engageReaches.OrderBy(x => Math.Abs(x - reach)).First());
+        ShowCreateOnLogin(ini);
         ShowTrainingPoints(ini);
 
         _updatingRandomizer = false;
