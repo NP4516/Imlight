@@ -127,27 +127,54 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
             Logger.Error("Daily Assignments | Remembering volume {0} failed. {1}", Logger.Args(volumeName, ex.Message));
         }
 
-        foreach (var quest in QuestTemplateCollection.GetAllQuests()) {
-            foreach (var goal in quest.m_goals) {
-                // The tag is the volume's name or, as most game quests write it, its enter event ("Enter_<name>").
-                if (goal is not WaypointGoalTemplate waypointGoal
-                    || string.IsNullOrEmpty(waypointGoal.m_proximityTag)
-                    || (waypointGoal.m_proximityTag != volumeName
-                        && _volume.m_enterEvents?.Any(e => (string) e == waypointGoal.m_proximityTag) != true)) {
+        // Every step below tolerates a missing quest, step or event: one odd entry must not stop the volume from loading.
+        try {
+            var allQuests = QuestTemplateCollection.GetAllQuests();
+            for (var q = 0; allQuests is not null && q < allQuests.Count; q++) {
+                var quest = allQuests[q];
+                if (quest?.m_goals is null) {
                     continue;
                 }
 
-                // Only track goals that target this zone (when one is specified).
-                if (!string.IsNullOrEmpty(waypointGoal.m_zoneTag)
-                    && waypointGoal.m_zoneTag != zonePath) {
-                    continue;
-                }
+                foreach (var goal in quest.m_goals) {
+                    // The tag is the volume's name or, as most game quests write it, its enter event ("Enter_<name>").
+                    if (goal is not WaypointGoalTemplate waypointGoal || string.IsNullOrEmpty(waypointGoal.m_proximityTag)) {
+                        continue;
+                    }
 
-                _volumeGoals.Add((quest.m_questName, goal.m_goalName));
+                    var tag = (string) waypointGoal.m_proximityTag;
+                    if (tag != volumeName && !HasEnterEvent(tag)) {
+                        continue;
+                    }
+
+                    // Only track goals that target this zone (when one is specified).
+                    if (!string.IsNullOrEmpty(waypointGoal.m_zoneTag) && waypointGoal.m_zoneTag != zonePath) {
+                        continue;
+                    }
+
+                    _volumeGoals.Add((quest.m_questName, goal.m_goalName));
+                }
             }
+        }
+        catch (Exception ex) {
+            Logger.Error("Volume {0}: its quest goals could not be listed: {1}", Logger.Args(volumeName, ex));
         }
 
         CollectPlaceGoals(zonePath);
+    }
+
+    private bool HasEnterEvent(string name) {
+        if (_volume?.m_enterEvents is null) {
+            return false;
+        }
+
+        foreach (var e in _volume.m_enterEvents) {
+            if ((string) e == name) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void CollectPlaceGoals(string zonePath) {
@@ -158,15 +185,26 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
         }
 
         _placeGoals.Clear();
-        foreach (var quest in QuestTemplateCollection.GetAllQuests()) {
-            foreach (var goal in quest.m_goals ?? []) {
-                if (goal is not WaypointGoalTemplate waypoint || waypoint.m_zoneTag != zonePath
-                    || !TryParsePlace(waypoint.m_proximityTag, out var x, out var y, out var z, out var radius)) {
+        try {
+            var allQuests = QuestTemplateCollection.GetAllQuests();
+            for (var q = 0; allQuests is not null && q < allQuests.Count; q++) {
+                var quest = allQuests[q];
+                if (quest?.m_goals is null) {
                     continue;
                 }
 
-                _placeGoals.Add((quest.m_questName, goal.m_goalName, x, y, z, radius));
+                foreach (var goal in quest.m_goals) {
+                    if (goal is not WaypointGoalTemplate waypoint || waypoint.m_zoneTag != zonePath
+                        || !TryParsePlace(waypoint.m_proximityTag, out var x, out var y, out var z, out var radius)) {
+                        continue;
+                    }
+
+                    _placeGoals.Add((quest.m_questName, goal.m_goalName, x, y, z, radius));
+                }
             }
+        }
+        catch (Exception ex) {
+            Logger.Error("Zone {0}: its place goals could not be listed: {1}", Logger.Args(zonePath, ex));
         }
     }
 
