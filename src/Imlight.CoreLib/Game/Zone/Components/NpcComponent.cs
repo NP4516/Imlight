@@ -150,6 +150,11 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
     // walking directly to the mob"). 0 = only the game's own reach.
     internal static float EngageExtraReach => Math.Clamp(ConfigurationManager.GetValue("Battle.EngageExtraReach", 50f), 0f, 500f);
 
+    // [Battle] EngageReachCap (live): the most a creature's own reach (m_npcProximity) counts for when a wizard walks into
+    // it. Some bosses carry a huge reach (Rattlebones 850) that is meant for their intro, not for starting the fight:
+    // touching at that distance started the duel before the zone's intro trigger could play. 0 = no cap.
+    internal static float EngageReachCap => Math.Clamp(ConfigurationManager.GetValue("Battle.EngageReachCap", 300f), 0f, 5000f);
+
     // Farther than this between two checks is a teleport, not a walk: only where the wizard landed counts.
     private const float MAX_STEP = 1500f;
     // A wizard standing in reach whose battle did not start (the nearest circle was busy, or the wizard was still
@@ -196,7 +201,8 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
     /// the ground with room for height, so slopes and stairs do not keep a wizard out of reach.
     /// </summary>
     private bool Reached(CoreObject player, IActorRef playerActor, out float ground, out float height, out float reach) {
-        reach = Proximity + EngageExtraReach;
+        var own = EngageReachCap > 0 ? Math.Min(Proximity, EngageReachCap) : Proximity;
+        reach = own + EngageExtraReach;
         var now = (player.m_location.X, player.m_location.Y, player.m_location.Z);
         var from = _lastPlayerLocations.TryGetValue(playerActor, out var last) ? last : now;
         _lastPlayerLocations[playerActor] = now;

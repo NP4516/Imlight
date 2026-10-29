@@ -203,6 +203,9 @@ public static class SpiralDB {
             s_originalQuestTemplates = questTemplates;
             Imlight.CoreLib.Game.Quests.QuestOptions.Apply();
 
+            // Read the boss cheat files in the background now, not at the first battle.
+            Imlight.CoreLib.Game.Combat.BossCheats.Preload();
+
             Logger.Information(
                 "SpiralDB loaded {0} files: {1} spellbooks, {2} drop tables, {3} NPC inventories, " +
                 "{4} NPC spell inventories, {5} NPC drop tables, {6} treasure card inventories, " +

@@ -75,6 +75,15 @@ internal sealed class ResTeleportHandler : BaseResultHandler<ResTeleport> {
             }
         }
 
+        // spiraldb-extra/TeleportOverrides.json can give a door a better arrival point.
+        var doorName = (context as GenericResultContext)?.TriggerName;
+        Logger.Debug("Teleport: {0} / {1}: player at {2:0},{3:0},{4:0}, arrives in {5} at {6}.",
+            Logger.Args(context.GetZonePath(), doorName, playerObj.m_location.X, playerObj.m_location.Y, playerObj.m_location.Z,
+                destinationZone, destinationLocation));
+        if (TeleportOverrides.Find(context.GetZonePath(), doorName) is { } replacement) {
+            destinationLocation = replacement;
+        }
+
         var msg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
             DestinationZone = destinationZone,
             DestinationLocation = destinationLocation,

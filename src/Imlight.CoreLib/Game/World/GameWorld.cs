@@ -59,7 +59,7 @@ namespace Imlight.CoreLib.Game.World;
 /// </summary>
 public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
 
-    private const int LOAD_ZONE_TIMEOUT_IN_SECONDS = 15;
+    private const int LOAD_ZONE_TIMEOUT_IN_SECONDS = 60;
     private const int HARD_LIMIT_INSTANCE_THRESHHOLD = 12; // Raids are 12 players.
     private const string LOAD_ZONE_FAILURE_ERROR = "ERROR_EnterWorldFailed";
     private const string ZONE_DOES_NOT_EXIST_ERROR = "ERROR_FailedToCreate";

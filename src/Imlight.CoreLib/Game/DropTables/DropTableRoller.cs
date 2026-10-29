@@ -88,7 +88,7 @@ public static class DropTableRoller {
             combinedResult.ExperienceAmount += tableResult.ExperienceAmount;
             combinedResult.TrainingPoints += tableResult.TrainingPoints;
             combinedResult.Items.AddRange(tableResult.Items);
-            combinedResult.GrantsPotionSlot = tableResult.GrantsPotionSlot;
+            combinedResult.GrantsPotionSlot |= tableResult.GrantsPotionSlot;
             
         }
 
@@ -126,6 +126,7 @@ public static class DropTableRoller {
         result.ExperienceAmount = dropTable.ExperienceAmount;
         result.MagicSchool = "All"; 
         result.TrainingPoints = dropTable.TrainingPoints;
+        result.GrantsPotionSlot = dropTable.GrantsPotionSlot;
         
         // Roll items with requirements validation.
         result.Items = RollTableItems(dropTable, playerRef, playerObj, wizard, random, chanceScale);

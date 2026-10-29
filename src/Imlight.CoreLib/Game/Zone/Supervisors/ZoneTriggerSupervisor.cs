@@ -88,6 +88,11 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
 
         SeedTriggerStates(replacedTriggers);
 
+        // TRIGGERDIAG: what every trigger of the zone listens for, needs and does. Remove once the cutscene bugs are fixed.
+        foreach (var diagTrigger in replacedTriggers.Where(t => t is not null)) {
+            Logger.Debug("TRIGGERDIAG {0}", Logger.Args($"zone {Zone.ZonePath}: trigger '{diagTrigger.m_triggerName}' | " + DiagDescribe(diagTrigger)));
+        }
+
         var byName = new Dictionary<string, Trigger>(StringComparer.Ordinal);
         foreach (var trigger in replacedTriggers) {
             if (!string.IsNullOrEmpty(trigger?.m_triggerName)) {
@@ -125,11 +130,13 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
             return;
         }
 
+        var diagListened = false;
         foreach (var (trigger, triggerActor) in _orderedTriggers) {
             if (trigger.m_fireEvents is null || !trigger.m_fireEvents.Any(x => x == message.EventName)) {
                 continue;
             }
 
+            diagListened = true;
             if (retry is not null && !retry.Contains(trigger.m_triggerName)) {
                 continue;
             }
@@ -144,6 +151,8 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
             }
 
             if (!_chainedEvents.Contains(message.EventName) && !IsEnforcedEnabled(trigger)) {
+                DiagOutcome(trigger, message, "skipped: the trigger is not enabled");
+
                 continue;
             }
 
@@ -153,15 +162,20 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
                         Logger.Args(trigger.m_triggerName, Zone.ZonePath));
                 }
 
+                DiagOutcome(trigger, message, "skipped: a requirement cannot be decoded");
+
                 continue;
             }
 
             // A trigger with a fire limit (m_triggerMax) that used them all in this zone instance stays quiet.
             if (!Zone.ScriptState.HasTriggerFiresLeft(trigger.m_triggerName, trigger.m_triggerMax)) {
+                DiagOutcome(trigger, message, "skipped: it already fired the most times it may in this zone instance");
+
                 continue;
             }
 
             if (!EvaluateRequirements(trigger, message)) {
+                DiagOutcome(trigger, message, "refused: its requirements are not met");
                 // A door that stays shut is otherwise silent ("friend can not enter Hedge Maze", 2026-10-22).
                 if (HasTeleportResult(trigger)) {
                     Logger.Debug("Zone {0}: teleport trigger {1} on event {2} refused {3}: requirements not met.",
@@ -177,7 +191,15 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
                 continue;
             }
 
+            DiagOutcome(trigger, message, "passes and fires");
             passing.Add((trigger, triggerActor));
+        }
+
+        string diagEvent = message.EventName;
+        if (!diagListened && (diagEvent == START_ZONE_ENTER_EVENT
+                || diagEvent.StartsWith("Enter_", StringComparison.Ordinal)
+                || diagEvent.Contains("Cinematic", StringComparison.OrdinalIgnoreCase))) {
+            Logger.Debug("TRIGGERDIAG {0}", Logger.Args($"zone {Zone.ZonePath}: event '{diagEvent}' arrived and no trigger listens for it."));
         }
 
         if (retry is not null) {
@@ -218,6 +240,71 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
 
         ApplyTriggerStateEvents(message.EventName, message.PlayerActor, message.PlayerGameObject);
     }
+
+    // TRIGGERDIAG helpers: one line per trigger at zone load and one per trigger an event reaches.
+    private static string DiagDescribe(Trigger trigger) {
+        static string Join(System.Collections.IEnumerable items)
+            => items is null ? "-" : string.Join(", ", items.Cast<object>().Select(x => x?.ToString() ?? "null"));
+
+        var requirements = trigger.m_requirements?.m_requirements;
+        var results = trigger.m_results?.m_results;
+
+        return $"fires on [{Join(trigger.m_fireEvents)}], enabled by [{Join(trigger.m_activateEvents)}], disabled by [{Join(trigger.m_deactivateEvents)}], "
+            + $"max fires {trigger.m_triggerMax}, requires [{Join(requirements?.Select(r => DiagDump(r, 0) ?? r?.GetType().Name))}], "
+            + $"does [{Join(results?.Select(r => DiagDump(r, 0) ?? r?.GetType().Name))}]";
+    }
+
+    // Prints an object's non-empty values (type name plus fields such as quest, goal, entry, event and dialog names) so the
+    // trigger line shows what a requirement checks and what a result does, not just their type names.
+    private static string DiagDump(object value, int depth) {
+        if (value is null) {
+            return null;
+        }
+
+        if (value is string text) {
+            return text.Length == 0 ? null : text;
+        }
+
+        var type = value.GetType();
+        if (type.IsPrimitive || type.IsEnum || value is decimal) {
+            string number = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
+            return number is "0" or "False" ? null : number;
+        }
+
+        if (depth >= 4) {
+            return null;
+        }
+
+        if (value is System.Collections.IEnumerable items) {
+            var parts = items.Cast<object>().Take(8).Select(x => DiagDump(x, depth + 1)).Where(x => x is not null).ToList();
+            return parts.Count == 0 ? null : "[" + string.Join("; ", parts) + "]";
+        }
+
+        var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance;
+        var members = new List<(string Name, object Value)>();
+        foreach (var field in type.GetFields(flags)) {
+            try { members.Add((field.Name, field.GetValue(value))); } catch { }
+        }
+
+        foreach (var property in type.GetProperties(flags)) {
+            if (!property.CanRead || property.GetIndexParameters().Length != 0) {
+                continue;
+            }
+
+            try { members.Add((property.Name, property.GetValue(value))); } catch { }
+        }
+
+        var shown = members.Select(m => (m.Name, Text: DiagDump(m.Value, depth + 1))).Where(m => m.Text is not null).Select(m => $"{m.Name}={m.Text}");
+        string body = string.Join(", ", shown);
+        if (body.Length > 700) {
+            body = body[..700] + "...";
+        }
+
+        return $"{type.Name}{{{body}}}";
+    }
+
+    private void DiagOutcome(Trigger trigger, ZONE_102_PROTOCOL.MSG_POSTEVENT message, string outcome)
+        => Logger.Debug("TRIGGERDIAG {0}", Logger.Args($"zone {Zone.ZonePath}: event '{message.EventName}' reached trigger '{trigger.m_triggerName}': {outcome}."));
 
     private void SeedTriggerStates(List<Trigger> triggers) {
         // A trigger whose activate events nothing in the zone posts stays enabled, since nothing could ever enable it.

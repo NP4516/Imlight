@@ -577,7 +577,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             Variant = variant,
         };
 
-        return AskOtherService<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(zoneMsg);
+        return AskOtherService<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(zoneMsg, TimeSpan.FromSeconds(60));
     }
 
     private ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP AddPlayerToZone(WizClientObject charObj, Wizard wizard) {

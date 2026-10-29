@@ -262,6 +262,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Imlight.Common;
 using Imlight.CoreLib.WizardData;
 
@@ -626,6 +627,21 @@ internal static class BossCheats {
     };
 
     private static readonly Lazy<Dictionary<ulong, BossCheatFile>> s_bosses = new(Load);
+
+    /// <summary>
+    /// Reads the boss files now, off the caller's thread, so the first battle after a start does not wait for them
+    /// (it took about 18 seconds, and the creature stood still with no combat circle meanwhile).
+    /// </summary>
+    internal static void Preload() {
+        _ = Task.Run(() => {
+            try {
+                _ = s_bosses.Value;
+            }
+            catch (Exception e) {
+                Logger.Warning("Boss cheats could not be preloaded: {0}", Logger.Args(e.Message));
+            }
+        });
+    }
 
     /// <summary>
     /// The cheats of a boss template, or none. For a custom's key (Customs.cs): its creature's file with the custom's

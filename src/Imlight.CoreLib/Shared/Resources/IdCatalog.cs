@@ -163,7 +163,9 @@ public static class IdCatalog {
         RunManagerFile("pet talents", () => Imlight.CoreLib.Game.Tools.PetTalentGuide.Write(OutputPath));
     }
 
-    private static readonly TimeSpan ManagerFilesDelay = TimeSpan.FromSeconds(90);
+    // The Manager files use about 1 GB and a good deal of CPU while they are written. They wait 15 minutes, so the
+    // first logins and zone loads after a start are not slowed by them (it was 90 seconds).
+    private static readonly TimeSpan ManagerFilesDelay = TimeSpan.FromMinutes(15);
 
     private static void RunManagerFile(string what, System.Action write) {
         try {

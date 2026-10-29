@@ -48,7 +48,9 @@ using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 
 namespace Imlight.CoreLib.Game.Zone.Components;
 
@@ -59,10 +61,18 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
     private readonly List<(string QuestName, string GoalName)> _volumeGoals = [];
     private Volume _volume;
 
+    // Waypoint goals that name a place by numbers ("435.15, -2.20, 0.76, 500": x, y, z, radius) instead of a volume
+    // (Not in Kansas Anymore, WC-ST01-C05-001). One volume of each zone, the first to load, watches for them.
+    private static readonly ConditionalWeakTable<object, VolumeComponent> s_placeWatchers = new();
+    private readonly List<(string QuestName, string GoalName, float X, float Y, float Z, float Radius)> _placeGoals = [];
+    private readonly Dictionary<(IActorRef Player, string Goal), DateTime> _placeAsked = [];
+
     public static bool ShouldAttachToEntity(CoreTemplate template) 
         => template is GameObjectTemplate goT && goT.m_templateID == 1700;
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        CheckPlaceGoals(playerObj, playerActor, playerWizard);
+
         var isInside = _volume != null && (IsBox ? IsInsideBox(playerObj) : IsInRadius(playerObj, _volume.m_radius));
         if (!isInside || !_playersInRange.Add(playerActor)) {
             return;
@@ -72,12 +82,19 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
         OnProximityEnter(playerObj, playerActor, playerWizard, playerSpawned: true);
     }
 
-    public override void OnPlayerLeave(IActorRef playerActor, ulong id) => _playersInRange.Remove(playerActor);
+    public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
+        _playersInRange.Remove(playerActor);
+        foreach (var key in _placeAsked.Keys.Where(k => k.Player.Equals(playerActor)).ToList()) {
+            _placeAsked.Remove(key);
+        }
+    }
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         if (_volume == null) {
             return;
         }
+
+        CheckPlaceGoals(playerObj, playerActor, playerWizard);
 
         var isInside = IsBox ? IsInsideBox(playerObj) : IsInRadius(playerObj, _volume.m_radius);
         if (isInside && _playersInRange.Add(playerActor)) {
@@ -111,11 +128,6 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
         }
 
         foreach (var quest in QuestTemplateCollection.GetAllQuests()) {
-            // Some quest templates load without a goals list (or not at all); there is nothing to match in them.
-            if (quest?.m_goals is null) {
-                continue;
-            }
-
             foreach (var goal in quest.m_goals) {
                 // The tag is the volume's name or, as most game quests write it, its enter event ("Enter_<name>").
                 if (goal is not WaypointGoalTemplate waypointGoal
@@ -133,6 +145,73 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
 
                 _volumeGoals.Add((quest.m_questName, goal.m_goalName));
             }
+        }
+
+        CollectPlaceGoals(zonePath);
+    }
+
+    private void CollectPlaceGoals(string zonePath) {
+        // The first volume of a zone to load is the one that watches for the zone's place goals.
+        var zone = (object) Entity.Zone;
+        if (zone is null || string.IsNullOrEmpty(zonePath) || !ReferenceEquals(s_placeWatchers.GetValue(zone, _ => this), this)) {
+            return;
+        }
+
+        _placeGoals.Clear();
+        foreach (var quest in QuestTemplateCollection.GetAllQuests()) {
+            foreach (var goal in quest.m_goals ?? []) {
+                if (goal is not WaypointGoalTemplate waypoint || waypoint.m_zoneTag != zonePath
+                    || !TryParsePlace(waypoint.m_proximityTag, out var x, out var y, out var z, out var radius)) {
+                    continue;
+                }
+
+                _placeGoals.Add((quest.m_questName, goal.m_goalName, x, y, z, radius));
+            }
+        }
+    }
+
+    private static bool TryParsePlace(string tag, out float x, out float y, out float z, out float radius) {
+        x = y = z = radius = 0;
+        var parts = (tag ?? "").Split(',');
+
+        return parts.Length == 4
+            && float.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out x)
+            && float.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out y)
+            && float.TryParse(parts[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out z)
+            && float.TryParse(parts[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out radius)
+            && radius > 0;
+    }
+
+    private void CheckPlaceGoals(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        if (_placeGoals.Count == 0 || playerObj is null || playerWizard is null) {
+            return;
+        }
+
+        foreach (var (questName, goalName, x, y, z, radius) in _placeGoals) {
+            var dx = playerObj.m_location.X - x;
+            var dy = playerObj.m_location.Y - y;
+            var dz = playerObj.m_location.Z - z;
+            if (MathF.Sqrt((dx * dx) + (dy * dy)) > radius || MathF.Abs(dz) > Math.Max(radius * 1.5f, 150f)) {
+                continue;
+            }
+
+            var qInstance = playerWizard.QuestBehavior.CurrentQuestInstances.FirstOrDefault(q => q.QuestName == questName);
+            if (qInstance is null || !qInstance.IsGoalActive(goalName)) {
+                continue;
+            }
+
+            var gInstance = qInstance.GoalProgress.FirstOrDefault(g => g.GoalName == goalName);
+            var key = (playerActor, questName + "/" + goalName);
+            if (gInstance is null || (_placeAsked.TryGetValue(key, out var asked) && DateTime.UtcNow - asked < TimeSpan.FromSeconds(3))) {
+                continue;
+            }
+
+            _placeAsked[key] = DateTime.UtcNow;
+            Logger.Information("Quest goal place reached: {0} / {1} for {2}.", Logger.Args(questName, goalName, playerWizard.CharId));
+            playerActor.Tell(new ZONE_102_PROTOCOL.MSG_COMPLETEPROXIMITYGOAL {
+                QuestID = qInstance.ID,
+                GoalID = gInstance.ID,
+            });
         }
     }
 
