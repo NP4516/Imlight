@@ -16,38 +16,60 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+using System.Collections.Generic;
 using Akka.Actor;
 using Imlight.Common;
 using Imcodec.ObjectProperty.TypeCache;
-using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
+using Imlight.CoreLib.Game.Results.Contexts;
 
 namespace Imlight.CoreLib.Game.Results.Handlers;
 
 internal sealed class ResControlMusicHandler : BaseResultHandler<ResControlBackgroundMusic> {
 
-    private uint _actionHash;
+    // todo: is 1 Restart? The client reads Action as a plain number and stops the music on 0.
+    private const int ActionStop = 0;
+    private const int ActionRestart = 1;
+
+    private const string RestartActionName = "Restart";
+
+    // Imcodec reads m_action under hash 0x67633059 while the game files store it under 0x5F9F4ADC, so it arrives
+    // empty. These are the game files' only triggers whose action is "Restart".
+    private static readonly HashSet<string> s_restartTriggers = [
+        "BG_RestartMuisc",
+        "Return_BG_Music_Trigger",
+        "StartMusic",
+        "Start_BG",
+        "StreetMusician_MusicTrigger_Exit",
+        "StreetMusician_TriggerExit_03",
+        "Trigg_PlaySting_03",
+    ];
 
     public override bool Execute(IResultContext context) {
-        if (_actionHash == 0) {
-            if (Result == null) {
-                Logger.Error("Tried to create a {0}, but the result was null.",
-                    Logger.Args(GetType().Name));
-                    
-                return false;
-            }
+        if (Result == null) {
+            Logger.Error("Tried to create a {0}, but the result was null.",
+                Logger.Args(GetType().Name));
 
-            _actionHash = StringHash.Compute(Result.m_action);
+            return false;
         }
 
         var msg = new WIZARD_12_PROTOCOL.MSG_CONTROLMUSIC {
             FadeTime = 2.0f,
-            Action = (int) _actionHash,
+            Action = IsRestart(context) ? ActionRestart : ActionStop,
         };
 
         context.GetPlayerRef().Tell(msg);
 
         return true;
+    }
+
+    private bool IsRestart(IResultContext context) {
+        string action = Result.m_action;
+        if (!string.IsNullOrEmpty(action)) {
+            return action == RestartActionName;
+        }
+
+        return (context as GenericResultContext)?.TriggerName is { } triggerName && s_restartTriggers.Contains(triggerName);
     }
 
 }

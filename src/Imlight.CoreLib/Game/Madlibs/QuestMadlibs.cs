@@ -30,9 +30,9 @@
  * 
  * TODO:
  * 
- * Created by: Jooty
+ * Created by: Jooty with Claude (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 08/21/2026
+ * Last Updated: 10/30/2026
  */
 
 using Imcodec.ObjectProperty.TypeCache;
@@ -67,12 +67,15 @@ internal static class QuestMadlibs {
     /// <summary>
     /// How many kills, items or uses a tallied goal needs. A defeat goal keeps its count in m_bountyTotal:
     /// its tally counter's m_count is 0 in most quests ("Pesky Pirates" needs 3 Skeletal Pirates, not 0).
+    /// A use goal keeps its count in m_itemTotal the same way ("Freedom!" opens 4 Bone Cages).
     /// A goal that names no count needs one.
     /// </summary>
     internal static int GetGoalTotal(GoalTemplate gTemplate) {
-        var total = gTemplate is BountyGoalTemplate { m_bountyTotal: > 0 } bounty
-            ? bounty.m_bountyTotal
-            : gTemplate.m_tallyCounter?.m_count ?? 0;
+        var total = gTemplate switch {
+            BountyGoalTemplate { m_bountyTotal: > 0 } bounty => bounty.m_bountyTotal,
+            ScavengeGoalTemplate { m_itemTotal: > 0 } scavenge => scavenge.m_itemTotal,
+            _ => gTemplate.m_tallyCounter?.m_count ?? 0,
+        };
 
         return Math.Max(total, 1);
     }
