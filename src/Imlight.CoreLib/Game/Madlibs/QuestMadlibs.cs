@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Imlight
  * Copyright (C) 2025 Revive101
  *
@@ -70,9 +70,7 @@ internal static class QuestMadlibs {
     /// A goal that names no count needs one.
     /// </summary>
     internal static int GetGoalTotal(GoalTemplate gTemplate) {
-        var total = gTemplate is BountyGoalTemplate { m_bountyTotal: > 0 } bounty
-            ? bounty.m_bountyTotal
-            : gTemplate.m_tallyCounter?.m_count ?? 0;
+        var total = gTemplate is BountyGoalTemplate { m_bountyTotal: > 0 } bounty ? bounty.m_bountyTotal : gTemplate is ScavengeGoalTemplate { m_itemTotal: > 0 } scavenge ? scavenge.m_itemTotal : gTemplate.m_tallyCounter?.m_count ?? 0;
 
         return Math.Max(total, 1);
     }
@@ -101,15 +99,25 @@ internal static class QuestMadlibs {
                 },
                 new MadlibArgT_ByteString {
                     m_madlibToken = "TALLYTEXT",
-                    m_madlibArgument = gTemplate.m_tallyCounter?.m_descriptor ?? string.Empty
+                    m_madlibArgument = ClientText(WaypointTallyText(gTemplate))
                 },
                 new MadlibArgT_ByteString {
                     m_madlibToken = "TALLYTEXT2",
-                    m_madlibArgument = gTemplate.m_tallyCounter?.m_descriptor2 ?? string.Empty
+                    m_madlibArgument = ClientText(gTemplate.m_tallyCounter?.m_descriptor2 ?? string.Empty)
                 },
             ],
             m_blockToken = "GOAL"
         };
+
+    /// <summary>The goal's text: its tally text, or for a waypoint without one the line its hyperlink names (the place's name, "Dorothy's Friends").</summary>
+    internal static string WaypointTallyText(GoalTemplate gTemplate) {
+        var text = (string) gTemplate.m_tallyCounter?.m_descriptor;
+        if (string.IsNullOrEmpty(text) && gTemplate is WaypointGoalTemplate waypoint && !string.IsNullOrEmpty((string) waypoint.m_hyperlink)) {
+            return (string) waypoint.m_hyperlink;
+        }
+
+        return text ?? string.Empty;
+    }
 
     private static MadlibBlock GetMadlibBlockForPersonaGoal(GoalTemplate gTemplate) {
         string firstName = string.Empty;
@@ -435,15 +443,18 @@ internal static class QuestMadlibs {
         return map.GetValueOrDefault(picture);
     }
 
+    // The game reads these texts as single bytes; UTF-8 would turn a non-breaking space into two characters.
+    internal static Imcodec.IO.ByteString ClientText(string text) => System.Text.Encoding.Latin1.GetBytes(text ?? string.Empty);
+
     private static MadlibArgT_ByteString[] GetTallyArguments(GoalTemplate gTemplate)
         => gTemplate.m_tallyCounter is null ? [] : [
             new MadlibArgT_ByteString {
                 m_madlibToken = "TALLYTEXT",
-                m_madlibArgument = gTemplate.m_tallyCounter.m_descriptor
+                m_madlibArgument = ClientText(gTemplate.m_tallyCounter.m_descriptor)
             },
             new MadlibArgT_ByteString {
                 m_madlibToken = "TALLYTEXT2",
-                m_madlibArgument = gTemplate.m_tallyCounter.m_descriptor2
+                m_madlibArgument = ClientText(gTemplate.m_tallyCounter.m_descriptor2)
             },
         ];
 
@@ -474,11 +485,11 @@ internal static class QuestMadlibs {
                 },
                 new MadlibArgT_ByteString {
                     m_madlibToken = "TALLYTEXT",
-                    m_madlibArgument = gTemplate.m_tallyCounter?.m_descriptor ?? string.Empty
+                    m_madlibArgument = ClientText(gTemplate.m_tallyCounter?.m_descriptor ?? string.Empty)
                 },
                 new MadlibArgT_ByteString {
                     m_madlibToken = "TALLYTEXT2",
-                    m_madlibArgument = gTemplate.m_tallyCounter?.m_descriptor2 ?? string.Empty
+                    m_madlibArgument = ClientText(gTemplate.m_tallyCounter?.m_descriptor2 ?? string.Empty)
                 },
                 new MadlibArgT_int {
                     m_madlibToken = "COUNT",

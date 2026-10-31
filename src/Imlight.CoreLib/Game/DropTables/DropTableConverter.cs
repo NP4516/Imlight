@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Imlight
  * Copyright (C) 2025 Revive101
  *
@@ -94,6 +94,13 @@ public static class DropTableConverter {
                 m_lootType = LOOT_TYPE.LOOT_TYPE_TREASURE_CARD,
                 m_spellID = card.SpellId,
                 m_numItems = card.Quantity
+            });
+        }
+
+        // Potion flask: the client shows its icon from this loot type.
+        if (dropResult.GrantsPotionSlot) {
+            lootItems.Add(new MaxPotionLootInfo {
+                m_lootType = LOOT_TYPE.LOOT_TYPE_MAX_POTION
             });
         }
 

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Imlight
  * Copyright (C) 2025 Revive101
  *
@@ -75,6 +75,15 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         // Our QA team has manually recreated this trigger data, and is available within the database.
         // Words cannot describe how thankful I am for QA. They are the unsung heroes of the development team.
         var replacedTriggers = ReplaceTriggerDataWithDatabase(message.TriggerData);
+        // Rattlebones' entry dialogue is gated on a quest this server does not have; it plays during Stop the Maker instead.
+        foreach (var reEntry in replacedTriggers.Where(t => t is not null && (string) t.m_triggerName == "TR_ReEntry_TurnMob")) {
+            reEntry.m_requirements.m_requirements = [
+                new ReqHasQuest { m_questName = "WC-ST01-C01-005", m_operator = Operator.ROP_AND },
+                new ReqHasEntry { m_entryName = "WC-ST01-C01-005_Complete", m_applyNOT = true, m_operator = Operator.ROP_AND }
+            ];
+        }
+        // Classic Ravenwood keeps its music playing after Enrollment, so this stop trigger is dropped.
+        replacedTriggers.RemoveAll(t => t is not null && (string) t.m_triggerName == "Stop_Music_EnrollmentQuest");
         var spawners = message.SpawnData.m_spawners;
         UpdateSpawnResultTriggers(ref replacedTriggers, spawners, message.PathData.m_pathList, message.NodeData.m_nodeList);
 
@@ -266,6 +275,17 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         }
 
         var type = value.GetType();
+        // The game's text type (ByteString) is not a string: read it through its conversion to one.
+        if (type.Name == "ByteString") {
+            foreach (var method in type.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)) {
+                if (method.Name == "op_Implicit" && method.ReturnType == typeof(string) && method.GetParameters().Length == 1
+                    && method.GetParameters()[0].ParameterType == type) {
+                    var converted = method.Invoke(null, new object[] { value }) as string;
+
+                    return string.IsNullOrEmpty(converted) ? null : "'" + converted + "'";
+                }
+            }
+        }
         if (type.IsPrimitive || type.IsEnum || value is decimal) {
             string number = Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
             return number is "0" or "False" ? null : number;

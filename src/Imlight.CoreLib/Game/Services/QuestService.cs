@@ -1812,6 +1812,7 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
+        Logger.Information("Goal text sent: quest '{0}' goal '{1}' title '{2}' madlib {3}.", Logger.Args(qInstance.QuestName, gTemplate.m_goalName, (string) gTemplate.m_goalTitle, string.Join(" ; ", (madLibBlock?.m_madlibs ?? []).Select(m => m?.ToString()))));
         // Serialize the client tags, if present.
         var tagList = GetClientTagList(gTemplate.m_clientTags?.Select(t => (string)t).ToArray() ?? []);
         var newSerializer = new ObjectSerializer(false);
@@ -1826,6 +1827,7 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
             clientTagData = string.Empty;
         }
 
+        if (tagList.m_clientTags.Count > 0) { Logger.Information("Goal sent with client tags: quest '{0}' goal '{1}' tags {2}.", Logger.Args(qInstance.QuestName, gTemplate.m_goalName, string.Join(",", gTemplate.m_clientTags.Select(t => (string) t)))); }
         var patronIcon = GetPatronIconFromGoal(gTemplate);
 
         // Determine the destination zone. Do not send it if the player is currently in that zone.
@@ -1858,7 +1860,7 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
             GoalCount = gInstance.CurrentProgress,
             UseTally = (byte) (tallied || gTemplate.m_tallyCounter is not null ? 1 : 0),
             GoalTotal = goalTotal,
-            TallyText = gTemplate.m_tallyCounter?.m_descriptor ?? "",
+            TallyText = QuestMadlibs.ClientText(QuestMadlibs.WaypointTallyText(gTemplate)),
             SubscriberGoalTotal = goalTotal,
             SendType = sendType,                 // 0=resume/start-of-zone, 1=start, 2=progress
             GoalMadlibs = madLibData,

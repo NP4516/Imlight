@@ -1,3 +1,4 @@
+﻿using Imlight.Common;
 /*
  * Imlight
  * Copyright (C) 2025 Revive101
@@ -25,6 +26,7 @@ namespace Imlight.CoreLib.Game.Results.Handlers;
 internal sealed class ResDynamodHandler : BaseResultHandler<ResAddDynaMod> {
 
     public override bool Execute(IResultContext context) {
+        Logger.Information("Dynamod added: {0} zone '{1}'.", Logger.Args((string) Result.m_dynaModClientTag, (string) Result.m_zoneName));
         var msg = new CHARACTER_103_PROTOCOL.MSG_ADDDYNAMOD {
             DynaMod = Result,
             ContextActor = context.GetPlayerRef()

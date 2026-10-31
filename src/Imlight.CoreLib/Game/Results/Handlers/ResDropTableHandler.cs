@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Imlight
  * Copyright (C) 2025 Revive101
  *
@@ -58,6 +58,7 @@ internal sealed class ResDropTableHandler : BaseResultHandler<ResDropTable> {
                                                wizard);
 
         // Process the results.
+        Logger.Information("Quest reward roll {0}: {1} gold, {2} XP, {3} items, potion slot {4}.", Logger.Args(Result.m_tableName, rollResults.GoldAmount, rollResults.ExperienceAmount, rollResults.Items.Count, rollResults.GrantsPotionSlot));
         LootGranter.GrantAndDisplay(context.GetPlayerRef(), wizard, rollResults, context.GetXpScale());
 
         return true;

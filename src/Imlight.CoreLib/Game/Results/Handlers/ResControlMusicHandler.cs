@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Imlight
  * Copyright (C) 2025 Revive101
  *
@@ -29,6 +29,11 @@ internal sealed class ResControlMusicHandler : BaseResultHandler<ResControlBackg
     private uint _actionHash;
 
     public override bool Execute(IResultContext context) {
+        // The trigger data holds no action here, so stop and restart are the same message: leave the zone's own music alone (it carries no action).
+        if (Result is not null && string.IsNullOrEmpty((string) Result.m_action)) {
+            return true;
+        }
+
         if (_actionHash == 0) {
             if (Result == null) {
                 Logger.Error("Tried to create a {0}, but the result was null.",

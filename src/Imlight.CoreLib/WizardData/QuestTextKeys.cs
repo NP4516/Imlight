@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Our own quests in spiraldb-extra (Celestia onward, made from Wizard404, Niduus 2026-10-24) are written with the
  * game's English text: the quest title, what each NPC says, the step titles, places and "defeat X" names. The game
  * shows a quest's words by the key of its own line (WizQst1ED97_00000002), so at boot each English line is swapped for
@@ -31,11 +31,12 @@ public static partial class QuestTextKeys {
         try {
             Resolve(quests);
         } catch (Exception ex) {
-            Logger.Warning("Quest text could not be matched to the game's lines: {0}", Logger.Args(ex.Message));
+            Logger.Warning("Quest text could not be matched to the game's lines: {0}", Logger.Args(ex.ToString()));
         }
 
         try {
             DropLinesTheGameLacks(quests);
+            ReportMissingGoalText(quests);
         } catch (Exception ex) {
             Logger.Warning("Quest lines the game no longer has could not be left out: {0}", Logger.Args(ex.Message));
         } finally {
@@ -64,8 +65,8 @@ public static partial class QuestTextKeys {
 
         var ours = quests.Where(q => q is not null && (IsText(q.m_questTitle)
             || DialogEntries(q.m_dialogList).Any(e => IsText(e.m_dialog) || IsText(e.m_nameOverride))
-            || q.m_goals.Any(g => DialogEntries(g.m_dialogList).Any(e => IsText(e.m_nameOverride)))
-            || q.m_goals.Any(g => IsText(g.m_goalTitle)
+            || (q.m_goals ?? []).Where(g => g is not null).Any(g => DialogEntries(g.m_dialogList).Any(e => IsText(e.m_nameOverride)))
+            || (q.m_goals ?? []).Where(g => g is not null).Any(g => IsText(g.m_goalTitle)
                 || IsText(g.m_tallyCounter?.m_descriptor) || IsText(g.m_tallyCounter?.m_descriptor2)
                 || DialogEntries(g.m_dialogList).Any(e => IsText(e.m_dialog))))).ToList();
         if (ours.Count == 0) {
@@ -79,7 +80,7 @@ public static partial class QuestTextKeys {
                 Want(entry.m_nameOverride);
             }
 
-            foreach (var goal in quest.m_goals) {
+            foreach (var goal in (quest.m_goals ?? []).Where(g => g is not null)) {
                 Want(goal.m_goalTitle);
                 Want(goal.m_tallyCounter?.m_descriptor);
                 Want(goal.m_tallyCounter?.m_descriptor2);
@@ -150,7 +151,7 @@ public static partial class QuestTextKeys {
                 entry.m_nameOverride = SpeakerName(entry.m_nameOverride);
             }
 
-            foreach (var goal in quest.m_goals) {
+            foreach (var goal in (quest.m_goals ?? []).Where(g => g is not null)) {
                 goal.m_goalTitle = Pick(goal.m_goalTitle, null, "WizardQuestGoals");
                 if (goal.m_tallyCounter is { } tally) {
                     tally.m_descriptor = Pick(tally.m_descriptor, home, "WizardMobs", "WizItems", "WizardGameObjects", "WizQst*");
@@ -206,6 +207,30 @@ public static partial class QuestTextKeys {
         }
 
         Logger.Information("Quest text: left out {0} dialog pages the game no longer has a line for.", Logger.Args(dropped));
+    }
+
+    // Lists the goals whose bottom-of-screen text (the tally text) is a key the game does not have.
+    private static void ReportMissingGoalText(IReadOnlyList<QuestTemplate> quests) {
+        int missing = 0;
+        foreach (var quest in quests.Where(q => q is not null)) {
+            foreach (var goal in (quest.m_goals ?? []).Where(g => g is not null)) {
+                foreach (var key in new[] { (string) goal.m_tallyCounter?.m_descriptor, (string) goal.m_tallyCounter?.m_descriptor2 }) {
+                    if (string.IsNullOrWhiteSpace(key) || !KeyPattern().IsMatch(key.Trim()) || Locale.HasQuestLine(key.Trim()) != false) {
+                        continue;
+                    }
+
+                    missing++;
+                    Logger.Information("Goal text missing: quest '{0}' goal '{1}' key {2} zone {3}.", Logger.Args(quest.m_questName, goal.m_goalName, key, goal.m_destinationZone));
+                }
+            }
+        }
+        Logger.Information("Quest text: {0} goal texts name a line the game does not have.", Logger.Args(missing));
+        // The game's own lines for the goal texts still to be fixed, so their keys can be put in the templates.
+        foreach (var phrase in new[] { "TALLYTEXT", "Dorothy's Friends", "Ravenwood Academy", "Commons Smith", "Golem Court Smith", "Bone Cages", "Hedge Maze" }) {
+            foreach (var (key, text) in Locale.Search(phrase, 12)) {
+                Logger.Information("Goal text lookup '{0}': {1} = {2}", Logger.Args(phrase, key, text));
+            }
+        }
     }
 
     private const string PLACE_TABLE = "ZoneLocName";
