@@ -86,6 +86,10 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         foreach (var tritonMusic in replacedTriggers.Where(t => t is not null && (string) t.m_triggerName == "Side_05_06")) {
             tritonMusic.m_requirements.m_requirements = [];
         }
+        // Classic Wizard City plays one combat theme (WC_Combat1Test); Unicorn Way's modern combat track is swapped for it.
+        foreach (var combatMusic in replacedTriggers.Where(t => t?.m_results?.m_results is not null).SelectMany(t => t.m_results.m_results).OfType<ResWizPlayMusic>().Where(r => (string) r.m_musicName == "WC_HauntedWay_Combat")) {
+            combatMusic.m_musicName = "WC_Combat1Test";
+        }
         // Classic Ravenwood keeps its music playing after Enrollment, so this stop trigger is dropped.
         replacedTriggers.RemoveAll(t => t is not null && (string) t.m_triggerName == "Stop_Music_EnrollmentQuest");
         var spawners = message.SpawnData.m_spawners;
