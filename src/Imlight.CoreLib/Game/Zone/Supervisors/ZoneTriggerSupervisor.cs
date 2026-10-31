@@ -710,6 +710,10 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
             UseZoneObjectsExit(trigger);
         }
 
+        if (databaseTriggers?.Triggers is { Count: > 0 } addedTriggers) {
+            triggers.AddRange(addedTriggers);
+        }
+
         return triggers;
     }
 

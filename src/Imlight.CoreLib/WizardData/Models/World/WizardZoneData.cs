@@ -26,6 +26,11 @@ public class WizardZoneData {
     public string ZoneName { get; set; }
     public List<WizardTeleportData> Teleports { get; set; } = [];
 
+    /// <summary>
+    /// Triggers the zone has beyond those in its game files, in the same form.
+    /// </summary>
+    public List<Trigger> Triggers { get; set; } = [];
+
 }
 
 public class WizardTeleportData {
