@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Imlight
  * Copyright (C) 2025 Revive101
  *
@@ -81,6 +81,10 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
                 new ReqHasQuest { m_questName = "WC-ST01-C01-005", m_operator = Operator.ROP_AND },
                 new ReqHasEntry { m_entryName = "WC-ST01-C01-005_Complete", m_applyNOT = true, m_operator = Operator.ROP_AND }
             ];
+        }
+        // Triton Avenue's general street music only starts for modern side quests this server does not have, so it plays on entry instead.
+        foreach (var tritonMusic in replacedTriggers.Where(t => t is not null && (string) t.m_triggerName == "Side_05_06")) {
+            tritonMusic.m_requirements.m_requirements = [];
         }
         // Classic Ravenwood keeps its music playing after Enrollment, so this stop trigger is dropped.
         replacedTriggers.RemoveAll(t => t is not null && (string) t.m_triggerName == "Stop_Music_EnrollmentQuest");
