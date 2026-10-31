@@ -63,7 +63,7 @@ public static partial class QuestTextKeys {
             }
         }
 
-        var ours = quests.Where(q => q is not null && (IsText(q.m_questTitle)
+        var ours = quests.Where(q => q?.m_goals is not null && (IsText(q.m_questTitle)
             || DialogEntries(q.m_dialogList).Any(e => IsText(e.m_dialog) || IsText(e.m_nameOverride))
             || (q.m_goals ?? []).Where(g => g is not null).Any(g => DialogEntries(g.m_dialogList).Any(e => IsText(e.m_nameOverride)))
             || (q.m_goals ?? []).Where(g => g is not null).Any(g => IsText(g.m_goalTitle)
