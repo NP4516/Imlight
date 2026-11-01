@@ -90,6 +90,24 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         foreach (var combatMusic in replacedTriggers.Where(t => t?.m_results?.m_results is not null).SelectMany(t => t.m_results.m_results).OfType<ResWizPlayMusic>().Where(r => (string) r.m_musicName == "WC_HauntedWay_Combat")) {
             combatMusic.m_musicName = "WC_Combat1Test";
         }
+        // Olde Town's street gates wait for modern quests this server does not have; the classic intro quests open them instead.
+        var oldeGateQuests = new Dictionary<string, string> {
+            ["Trigger Teleport CyclopsLane"] = "WC-MISC-C01-002a",
+            ["Trigger Teleport to FireCat Alley"] = "WC-MISC-C01-002c",
+            ["Trigger Teleport to Triton Lane"] = "WC-MISC-C01-002b",
+        };
+        foreach (var oldeGate in replacedTriggers.Where(t => t?.m_requirements?.m_requirements is not null && oldeGateQuests.ContainsKey((string) t.m_triggerName))) {
+            var gateQuest = oldeGateQuests[(string) oldeGate.m_triggerName];
+            oldeGate.m_requirements.m_requirements = [
+                .. oldeGate.m_requirements.m_requirements,
+                new ReqHasQuest { m_questName = gateQuest, m_operator = Operator.ROP_OR },
+                new ReqHasEntry { m_entryName = gateQuest + "_Complete", m_operator = Operator.ROP_OR }
+            ];
+        }
+        // The Triton Lane gate trigger listens for "...for Triton Lane", but its volume sends "...to Triton Lane"; it listens for both.
+        foreach (var tritonGate in replacedTriggers.Where(t => t?.m_fireEvents is not null && (string) t.m_triggerName == "Trigger Teleport to Triton Lane")) {
+            tritonGate.m_fireEvents = [.. tritonGate.m_fireEvents, "Enter_Conditional Teleporter to Triton Lane"];
+        }
         // Classic Ravenwood keeps its music playing after Enrollment, so this stop trigger is dropped.
         replacedTriggers.RemoveAll(t => t is not null && (string) t.m_triggerName == "Stop_Music_EnrollmentQuest");
         var spawners = message.SpawnData.m_spawners;
