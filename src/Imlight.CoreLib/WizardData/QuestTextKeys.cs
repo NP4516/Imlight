@@ -178,6 +178,12 @@ public static partial class QuestTextKeys {
     /// </summary>
     private static void DropLinesTheGameLacks(IReadOnlyList<QuestTemplate> quests) {
         int dropped = 0;
+        // Lines the client's own text file has been given again (the 2015 wording put back in Root.wad).
+        // The server's cached copy of the game text lacks them, so they must not be dropped.
+        var keptByClientEdit = new HashSet<string>(StringComparer.Ordinal) {
+            "WizQst9564_00000024", "WizQst9564_00000025", "WizQst9564_00000032",
+            "WizQst9564_00000034", "WizQst9564_00000035", "WizQst9564_00000036", "WizQst9564_00000037"
+        };
         void Trim(ActorDialogListBase list) {
             foreach (var dialog in (list as ActorDialogList)?.m_dialogs ?? []) {
                 if (dialog?.m_dialogEntries is not { Count: > 1 } entries) {
@@ -186,7 +192,8 @@ public static partial class QuestTextKeys {
 
                 var gone = entries.Where(e => e is NPCDialogEntry npc
                     && string.IsNullOrEmpty(npc.m_dialogEvent) && string.IsNullOrEmpty(npc.m_action)
-                    && Locale.HasQuestLine(npc.m_dialog) == false).ToList();
+                    && !keptByClientEdit.Contains((string) npc.m_dialog)
+                && Locale.HasQuestLine(npc.m_dialog) == false).ToList();
                 if (gone.Count == 0 || gone.Count == entries.Count) {
                     continue;
                 }
